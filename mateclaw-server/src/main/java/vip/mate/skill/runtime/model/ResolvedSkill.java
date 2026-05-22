@@ -6,10 +6,9 @@ import lombok.Data;
 import vip.mate.skill.manifest.SkillManifest;
 
 import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -22,7 +21,7 @@ public class ResolvedSkill {
 
     // ==================== 基础信息 ====================
 
-    /** RFC-090 Phase 2 — 技能实体主键，便于按 id 反查。 */
+    /** 技能 ID（数据库行 ID；桥接 skill 可为虚拟 ID） */
     private Long id;
 
     /** 技能名称 */
@@ -73,15 +72,16 @@ public class ResolvedSkill {
     @Builder.Default
     private boolean builtin = false;
 
-    /**
-     * Skill row create timestamp, copied from {@code mate_skill.create_time}.
-     * Used by the prompt-catalog ranker to surface freshly installed skills
-     * before they accumulate any usage stats — without this, a brand-new
-     * skill stays invisible behind the recent/frequent/alphabetical sort
-     * and the LLM ends up replying "no such skill" right after the user
-     * installed it. Null for virtual MCP/ACP skills that don't own a row.
-     */
-    private LocalDateTime createTime;
+    /** 解析后的 v3 manifest（优先于 legacy 列） */
+    private SkillManifest manifest;
+
+    /** 各 feature 的运行时状态，如 READY / SETUP_NEEDED / UNSUPPORTED */
+    @Builder.Default
+    private Map<String, String> featureStatuses = Map.of();
+
+    /** 当前已激活的 feature id 集合 */
+    @Builder.Default
+    private Set<String> activeFeatures = Set.of();
 
     // ==================== 安全扫描状态 ====================
 
@@ -113,143 +113,6 @@ public class ResolvedSkill {
     /** 依赖状态摘要 */
     private String dependencySummary;
 
-    // ==================== RFC-090 §14.1 — features 矩阵 ====================
-
-    /**
-     * Parsed manifest (RFC-090 §14.6 SoT). Null for legacy skills with no
-     * frontmatter; in that case feature/manifest-aware code falls back to
-     * legacy fields above.
-     */
-    private SkillManifest manifest;
-
-    /**
-     * Per-feature status keyed by {@code feature.id}. Values come from
-     * {@code SkillDependencyChecker.FeatureCheckResult.status}: one of
-     * {@code READY / SETUP_NEEDED / UNSUPPORTED}.
-     *
-     * <p>For backward compat: if the manifest declares no {@code features[]}
-     * block, the resolver synthesizes a single feature {@code "default"}
-     * carrying the top-level requires + platforms.
-     */
-    @Builder.Default
-    private Map<String, String> featureStatuses = Map.of();
-
-    /**
-     * Set of feature IDs whose status is READY. Derived from
-     * {@link #featureStatuses}; populated by the resolver.
-     */
-    @Builder.Default
-    private Set<String> activeFeatures = Set.of();
-
-    /**
-     * Per-tool display-name decoration table, keyed by the prefixed callback
-     * name and valued by the human-readable form (e.g.
-     * {@code "mcp_4_fs_a1b2c3"} → {@code "mcp_4_fs_a1b2c3 (read_file)"}).
-     *
-     * <p>Populated by skill source providers that have a recoverable raw
-     * name (currently MCP-bridged skills); other sources leave it empty,
-     * in which case {@link #getEffectiveAllowedToolsDisplay()} falls
-     * through to the prefixed names unchanged.
-     *
-     * <p>Held internally rather than serialized: the wire shape exposes
-     * the decorated set via the derived getter, which keeps the
-     * source-of-truth (the feature filter in
-     * {@link #getEffectiveAllowedTools()}) in one place.
-     */
-    @JsonIgnore
-    @Builder.Default
-    private Map<String, String> toolDisplayNames = Map.of();
-
-    /** RFC-090 §14.1 — replacement filter for {@code dependencyReady}. */
-    public boolean hasAnyActiveFeature() {
-        return activeFeatures != null && !activeFeatures.isEmpty();
-    }
-
-    /**
-     * RFC-090 §14.2 — tools that should be advertised to the LLM, given
-     * the current feature statuses.
-     *
-     * <p>Behavior:
-     * <ul>
-     *   <li>No manifest at all → {@link Set#of()} (caller should treat as
-     *       "no skill-derived tools" and rely on legacy paths).</li>
-     *   <li>Manifest with no {@code features[]} → return {@code allowedTools}
-     *       wholesale (legacy behavior).</li>
-     *   <li>Manifest with features → only tools whose owning feature is
-     *       READY. A feature with empty {@code feature.tools} is treated as
-     *       "inherit the manifest-level allowed-tools" so a single-feature
-     *       skill matches the no-features case.</li>
-     * </ul>
-     */
-    public Set<String> getEffectiveAllowedTools() {
-        if (manifest == null) return Set.of();
-        List<String> base = manifest.getAllowedTools();
-        if (base == null) base = List.of();
-
-        // No features → wholesale allowedTools
-        if (manifest.getFeatures() == null || manifest.getFeatures().isEmpty()) {
-            return base.isEmpty() ? Set.of() : new LinkedHashSet<>(base);
-        }
-
-        Set<String> out = new LinkedHashSet<>();
-        Set<String> active = activeFeatures == null ? Set.of() : activeFeatures;
-
-        // First pass: collect tools claimed by *any* feature that
-        // declares an explicit tool subset. Anything in this set is
-        // owned by a specific feature, so the inherit branch below must
-        // exclude these unless their owning feature is READY.
-        // RFC-090 §14.2 / §10.2 Q8 — the LLM must not see tools that
-        // belong to a SETUP_NEEDED / UNSUPPORTED feature.
-        Set<String> claimedByAnyFeature = new LinkedHashSet<>();
-        Set<String> claimedByActive = new LinkedHashSet<>();
-        for (SkillManifest.FeatureDef f : manifest.getFeatures()) {
-            List<String> tools = f.getTools();
-            if (tools == null || tools.isEmpty()) continue;
-            claimedByAnyFeature.addAll(tools);
-            if (active.contains(f.getId())) claimedByActive.addAll(tools);
-        }
-        out.addAll(claimedByActive);
-
-        // Second pass: any READY feature with no explicit tool list
-        // means "inherit manifest-level allowed-tools" — but inheritance
-        // is *fenced*: it doesn't pull in tools that another feature
-        // already claimed (and isn't itself READY).
-        boolean anyInheritor = manifest.getFeatures().stream().anyMatch(
-                f -> active.contains(f.getId())
-                        && (f.getTools() == null || f.getTools().isEmpty()));
-        if (anyInheritor) {
-            for (String t : base) {
-                if (claimedByAnyFeature.contains(t) && !claimedByActive.contains(t)) {
-                    // This tool belongs to a feature that's not READY —
-                    // inheritance must NOT re-expose it.
-                    continue;
-                }
-                out.add(t);
-            }
-        }
-        return out;
-    }
-
-    /**
-     * Display-friendly companion to {@link #getEffectiveAllowedTools()}.
-     * Each prefixed callback name is replaced by its decorated form (e.g.
-     * {@code "mcp_4_fs_a1b2c3 (read_file)"}) when {@link #toolDisplayNames}
-     * carries an entry for it; names without a decoration entry are kept
-     * verbatim. Feature-filter semantics match the prefixed getter, so a
-     * tool that is hidden by a SETUP_NEEDED feature stays hidden here too.
-     */
-    public Set<String> getEffectiveAllowedToolsDisplay() {
-        Set<String> base = getEffectiveAllowedTools();
-        if (base.isEmpty() || toolDisplayNames == null || toolDisplayNames.isEmpty()) {
-            return base;
-        }
-        Set<String> out = new LinkedHashSet<>(base.size());
-        for (String name : base) {
-            out.add(toolDisplayNames.getOrDefault(name, name));
-        }
-        return out;
-    }
-
     // ==================== 综合状态 ====================
 
     /**
@@ -264,6 +127,45 @@ public class ResolvedSkill {
         if (securityFindings != null && !securityFindings.isEmpty()) return "Security Warning";
         if (runtimeAvailable) return "Ready";
         return "Unknown";
+    }
+
+    /**
+     * Return the effective tool allow-list after feature gating.
+     * <p>
+     * If the manifest has no features, fall back to top-level
+     * {@code allowedTools}. If features exist, include tools from active
+     * READY features; when a feature does not declare feature-local tools,
+     * it inherits the manifest-level allow-list.
+     */
+    public List<String> getEffectiveAllowedTools() {
+        if (manifest == null) return List.of();
+        List<String> manifestTools = manifest.getAllowedTools() == null
+                ? List.of() : manifest.getAllowedTools();
+        List<SkillManifest.FeatureDef> features = manifest.getFeatures() == null
+                ? List.of() : manifest.getFeatures();
+        if (features.isEmpty()) return manifestTools;
+
+        Set<String> out = new LinkedHashSet<>();
+        Set<String> active = activeFeatures == null ? Set.of() : activeFeatures;
+        Map<String, String> statuses = featureStatuses == null ? Map.of() : featureStatuses;
+        for (SkillManifest.FeatureDef feature : features) {
+            if (feature == null || feature.getId() == null) continue;
+            String featureId = feature.getId();
+            boolean isReady = "READY".equalsIgnoreCase(statuses.get(featureId));
+            if (!active.contains(featureId) && !isReady) continue;
+            List<String> tools = feature.getTools();
+            if (tools == null || tools.isEmpty()) {
+                out.addAll(manifestTools);
+            } else {
+                out.addAll(tools);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    public boolean isFeatureEnabled(String featureId) {
+        if (featureId == null || featureId.isBlank()) return false;
+        return activeFeatures != null && activeFeatures.contains(featureId);
     }
 
     // ==================== 内部 DTO ====================

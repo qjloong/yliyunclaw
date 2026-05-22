@@ -79,7 +79,6 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { skillApi } from '@/api/index'
-import { copyToClipboard } from '@/utils/clipboard'
 
 interface RequirementStatus {
   key: string
@@ -147,7 +146,21 @@ function handleClose() {
 
 async function copy(cmd: string) {
   try {
-    await copyToClipboard(cmd)
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(cmd)
+    } else {
+      // Fallback for clipboard-API-disabled contexts (eg http://). The
+      // textarea trick is broadly supported and avoids a noisy permission
+      // failure on the production-ish workflow.
+      const ta = document.createElement('textarea')
+      ta.value = cmd
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
     ElMessage.success(t('common.copied'))
   } catch {
     ElMessage.warning(t('common.copyFailed'))

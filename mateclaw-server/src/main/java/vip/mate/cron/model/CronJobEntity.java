@@ -18,9 +18,6 @@ public class CronJobEntity {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
-    /** Workspace ID this cron job belongs to (RFC-083 / V62; existing rows default to 1). */
-    private Long workspaceId;
-
     /** 任务名称 */
     private String name;
 
@@ -33,23 +30,20 @@ public class CronJobEntity {
     /** 关联 Agent ID */
     private Long agentId;
 
-    /**
-     * 任务类型：
-     * <ul>
-     *   <li>{@code text} — single-turn LLM chat (uses {@code triggerMessage})</li>
-     *   <li>{@code agent} — Plan-Execute (uses {@code requestBody})</li>
-     *   <li>{@code reminder} — direct push of {@code triggerMessage}, no LLM call</li>
-     * </ul>
-     */
+    /** 任务类型：text | agent */
     private String taskType;
 
-    /** 触发消息（task_type=text 或 reminder 时使用） */
+    /** 触发消息（task_type=text 时使用） */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String triggerMessage;
 
     /** 执行目标（task_type=agent 时使用） */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String requestBody;
+
+    /** 任务生效的工作目录；为空时继承 Agent 所属 workspace 根目录 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String workingDirectory;
 
     /** 是否启用 */
     private Boolean enabled;
@@ -94,4 +88,20 @@ public class CronJobEntity {
     /** RFC-063r §2.14: matching error column for the most-recent run. */
     @TableField(exist = false)
     private String lastDeliveryError;
+
+    /** Latest execution-summary badge state for the most-recent run. */
+    @TableField(exist = false)
+    private String lastExecutionSummaryStatus;
+
+    /** Latest execution-summary detail text for the most-recent run. */
+    @TableField(exist = false)
+    private String lastExecutionSummaryText;
+
+    /** Internal fallback field from the most-recent run row. */
+    @TableField(exist = false)
+    private String lastRunStatus;
+
+    /** Internal fallback field from the most-recent run row. */
+    @TableField(exist = false)
+    private String lastRunErrorMessage;
 }

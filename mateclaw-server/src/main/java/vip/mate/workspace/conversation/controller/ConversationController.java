@@ -4,14 +4,20 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.channel.web.ChatStreamTracker;
+import vip.mate.tool.document.DocxExportService;
 import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.vo.ConversationVO;
 import vip.mate.workspace.conversation.vo.MessageVO;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -27,6 +33,7 @@ public class ConversationController {
 
     private final ConversationService conversationService;
     private final ChatStreamTracker streamTracker;
+    private final DocxExportService docxExportService;
 
     /**
      * 获取当前用户的会话列表
@@ -53,10 +60,11 @@ public class ConversationController {
     public R<?> listMessages(@PathVariable String conversationId,
                              @RequestParam(required = false) Long beforeId,
                              @RequestParam(required = false) Integer limit,
-                             Authentication auth) {
+                             Authentication auth,
+                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
-            return R.fail("无权访问该会话");
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权访问该会话");
         }
 
         // 向后兼容：不传 limit 则返回全部消息（旧前端行为）
@@ -98,10 +106,12 @@ public class ConversationController {
      */
     @Operation(summary = "删除会话")
     @DeleteMapping("/{conversationId}")
-    public R<Void> delete(@PathVariable String conversationId, Authentication auth) {
+    public R<Void> delete(@PathVariable String conversationId,
+                          Authentication auth,
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
-            return R.fail("无权操作该会话");
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
         }
         conversationService.deleteConversation(conversationId);
         return R.ok();
@@ -112,10 +122,13 @@ public class ConversationController {
      */
     @Operation(summary = "重命名会话")
     @PutMapping("/{conversationId}/title")
-    public R<Void> rename(@PathVariable String conversationId, @RequestBody Map<String, String> body, Authentication auth) {
+    public R<Void> rename(@PathVariable String conversationId,
+                          @RequestBody Map<String, String> body,
+                          Authentication auth,
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
-            return R.fail("无权操作该会话");
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
         }
         String title = body.getOrDefault("title", "").trim();
         if (title.isEmpty() || title.length() > 100) {
@@ -125,18 +138,145 @@ public class ConversationController {
         return R.ok();
     }
 
+    @Operation(summary = "更新会话工作目录")
+    @PutMapping("/{conversationId}/working-directory")
+    public R<Map<String, String>> updateWorkingDirectory(@PathVariable String conversationId,
+                                                         @RequestBody Map<String, String> body,
+                                                         Authentication auth,
+                                                         @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        String username = auth != null ? auth.getName() : "anonymous";
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
+        }
+        try {
+            String effective = conversationService.updateWorkingDirectory(
+                    conversationId,
+                    body.get("workingDirectory"));
+            return R.ok(Map.of("workingDirectory", effective != null ? effective : ""));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    @Operation(summary = "更新会话运行模式")
+    @PutMapping("/{conversationId}/runtime-mode")
+    public R<Map<String, String>> updateRuntimeMode(@PathVariable String conversationId,
+                                                    @RequestBody Map<String, String> body,
+                                                    Authentication auth,
+                                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        String username = auth != null ? auth.getName() : "anonymous";
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
+        }
+        try {
+            String effective = conversationService.updateRuntimeMode(
+                    conversationId,
+                    body.get("runtimeMode"));
+            return R.ok(Map.of("runtimeMode", effective));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    @Operation(summary = "更新会话运行模型")
+    @PutMapping("/{conversationId}/runtime-model")
+    public R<Map<String, Object>> updateRuntimeModel(@PathVariable String conversationId,
+                                                     @RequestBody Map<String, String> body,
+                                                     Authentication auth,
+                                                     @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        String username = auth != null ? auth.getName() : "anonymous";
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
+        }
+        try {
+            ConversationService.RuntimeModelResolution resolution = conversationService.updateRuntimeModelSelection(
+                    conversationId,
+                    body.get("runtimeProviderId"),
+                    body.get("runtimeModelName"));
+            ConversationService.RuntimeModelSelection effective = resolution.effectiveSelection();
+            return R.ok(Map.of(
+                    "requestedRuntimeProviderId", resolution.requestedRuntimeProviderId() != null ? resolution.requestedRuntimeProviderId() : "",
+                    "requestedRuntimeModelName", resolution.requestedRuntimeModelName() != null ? resolution.requestedRuntimeModelName() : "",
+                    "runtimeProviderId", effective.runtimeProviderId() != null ? effective.runtimeProviderId() : "",
+                    "runtimeModelName", effective.runtimeModelName() != null ? effective.runtimeModelName() : "",
+                    "fallbackApplied", resolution.fallbackApplied(),
+                    "reason", resolution.reason() != null ? resolution.reason() : ""));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    @Operation(summary = "导出 Teacher 试题结果为 Word")
+    @PostMapping("/{conversationId}/teacher-export")
+    public R<Map<String, String>> exportTeacherPaper(@PathVariable String conversationId,
+                                                     @RequestBody Map<String, String> body,
+                                                     Authentication auth,
+                                                     @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        String username = auth != null ? auth.getName() : "anonymous";
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
+        }
+        ConversationEntity conversation = conversationService.getConversation(conversationId);
+        if (conversation == null) {
+            return R.fail(404, "会话不存在");
+        }
+
+        String markdown = blankToNull(body.get("markdown"));
+        if (!StringUtils.hasText(markdown)) {
+            return R.fail("导出内容不能为空");
+        }
+        String format = body.getOrDefault("format", "docx").trim().toLowerCase(Locale.ROOT);
+        if (!"docx".equals(format)) {
+            return R.fail("当前仅支持导出为 Word(docx)");
+        }
+
+        try {
+            String effectiveWorkingDirectory = conversationService.resolveEffectiveWorkingDirectory(
+                    conversation, workspaceId, null);
+            Path projectDir = StringUtils.hasText(effectiveWorkingDirectory)
+                    ? Paths.get(effectiveWorkingDirectory).toAbsolutePath().normalize()
+                    : null;
+            Path target = docxExportService.resolveOutputPath(projectDir, body.get("outputPath"), body.get("filename"));
+            if (projectDir != null && target != null && !target.toAbsolutePath().normalize().startsWith(projectDir)) {
+                return R.fail("导出路径必须位于当前项目绑定目录内");
+            }
+
+            DocxExportService.ExportedDocx exported = docxExportService.exportMarkdown(
+                    markdown,
+                    body.get("filename"),
+                    body.get("pageSize"),
+                    target);
+            return R.ok(Map.of(
+                    "format", format,
+                    "fileName", exported.fileName(),
+                    "downloadUrl", exported.downloadUrl(),
+                    "savedPath", exported.savedPath() != null ? exported.savedPath() : ""
+            ));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        } catch (Exception e) {
+            return R.fail("导出失败: " + e.getMessage());
+        }
+    }
+
     /**
      * 清空会话消息（保留会话记录）
      */
     @Operation(summary = "清空会话消息")
     @DeleteMapping("/{conversationId}/messages")
-    public R<Void> clearMessages(@PathVariable String conversationId, Authentication auth) {
+    public R<Void> clearMessages(@PathVariable String conversationId,
+                                 Authentication auth,
+                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
-            return R.fail("无权操作该会话");
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权操作该会话");
         }
         conversationService.clearMessages(conversationId);
         return R.ok();
+    }
+
+    private String blankToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     /**
@@ -145,10 +285,12 @@ public class ConversationController {
      */
     @Operation(summary = "获取会话流状态")
     @GetMapping("/{conversationId}/status")
-    public R<Map<String, String>> getStreamStatus(@PathVariable String conversationId, Authentication auth) {
+    public R<Map<String, String>> getStreamStatus(@PathVariable String conversationId,
+                                                  Authentication auth,
+                                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
-            return R.fail("无权访问该会话");
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
+            return R.fail(403, "无权访问该会话");
         }
         if (streamTracker.isRunning(conversationId)) {
             return R.ok(Map.of("streamStatus", "running"));

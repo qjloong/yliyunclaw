@@ -2,8 +2,6 @@ package vip.mate.tool.mcp.service;
 
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import io.modelcontextprotocol.spec.McpSchema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,7 +12,6 @@ import vip.mate.tool.mcp.runtime.McpClientManager;
 import vip.mate.tool.mcp.runtime.McpClientManager.ConnectionResult;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -165,30 +162,6 @@ public class McpServerService {
     }
 
     /**
-     * List the tools the given MCP server has surfaced to the runtime.
-     *
-     * <p>Reads from {@link McpClientManager#getServerTools(Long)} which
-     * already caches the {@code listTools()} response on connect/refresh,
-     * so this is a constant-time lookup with no network roundtrip. The
-     * returned list is empty when the server is disconnected, in error
-     * state, or simply has no tools — never throws on those paths so the
-     * UI can render "no tools yet" rather than an error.
-     *
-     * <p>{@link #getById} is invoked first so a stale id (deleted server)
-     * still returns a 404 from the controller layer rather than silently
-     * "no tools".
-     */
-    public List<vip.mate.tool.mcp.model.McpToolDescriptor> listToolsByServer(Long id) {
-        getById(id); // throws if the server is gone — preserves 404 semantics
-        return mcpClientManager.getServerTools(id).stream()
-                .map(t -> new vip.mate.tool.mcp.model.McpToolDescriptor(
-                        t.name(),
-                        t.description(),
-                        t.inputSchema()))
-                .toList();
-    }
-
-    /**
      * 刷新所有启用的 MCP server
      */
     public void refreshAll() {
@@ -200,7 +173,7 @@ public class McpServerService {
             try {
                 ConnectionResult result = mcpClientManager.connect(server);
                 if (result.success()) {
-                    onConnectSuccess(server.getId());
+                    updateStatus(server.getId(), "connected", null, result.toolCount());
                 } else {
                     updateStatus(server.getId(), "error", result.message(), 0);
                 }
@@ -228,7 +201,7 @@ public class McpServerService {
             try {
                 ConnectionResult result = mcpClientManager.connect(server);
                 if (result.success()) {
-                    onConnectSuccess(server.getId());
+                    updateStatus(server.getId(), "connected", null, result.toolCount());
                 } else {
                     updateStatus(server.getId(), "error", result.message(), 0);
                 }
@@ -286,7 +259,7 @@ public class McpServerService {
         try {
             ConnectionResult result = mcpClientManager.connect(server);
             if (result.success()) {
-                onConnectSuccess(server.getId());
+                updateStatus(server.getId(), "connected", null, result.toolCount());
             } else {
                 mcpClientManager.remove(server.getId());
                 updateStatus(server.getId(), "error", result.message(), 0);
@@ -302,7 +275,7 @@ public class McpServerService {
         try {
             ConnectionResult result = mcpClientManager.replace(server);
             if (result.success()) {
-                onConnectSuccess(server.getId());
+                updateStatus(server.getId(), "connected", null, result.toolCount());
             } else {
                 mcpClientManager.remove(server.getId());
                 updateStatus(server.getId(), "error", result.message(), 0);
@@ -314,78 +287,20 @@ public class McpServerService {
         }
     }
 
-    /**
-     * Common success path for every connect entry point: snapshot the
-     * just-discovered tools into the {@code tools_cache_json} column in
-     * the same DB roundtrip as the status update, so downstream code that
-     * reads from the entity sees both pieces consistently.
-     *
-     * <p>Cache is only ever overwritten on success — failures preserve the
-     * last successful snapshot, keeping the agent picker rendering
-     * something useful while the upstream server is briefly down.
-     */
-    private void onConnectSuccess(Long serverId) {
-        List<McpSchema.Tool> tools = mcpClientManager.getServerTools(serverId);
-        String cacheJson = serializeToolsCache(tools);
-        updateStatusWithCache(serverId, "connected", null, tools.size(), cacheJson);
-    }
-
     private void updateStatus(Long id, String status, String error, int toolCount) {
-        // Failure paths do NOT touch the tools cache — keep the last
-        // successful snapshot so the picker stays populated.
-        updateStatusWithCache(id, status, error, toolCount, null);
-    }
-
-    private void updateStatusWithCache(Long id, String status, String error, int toolCount, String cacheJson) {
         try {
-            LambdaUpdateWrapper<McpServerEntity> wrapper = new LambdaUpdateWrapper<>();
-            wrapper.eq(McpServerEntity::getId, id);
-            wrapper.set(McpServerEntity::getLastStatus, status);
-            wrapper.set(McpServerEntity::getLastError, error);
-            wrapper.set(McpServerEntity::getToolCount, toolCount);
+            McpServerEntity update = new McpServerEntity();
+            update.setId(id);
+            update.setLastStatus(status);
+            update.setLastError(error);
+            update.setToolCount(toolCount);
             if ("connected".equals(status)) {
-                wrapper.set(McpServerEntity::getLastConnectedTime, LocalDateTime.now());
+                update.setLastConnectedTime(LocalDateTime.now());
             }
-            if (cacheJson != null) {
-                wrapper.set(McpServerEntity::getToolsCacheJson, cacheJson);
-                wrapper.set(McpServerEntity::getToolsCacheUpdatedAt, LocalDateTime.now());
-            }
-            wrapper.set(McpServerEntity::getUpdateTime, LocalDateTime.now());
-            mcpServerMapper.update(null, wrapper);
+            mcpServerMapper.updateById(update);
         } catch (Exception e) {
             log.warn("Failed to update MCP server status: {}", e.getMessage());
         }
-    }
-
-    /**
-     * Serialize the list returned by the upstream {@code listTools()} call
-     * into a stable JSON shape: an array of {@code {name, description,
-     * inputSchema}} entries. Schema is stored as the JSON text the upstream
-     * surfaces (already a JSON-Schema object) so the picker can show it
-     * verbatim without re-stringifying.
-     */
-    private String serializeToolsCache(List<McpSchema.Tool> tools) {
-        if (tools == null || tools.isEmpty()) {
-            return "[]";
-        }
-        List<Map<String, Object>> rows = new ArrayList<>(tools.size());
-        for (McpSchema.Tool t : tools) {
-            if (t == null || t.name() == null || t.name().isBlank()) continue;
-            Map<String, Object> row = new java.util.LinkedHashMap<>();
-            row.put("name", t.name());
-            row.put("description", t.description() != null ? t.description() : "");
-            // inputSchema in the MCP record is a JsonSchema record; let the
-            // JSON utility serialize it, falling back to "{}" if it can't.
-            try {
-                row.put("inputSchema", t.inputSchema() != null
-                        ? JSONUtil.parse(JSONUtil.toJsonStr(t.inputSchema()))
-                        : "{}");
-            } catch (Exception e) {
-                row.put("inputSchema", "{}");
-            }
-            rows.add(row);
-        }
-        return JSONUtil.toJsonStr(rows);
     }
 
     private void validateServer(McpServerEntity entity) {

@@ -59,6 +59,18 @@ public class PendingApproval {
     /** 风险摘要 */
     private String summary;
 
+    /** 创建审批时的工作区 ID */
+    private Long workspaceId;
+
+    /** 创建审批时的有效 project 路径 */
+    private String projectPath;
+
+    /** 同类审批复用指纹 */
+    private String approvalKey;
+
+    /** 已授予的复用范围 */
+    private String grantScope;
+
     /**
      * RFC-063r §2.12: serialized {@code ChatOrigin} snapshot captured when
      * this approval was created. Lets cross-process / cross-restart replays
@@ -120,6 +132,10 @@ public class PendingApproval {
     public String getFindingsJson() { return findingsJson; }
     public String getMaxSeverity() { return maxSeverity; }
     public String getSummary() { return summary; }
+    public Long getWorkspaceId() { return workspaceId; }
+    public String getProjectPath() { return projectPath; }
+    public String getApprovalKey() { return approvalKey; }
+    public String getGrantScope() { return grantScope; }
     public String getChatOrigin() { return chatOrigin; }
 
     // === Setters ===
@@ -136,5 +152,9 @@ public class PendingApproval {
     public void setFindingsJson(String findingsJson) { this.findingsJson = findingsJson; }
     public void setMaxSeverity(String maxSeverity) { this.maxSeverity = maxSeverity; }
     public void setSummary(String summary) { this.summary = summary; }
+    public void setWorkspaceId(Long workspaceId) { this.workspaceId = workspaceId; }
+    public void setProjectPath(String projectPath) { this.projectPath = projectPath; }
+    public void setApprovalKey(String approvalKey) { this.approvalKey = approvalKey; }
+    public void setGrantScope(String grantScope) { this.grantScope = grantScope; }
     public void setChatOrigin(String chatOrigin) { this.chatOrigin = chatOrigin; }
 }

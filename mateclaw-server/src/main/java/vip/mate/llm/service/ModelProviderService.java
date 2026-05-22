@@ -14,7 +14,6 @@ import vip.mate.llm.event.ModelConfigChangedEvent;
 import vip.mate.llm.failover.AvailableProviderPool;
 import vip.mate.llm.failover.ProviderHealthTracker;
 import vip.mate.llm.failover.ProviderInitProbe;
-import vip.mate.llm.failover.ProviderRequirements;
 import vip.mate.llm.model.*;
 import vip.mate.llm.repository.ModelProviderMapper;
 
@@ -31,21 +30,6 @@ public class ModelProviderService {
     /** Provider id whose OAuth token lives on local disk (Keychain / ~/.claude/.credentials.json) instead of the database. */
     private static final String CLAUDE_CODE_PROVIDER_ID = "anthropic-claude-code";
 
-    /**
-     * Issue #39: provider id is used as a single path segment in
-     * {@code /custom-providers/{providerId}}, {@code /{providerId}/config},
-     * {@code /{providerId}/enable}, etc. Spring's PathPatternParser does not
-     * match across {@code /}, so any unsafe character makes <em>every</em>
-     * such endpoint fall through to the static-resource handler and become
-     * undeletable. Reject on the create path.
-     *
-     * <p>Keep this in sync with {@code PROVIDER_ID_PATTERN} in
-     * {@code mateclaw-ui/src/views/Settings/Models/composables/useProviderForm.ts}
-     * and the routing fallback in {@code mateclaw-ui/src/api/index.ts}.</p>
-     */
-    static final java.util.regex.Pattern PROVIDER_ID_PATTERN =
-            java.util.regex.Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$");
-
     private final ModelProviderMapper modelProviderMapper;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
@@ -60,6 +44,7 @@ public class ModelProviderService {
      * defers Spring's wiring decision past construction.
      */
     private final ObjectProvider<ProviderInitProbe> providerInitProbeProvider;
+    private final ModelCapabilityService modelCapabilityService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** Plugin-registered ChatModel instances: providerId -> ChatModel */
@@ -129,9 +114,6 @@ public class ModelProviderService {
         provider.setBaseUrl(request.getBaseUrl());
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
-        if (request.getRequireApiKey() != null) {
-            provider.setRequireApiKey(request.getRequireApiKey());
-        }
         // RFC-009 P3.5: only update fallback priority when the caller explicitly
         // sends a value. null leaves it untouched (existing chain unchanged).
         if (request.getFallbackPriority() != null) {
@@ -147,12 +129,6 @@ public class ModelProviderService {
     public ProviderInfoDTO createCustomProvider(CreateCustomProviderRequest request) {
         if (!StringUtils.hasText(request.getId()) || !StringUtils.hasText(request.getName())) {
             throw new MateClawException("err.llm.provider_fields_required", "Provider id 和名称不能为空");
-        }
-        // Issue #39: even though the UI now validates, defend the API directly —
-        // see PROVIDER_ID_PATTERN above for why this matters.
-        if (!PROVIDER_ID_PATTERN.matcher(request.getId()).matches()) {
-            throw new MateClawException("err.llm.provider_id_invalid",
-                    "Provider id 仅允许字母/数字及 . _ -（不允许斜杠或空格），首字符必须是字母或数字，长度 1-64: " + request.getId());
         }
         if (modelProviderMapper.selectById(request.getId()) != null) {
             throw new MateClawException("err.llm.provider_exists", "Provider 已存在: " + request.getId());
@@ -172,7 +148,7 @@ public class ModelProviderService {
         provider.setSupportModelDiscovery(false);
         provider.setSupportConnectionCheck(false);
         provider.setFreezeUrl(false);
-        provider.setRequireApiKey(request.getRequireApiKey() == null || Boolean.TRUE.equals(request.getRequireApiKey()));
+        provider.setRequireApiKey(true);
         modelProviderMapper.insert(provider);
 
         if (request.getModels() != null) {
@@ -204,7 +180,7 @@ public class ModelProviderService {
         if (modelId != null && !modelId.isBlank()) {
             ModelDiscoveryService.assertModelIdAcceptable(providerId, this.getProvider(providerId), modelId);
         }
-        modelConfigService.addModelToProvider(providerId, modelId, request.getName(), false);
+        modelConfigService.addModelToProvider(providerId, modelId, request.getName(), false, request.getModelType());
         return toProviderInfo(getProvider(providerId), modelConfigService.listModelsByProvider(providerId));
     }
 
@@ -238,30 +214,17 @@ public class ModelProviderService {
 
     public boolean isProviderAvailable(String providerId) {
         ModelProviderEntity provider = getProvider(providerId);
-        return isProviderEnabledAndConfigured(provider) && hasModels(providerId);
+        return isProviderConfigured(provider) && hasChatModels(providerId);
     }
 
     public String getProviderUnavailableReason(String providerId) {
         ModelProviderEntity provider = getProvider(providerId);
-        if (!Boolean.TRUE.equals(provider.getEnabled())) {
-            return "Provider 未启用";
-        }
         if (!isProviderConfigured(provider)) {
-            // Issue #81: emit a precise reason based on which row-level fields are
-            // missing, rather than the previous protocol-blind heuristic. The new
-            // frontend reads suggestedActionHintKey/Args; this string remains for
-            // logs and legacy callers.
-            ProviderRequirements.Required req = ProviderRequirements.of(provider);
-            boolean hasBaseUrl = StringUtils.hasText(provider.getBaseUrl());
-            boolean hasApiKey  = hasUsableApiKey(provider.getApiKey());
-            if (req.needsBaseUrl() && !hasBaseUrl && req.needsApiKey() && !hasApiKey) {
-                return "Provider 未配置 Base URL 和 API Key";
+            if (Boolean.TRUE.equals(provider.getRequireApiKey())) {
+                return "Provider 未配置有效的 API Key";
             }
-            if (req.needsBaseUrl() && !hasBaseUrl) {
+            if (Boolean.TRUE.equals(provider.getIsCustom()) || !Boolean.TRUE.equals(provider.getIsLocal())) {
                 return "Provider 未配置 Base URL";
-            }
-            if (req.needsApiKey() && !hasApiKey) {
-                return "Provider 未配置 API Key";
             }
             return "Provider 未完成配置";
         }
@@ -297,6 +260,108 @@ public class ModelProviderService {
     }
 
     /**
+     * Resolve the best currently usable chat model for a conversation-scoped runtime override.
+     * <p>
+     * Order:
+     * <ol>
+     *   <li>Requested provider/model, if still usable</li>
+     *   <li>System default model, if usable</li>
+     *   <li>Remaining available providers by fallback priority (explicit 1..N first, then id)</li>
+     * </ol>
+     */
+    public ResolvedChatSelection resolveAvailableChatSelection(String requestedProviderId,
+                                                              String requestedModelName) {
+        String normalizedProviderId = normalizeBlank(requestedProviderId);
+        String normalizedModelName = normalizeBlank(requestedModelName);
+
+        if (normalizedProviderId == null && normalizedModelName == null) {
+            return new ResolvedChatSelection(null, null, null, null, false, false, "none_requested");
+        }
+        if (normalizedProviderId == null || normalizedModelName == null) {
+            return new ResolvedChatSelection(
+                    normalizedProviderId,
+                    normalizedModelName,
+                    null,
+                    null,
+                    false,
+                    false,
+                    "incomplete_requested_model");
+        }
+
+        List<ProviderInfoDTO> providers = listProviders();
+        Map<String, ProviderInfoDTO> providerMap = providers.stream()
+                .collect(Collectors.toMap(ProviderInfoDTO::getId, dto -> dto, (left, right) -> left, LinkedHashMap::new));
+
+        ProviderInfoDTO requestedProvider = providerMap.get(normalizedProviderId);
+        if (isUsableChatModel(requestedProvider, normalizedModelName)) {
+            return new ResolvedChatSelection(
+                    normalizedProviderId,
+                    normalizedModelName,
+                    normalizedProviderId,
+                    normalizedModelName,
+                    true,
+                    false,
+                    "requested_available");
+        }
+
+        try {
+            ModelConfigEntity systemDefault = modelConfigService.getDefaultModel();
+            String defaultProviderId = normalizeBlank(systemDefault.getProvider());
+            String defaultModelName = normalizeBlank(systemDefault.getModelName());
+            ProviderInfoDTO defaultProvider = providerMap.get(defaultProviderId);
+            if (isUsableChatModel(defaultProvider, defaultModelName)) {
+                return new ResolvedChatSelection(
+                        normalizedProviderId,
+                        normalizedModelName,
+                        defaultProviderId,
+                        defaultModelName,
+                        false,
+                        true,
+                        "system_default_fallback");
+            }
+        } catch (Exception ignored) {
+            // Fall through to provider-priority resolution.
+        }
+
+        List<ProviderInfoDTO> sortedProviders = new ArrayList<>(providers);
+        sortedProviders.sort((a, b) -> {
+            int pa = a.getFallbackPriority() == null ? 0 : a.getFallbackPriority();
+            int pb = b.getFallbackPriority() == null ? 0 : b.getFallbackPriority();
+            if (pa > 0 && pb > 0) return Integer.compare(pa, pb);
+            if (pa > 0) return -1;
+            if (pb > 0) return 1;
+            return String.valueOf(a.getId()).compareTo(String.valueOf(b.getId()));
+        });
+
+        for (ProviderInfoDTO provider : sortedProviders) {
+            if (!Boolean.TRUE.equals(provider.getAvailable())) {
+                continue;
+            }
+            String fallbackModelName = firstUsableModelId(provider);
+            if (fallbackModelName == null) {
+                continue;
+            }
+            return new ResolvedChatSelection(
+                    normalizedProviderId,
+                    normalizedModelName,
+                    provider.getId(),
+                    fallbackModelName,
+                    false,
+                    true,
+                    "provider_priority_fallback");
+        }
+
+        return new ResolvedChatSelection(
+                normalizedProviderId,
+                normalizedModelName,
+                null,
+                null,
+                false,
+                false,
+                "no_available_chat_model");
+    }
+
+    /**
      * If the current default model belongs to {@code disabledProviderId}, find
      * the first enabled + configured provider that has at least one model and
      * promote its first model to default. Returns {@link EnableResult#unchanged()}
@@ -323,7 +388,7 @@ public class ModelProviderService {
                         .orderByAsc(ModelProviderEntity::getName));
         for (ModelProviderEntity candidate : candidates) {
             if (!isProviderConfigured(candidate)) continue;
-            List<ModelConfigEntity> models = modelConfigService.listModelsByProvider(candidate.getProviderId());
+            List<ModelConfigEntity> models = modelConfigService.listChatModelsByProvider(candidate.getProviderId());
             if (models.isEmpty()) continue;
             ModelConfigEntity first = models.get(0);
             modelConfigService.setDefaultModel(candidate.getProviderId(), first.getModelName());
@@ -333,10 +398,10 @@ public class ModelProviderService {
     }
 
     private void tryAutoActivateModel(String providerId, ModelProviderEntity provider) {
-        if (!isProviderEnabledAndConfigured(provider)) {
+        if (!isProviderConfigured(provider)) {
             return;
         }
-        List<ModelConfigEntity> providerModels = modelConfigService.listModelsByProvider(providerId);
+        List<ModelConfigEntity> providerModels = modelConfigService.listChatModelsByProvider(providerId);
         if (providerModels.isEmpty()) {
             return;
         }
@@ -344,7 +409,7 @@ public class ModelProviderService {
         try {
             ModelConfigEntity currentDefault = modelConfigService.getDefaultModel();
             ModelProviderEntity defaultProvider = modelProviderMapper.selectById(currentDefault.getProvider());
-            if (!isProviderEnabledAndConfigured(defaultProvider)) {
+            if (!isProviderConfigured(defaultProvider)) {
                 shouldAutoActivate = true;
             }
         } catch (MateClawException e) {
@@ -354,16 +419,6 @@ public class ModelProviderService {
             ModelConfigEntity firstModel = providerModels.get(0);
             modelConfigService.setDefaultModel(providerId, firstModel.getModelName());
         }
-    }
-
-    /**
-     * OAuth/device-code completion updates credentials outside the normal provider
-     * config endpoint. Reuse the same default-model promotion logic so a freshly
-     * connected OAuth provider is immediately selectable by chat.
-     */
-    public void activateFirstModelIfDefaultUnavailable(String providerId) {
-        ModelProviderEntity provider = getProvider(providerId);
-        tryAutoActivateModel(providerId, provider);
     }
 
     private ModelProviderEntity getProvider(String providerId) {
@@ -431,9 +486,16 @@ public class ModelProviderService {
         List<ModelInfoDTO> extraModels = new ArrayList<>();
         if (models != null) {
             for (ModelConfigEntity model : models) {
+                if ("embedding".equals(model.getModelType())) {
+                    continue;
+                }
                 // RFC-049 PR-1-UI: ModelInfoDTO(id, name) derives supportsReasoningEffort
                 // from id via ModelFamily — no extra wiring needed here.
                 ModelInfoDTO info = new ModelInfoDTO(model.getModelName(), model.getName());
+                info.setSupportsVision(modelCapabilityService.supports(
+                        model.getModelName(),
+                        model.getModalities(),
+                        ModelCapabilityService.Modality.VISION));
                 if (Boolean.TRUE.equals(model.getBuiltin())) {
                     builtinModels.add(info);
                 } else {
@@ -443,98 +505,66 @@ public class ModelProviderService {
         }
         dto.setModels(builtinModels);
         dto.setExtraModels(extraModels);
-        applySuggestedAction(dto, provider, providerLiveness);
         return dto;
     }
 
-    /**
-     * Issue #81: derive the chat-popup recovery hint from row + liveness, so the
-     * frontend can render a precise "next step" instead of a generic
-     * "model unavailable" toast. Six fields populated:
-     *   - authStatus: CONFIGURED / MISSING / NOT_REQUIRED / OAUTH_PENDING
-     *   - baseUrlComplete: null when not applicable, true/false otherwise
-     *   - missingFields: comma-joined ("apiKey", "baseUrl") for required-field UX
-     *   - suggestedAction: machine-readable next-step key (frontend switches on this)
-     *   - suggestedActionHintKey + suggestedActionHintArgs: i18n key/args, no raw text
-     */
-    private void applySuggestedAction(ProviderInfoDTO dto, ModelProviderEntity provider, Liveness liveness) {
-        ProviderRequirements.Required req = ProviderRequirements.of(provider);
-        boolean hasBaseUrl = StringUtils.hasText(provider.getBaseUrl());
-        boolean hasApiKey  = hasUsableApiKey(provider.getApiKey());
-        boolean hasModels  = (dto.getModels() != null && !dto.getModels().isEmpty())
-                          || (dto.getExtraModels() != null && !dto.getExtraModels().isEmpty());
+    private boolean isUsableChatModel(ProviderInfoDTO provider, String modelName) {
+        return provider != null
+                && Boolean.TRUE.equals(provider.getAvailable())
+                && modelName != null
+                && modelExists(provider, modelName);
+    }
 
-        // 1. authStatus
-        if ("oauth".equals(provider.getAuthType())) {
-            dto.setAuthStatus(Boolean.TRUE.equals(dto.getOauthConnected()) ? "CONFIGURED" : "OAUTH_PENDING");
-        } else if (req.needsApiKey()) {
-            dto.setAuthStatus(hasApiKey ? "CONFIGURED" : "MISSING");
-        } else {
-            dto.setAuthStatus("NOT_REQUIRED");
+    private boolean modelExists(ProviderInfoDTO provider, String modelName) {
+        if (provider == null || modelName == null) {
+            return false;
         }
+        return streamChatModels(provider)
+                .anyMatch(model -> modelName.equals(model.getId()) || modelName.equals(model.getName()));
+    }
 
-        // 2. baseUrlComplete: null when this provider doesn't need a base URL.
-        dto.setBaseUrlComplete(req.needsBaseUrl() ? hasBaseUrl : null);
-
-        // 3. missingFields
-        java.util.List<String> missing = new ArrayList<>();
-        if (req.needsApiKey()  && !hasApiKey)  missing.add("apiKey");
-        if (req.needsBaseUrl() && !hasBaseUrl) missing.add("baseUrl");
-        dto.setMissingFields(String.join(",", missing));
-
-        // 4. suggestedAction
-        String action;
-        if (liveness == Liveness.UNCONFIGURED) {
-            if ("oauth".equals(provider.getAuthType())) {
-                action = "start_oauth";
-            } else if (missing.size() == 1 && missing.get(0).equals("baseUrl")) {
-                action = "fill_base_url";
-            } else if (missing.size() == 1 && missing.get(0).equals("apiKey")) {
-                action = "fill_api_key";
-            } else {
-                action = "configure_required_fields";
-            }
-        } else if (liveness == Liveness.REMOVED) {
-            action = "reprobe";
-        } else if (liveness == Liveness.COOLDOWN) {
-            action = "wait_cooldown";
-        } else if (liveness == Liveness.UNPROBED) {
-            action = "reprobe";
-        } else if (liveness == Liveness.LIVE && !hasModels) {
-            action = Boolean.TRUE.equals(provider.getSupportModelDiscovery())
-                    ? "pull_model"
-                    : "configure_required_fields";
-        } else {
-            action = "none";
+    private String firstUsableModelId(ProviderInfoDTO provider) {
+        if (provider == null || !Boolean.TRUE.equals(provider.getAvailable())) {
+            return null;
         }
-        dto.setSuggestedAction(action);
+        return streamChatModels(provider)
+                .map(ModelInfoDTO::getId)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> !id.isEmpty())
+                .findFirst()
+                .orElse(null);
+    }
 
-        // 5. hint key + args (NOT raw text). Frontend renders via t(key, args).
-        // Only emit hint when it actually applies to the action; suppress for
-        // REMOVED / COOLDOWN / UNPROBED to keep the popup clean.
-        if ("fill_base_url".equals(action) || "configure_required_fields".equals(action)) {
-            dto.setSuggestedActionHintKey(req.hintKey());
-            dto.setSuggestedActionHintArgs(req.hintArgs() == null ? new java.util.LinkedHashMap<>()
-                                                                  : new java.util.LinkedHashMap<>(req.hintArgs()));
-        } else {
-            dto.setSuggestedActionHintKey(null);
-            dto.setSuggestedActionHintArgs(new java.util.LinkedHashMap<>());
-        }
+    private java.util.stream.Stream<ModelInfoDTO> streamChatModels(ProviderInfoDTO provider) {
+        return java.util.stream.Stream.concat(
+                provider.getModels() != null ? provider.getModels().stream() : java.util.stream.Stream.empty(),
+                provider.getExtraModels() != null ? provider.getExtraModels().stream() : java.util.stream.Stream.empty());
+    }
+
+    private String normalizeBlank(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private boolean hasModels(String providerId) {
         return !modelConfigService.listModelsByProvider(providerId).isEmpty();
     }
 
+    private boolean hasChatModels(String providerId) {
+        return !modelConfigService.listChatModelsByProvider(providerId).isEmpty();
+    }
+
     private boolean isProviderConfigured(ModelProviderEntity provider) {
         if (provider == null) {
             return false;
         }
+        if (Boolean.TRUE.equals(provider.getIsLocal())) {
+            return true;
+        }
 
-        // OAuth providers store credentials elsewhere (DB column or disk for
-        // Claude Code). Resolve them via the OAuth service rather than the
-        // base-URL / api-key columns.
+        // OAuth 认证的 provider：检查 OAuth token 是否存在
         if ("oauth".equals(provider.getAuthType())) {
+            // Claude Code OAuth (RFC-062) — token lives on disk, not in DB.
             if (CLAUDE_CODE_PROVIDER_ID.equals(provider.getProviderId())) {
                 ClaudeCodeOAuthService svc = claudeCodeOAuthServiceProvider.getIfAvailable();
                 return svc != null && svc.isLoggedIn();
@@ -542,21 +572,16 @@ public class ModelProviderService {
             return StringUtils.hasText(provider.getOauthAccessToken());
         }
 
-        // Issue #81: decide required fields from the provider row, not from the
-        // protocol enum. Every OpenAI-compatible provider (cloud or local) shares
-        // OPENAI_COMPATIBLE, so a protocol-keyed table cannot tell OpenAI cloud
-        // (needs api_key, no base url) apart from llama.cpp local (no api_key,
-        // needs base url). Without this, isLocal=true short-circuited to true
-        // for llama.cpp regardless of an empty Base URL, hiding the real cause
-        // behind a confusing REMOVED state.
-        ProviderRequirements.Required req = ProviderRequirements.of(provider);
-        if (req.needsApiKey() && !hasUsableApiKey(provider.getApiKey())) {
-            return false;
+        boolean hasBaseUrl = StringUtils.hasText(provider.getBaseUrl());
+        boolean hasApiKey = hasUsableApiKey(provider.getApiKey());
+
+        if (Boolean.TRUE.equals(provider.getIsCustom())) {
+            return hasBaseUrl && (!Boolean.TRUE.equals(provider.getRequireApiKey()) || hasApiKey);
         }
-        if (req.needsBaseUrl() && !StringUtils.hasText(provider.getBaseUrl())) {
-            return false;
+        if (Boolean.FALSE.equals(provider.getRequireApiKey())) {
+            return hasBaseUrl;
         }
-        return true;
+        return hasApiKey;
     }
 
     public boolean hasUsableApiKey(String apiKey) {
@@ -564,28 +589,9 @@ public class ModelProviderService {
             return false;
         }
         String normalized = apiKey.trim();
-        // Reject masked display values (the UI sends "********" when the user
-        // didn't re-type the key) and known placeholder sentinels — without this
-        // check, the chat / embedding fallback chain happily forwards the
-        // placeholder to the LLM endpoint, which then returns a 401 at request
-        // time. "configure-in-admin-ui" is the application.yml default that
-        // keeps DashScopeChatAutoConfiguration happy at startup when no env var
-        // is set; "your-*-api-key-here" are legacy sentinels from earlier
-        // .env.example / application.yml versions.
         return !normalized.contains("*")
-                && !"configure-in-admin-ui".equalsIgnoreCase(normalized)
                 && !"your-dashscope-api-key-here".equalsIgnoreCase(normalized)
                 && !"your-api-key-here".equalsIgnoreCase(normalized);
-    }
-
-    public boolean isProviderEnabledAndConfigured(String providerId) {
-        return isProviderEnabledAndConfigured(getProvider(providerId));
-    }
-
-    private boolean isProviderEnabledAndConfigured(ModelProviderEntity provider) {
-        return provider != null
-                && Boolean.TRUE.equals(provider.getEnabled())
-                && isProviderConfigured(provider);
     }
 
     public Map<String, Object> readProviderGenerateKwargs(ModelProviderEntity provider) {
@@ -672,4 +678,13 @@ public class ModelProviderService {
             Map<String, AvailableProviderPool.RemovalReason> poolSnapshot,
             Map<String, ProviderHealthTracker.ProviderHealthSnapshot> healthSnapshot,
             ProviderInitProbe initProbe) {}
+
+        public record ResolvedChatSelection(
+            String requestedProviderId,
+            String requestedModelName,
+            String providerId,
+            String modelName,
+            boolean requestedAvailable,
+            boolean fallbackApplied,
+            String reason) {}
 }

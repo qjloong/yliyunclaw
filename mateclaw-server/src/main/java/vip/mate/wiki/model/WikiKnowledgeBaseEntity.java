@@ -20,6 +20,9 @@ public class WikiKnowledgeBaseEntity {
     /** 知识库名称 */
     private String name;
 
+    /** Stable external key used by built-in templates, e.g. kb.project.docs. */
+    private String externalKey;
+
     /** 描述 */
     private String description;
 
@@ -44,6 +47,9 @@ public class WikiKnowledgeBaseEntity {
 
     /** 所属工作区 ID（默认 1 = default） */
     private Long workspaceId;
+
+    /** 创建该知识库的用户 ID；为空表示历史数据未记录创建者。 */
+    private Long creatorUserId;
 
     /**
      * 绑定的 Embedding 模型 ID（mate_model_config.id，model_type='embedding'）。

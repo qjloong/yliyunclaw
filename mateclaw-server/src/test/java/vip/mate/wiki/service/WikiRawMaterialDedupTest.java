@@ -7,9 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.ApplicationEventPublisher;
-import vip.mate.system.featureflag.FeatureFlagService;
 import vip.mate.tool.builtin.DocumentExtractTool;
-import vip.mate.tool.image.vision.ImageVisionService;
 import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
 import vip.mate.wiki.repository.WikiRawMaterialMapper;
@@ -42,12 +40,8 @@ class WikiRawMaterialDedupTest {
         WikiProperties props = new WikiProperties();
         props.setAutoProcessOnUpload(false); // don't fire events during test
         DocumentExtractTool docTool = mock(DocumentExtractTool.class);
-        ImageVisionService visionService = mock(ImageVisionService.class);
-        PdfImageExtractor pdfImageExtractor = mock(PdfImageExtractor.class);
-        FeatureFlagService featureFlagService = mock(FeatureFlagService.class);
 
-        service = new WikiRawMaterialService(rawMapper, kbService, props, eventPublisher, docTool,
-                chunkService, visionService, pdfImageExtractor, featureFlagService);
+        service = new WikiRawMaterialService(rawMapper, kbService, props, eventPublisher, docTool, chunkService);
     }
 
     private WikiRawMaterialEntity existingRow(Long id, String status) {

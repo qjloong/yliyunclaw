@@ -9,12 +9,7 @@
         <div class="form-grid">
           <div class="form-group" v-if="!editingProvider">
             <label class="form-label">{{ t('settings.model.fields.providerId') }}</label>
-            <input
-              v-model="form.id"
-              class="form-input mono"
-              :placeholder="t('settings.model.providerIdPlaceholder')"
-            />
-            <div class="field-hint">{{ t('settings.model.providerIdHint') }}</div>
+            <input v-model="form.id" class="form-input" />
           </div>
           <div class="form-group" v-if="!editingProvider">
             <label class="form-label">{{ t('settings.model.fields.providerName') }}</label>
@@ -28,16 +23,6 @@
               :placeholder="baseUrlPlaceholder"
             />
             <div class="field-hint">{{ baseUrlHint }}</div>
-          </div>
-          <div v-if="editingProvider?.authType !== 'oauth' && form.protocol === 'openai-compatible'" class="form-group">
-            <div class="search-toggle-row">
-              <label class="form-label" style="margin-bottom: 0">{{ t('settings.model.fields.requireApiKey') }}</label>
-              <label class="toggle-switch">
-                <input type="checkbox" v-model="form.requireApiKey" />
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-            <div class="field-hint">{{ t('settings.model.requireApiKeyHint') }}</div>
           </div>
           <!-- OAuth 登录区域（auth_type === 'oauth' 时显示） -->
           <div v-if="editingProvider?.authType === 'oauth'" class="form-group full-width oauth-group">
@@ -75,7 +60,7 @@
             </div>
           </div>
           <!-- API Key 输入区域（非 OAuth 时显示） -->
-          <div v-else-if="form.protocol !== 'openai-compatible' || form.requireApiKey" class="form-group">
+          <div v-else class="form-group">
             <label class="form-label">{{ t('settings.model.apiKey') }}</label>
             <input
               v-model="form.apiKey"
@@ -86,7 +71,7 @@
             />
             <div class="field-hint">{{ t('settings.model.leaveBlankKeep') }}</div>
           </div>
-          <div v-if="editingProvider?.authType !== 'oauth' && (form.protocol !== 'openai-compatible' || form.requireApiKey)" class="form-group">
+          <div class="form-group">
             <label class="form-label">{{ t('settings.model.fields.apiKeyPrefix') }}</label>
             <input v-model="form.apiKeyPrefix" class="form-input" />
           </div>
@@ -187,7 +172,6 @@ defineProps<{
     apiKeyPrefix: string
     protocol: string
     chatModel: string
-    requireApiKey: boolean
     generateKwargsText: string
     enableSearch: boolean
     searchStrategy: string

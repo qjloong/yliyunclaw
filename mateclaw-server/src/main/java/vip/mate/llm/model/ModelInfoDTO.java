@@ -41,6 +41,9 @@ public class ModelInfoDTO {
      */
     private boolean supportsThinking;
 
+    /** Whether the model can natively consume image input. */
+    private boolean supportsVision;
+
     public ModelInfoDTO(String id, String name) {
         this.id = id;
         this.name = name;

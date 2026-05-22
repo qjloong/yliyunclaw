@@ -10,19 +10,22 @@ const props = defineProps<{
 
 const collapsed = ref(false)
 
+const planSteps = computed(() => Array.isArray(props.plan?.steps) ? props.plan.steps : [])
+const planStepResults = computed(() => Array.isArray(props.plan?.stepResults) ? props.plan.stepResults : [])
+
 const completedCount = computed(() =>
-  props.plan.stepResults?.filter(r => r?.status === 'completed').length || 0
+  planStepResults.value.filter(r => r?.status === 'completed').length || 0
 )
 
 const allDone = computed(() =>
-  completedCount.value === props.plan.steps.length && !props.isGenerating
+  planSteps.value.length > 0 && completedCount.value === planSteps.value.length && !props.isGenerating
 )
 
 type StepStatus = 'pending' | 'running' | 'completed'
 
 const stepStatuses = computed<StepStatus[]>(() =>
-  props.plan.steps.map((_, i) => {
-    const result = props.plan.stepResults?.[i]
+  planSteps.value.map((_, i) => {
+    const result = planStepResults.value[i]
     if (result?.status === 'completed') return 'completed'
     if (i === props.plan.currentStep && props.isGenerating) return 'running'
     return 'pending'
@@ -32,7 +35,7 @@ const stepStatuses = computed<StepStatus[]>(() =>
 const expandedSteps = reactive(new Set<number>())
 
 function toggleStep(index: number) {
-  const result = props.plan.stepResults?.[index]
+  const result = planStepResults.value[index]
   if (!result?.result) return
   if (expandedSteps.has(index)) {
     expandedSteps.delete(index)
@@ -58,7 +61,7 @@ function truncateResult(text: string, max: number): string {
       <span class="plan-panel__title">
         Plan
       </span>
-      <span class="plan-panel__progress">{{ completedCount }}/{{ plan.steps.length }}</span>
+      <span class="plan-panel__progress">{{ completedCount }}/{{ planSteps.length }}</span>
       <el-icon
         class="plan-panel__arrow"
         :class="{ 'is-open': !collapsed }"
@@ -70,7 +73,7 @@ function truncateResult(text: string, max: number): string {
     <Transition name="plan-slide">
       <div v-if="!collapsed" class="plan-panel__body">
         <div
-          v-for="(step, i) in plan.steps"
+          v-for="(step, i) in planSteps"
           :key="i"
           class="plan-step"
           :class="{
@@ -89,7 +92,7 @@ function truncateResult(text: string, max: number): string {
             <span class="plan-step__index">{{ i + 1 }}.</span>
             <span class="plan-step__text">{{ step }}</span>
             <el-icon
-              v-if="plan.stepResults?.[i]?.result"
+              v-if="planStepResults[i]?.result"
               class="plan-step__arrow"
               :class="{ 'is-open': expandedSteps.has(i) }"
               :size="11"
@@ -98,8 +101,8 @@ function truncateResult(text: string, max: number): string {
 
           <!-- 步骤结果（可展开） -->
           <Transition name="plan-slide">
-            <div v-if="expandedSteps.has(i) && plan.stepResults?.[i]?.result" class="plan-step__result">
-              <pre>{{ truncateResult(plan.stepResults[i].result, 500) }}</pre>
+            <div v-if="expandedSteps.has(i) && planStepResults[i]?.result" class="plan-step__result">
+              <pre>{{ truncateResult(planStepResults[i].result, 500) }}</pre>
             </div>
           </Transition>
         </div>

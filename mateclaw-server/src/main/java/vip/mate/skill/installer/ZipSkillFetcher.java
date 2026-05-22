@@ -9,30 +9,23 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Parses a ZIP-packaged Skill into a {@link SkillBundle}.
+ * ZIP 格式 Skill 包解析器
  * <p>
- * Used by both the upload endpoint (MultipartFile) and the marketplace install
- * path (downloaded ZIP bytes). Hardened against:
+ * 从上传的 ZIP 文件中解析 SKILL.md + references/ + scripts/，
+ * 构建统一的 {@link SkillBundle} 供安装流程使用。
+ * <p>
+ * 安全防护：
  * <ul>
- *   <li>Zip Slip path traversal</li>
- *   <li>Per-file ≤1MB, total ≤50MB</li>
- *   <li>Only SKILL.md / references/ / scripts/ entries are kept</li>
+ *   <li>Zip Slip 路径穿越检测</li>
+ *   <li>单文件 ≤1MB，总解压 ≤50MB</li>
+ *   <li>仅接受 SKILL.md / references/ / scripts/ 下的文件</li>
  * </ul>
- *
- * <p>Extraction is two-pass: the entire archive is buffered in memory first
- * (cap-protected), then SKILL.md is located and the common parent prefix is
- * stripped from every other entry. This keeps classification correct
- * regardless of the order zip tools write entries — earlier single-pass logic
- * silently dropped {@code scripts/*} entries that streamed before SKILL.md.
  *
  * @author MateClaw Team
  */
@@ -45,41 +38,12 @@ public class ZipSkillFetcher {
     private static final String SKILL_MD_LOWER = "skill.md";
 
     /**
-     * Lowercase file extensions that should be treated as runnable scripts
-     * when they appear next to SKILL.md without an explicit {@code scripts/}
-     * prefix. Real-world zips from third parties (e.g. the official
-     * tencent-meeting-mcp package) put {@code setup.sh} at the package
-     * root; without this fallback, those files get logged as "unclassified"
-     * and the skill ships with an empty scripts/ directory.
-     */
-    private static final Set<String> SCRIPT_EXTENSIONS = Set.of(
-            ".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".ts",
-            ".rb", ".pl", ".php", ".bat", ".cmd", ".ps1");
-
-    /**
-     * Lowercase file extensions that are documentation / data alongside
-     * SKILL.md and should default to {@code references/} when not nested
-     * under an explicit prefix.
-     */
-    private static final Set<String> REFERENCE_EXTENSIONS = Set.of(
-            ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".tsv",
-            ".html", ".htm", ".xml", ".toml");
-
-    /**
-     * Holds the in-memory result of decompressing a ZIP. Used by callers
-     * that want to enrich the SkillBundle with metadata (e.g. marketplace
-     * author / icon) that isn't carried inside SKILL.md.
-     */
-    public record ExtractedSkill(String skillMdContent,
-                                 Map<String, String> references,
-                                 Map<String, String> scripts) {}
-
-    /** Buffered raw zip entry, awaiting classification once SKILL.md prefix is known. */
-    private record RawEntry(String name, String content) {}
-
-    /**
-     * Parse an uploaded ZIP file into a SkillBundle. Source type is "zip"
-     * and source URL is the original filename.
+     * 解析 ZIP 文件为 SkillBundle
+     *
+     * @param zipFile 上传的 ZIP 文件
+     * @param parser  frontmatter 解析器
+     * @return 解析后的 SkillBundle
+     * @throws IOException 解析失败
      */
     public static SkillBundle parse(MultipartFile zipFile, SkillFrontmatterParser parser) throws IOException {
         if (zipFile == null || zipFile.isEmpty()) {
@@ -89,58 +53,15 @@ public class ZipSkillFetcher {
             throw new IllegalArgumentException("ZIP file too large (max 50MB)");
         }
 
-        ExtractedSkill extracted;
-        try (InputStream is = zipFile.getInputStream()) {
-            extracted = extract(is);
-        }
-
-        var parsed = parser.parse(extracted.skillMdContent());
-        String name = parsed.getName();
-        if (name == null || name.isBlank()) {
-            String zipName = zipFile.getOriginalFilename();
-            if (zipName != null) {
-                name = zipName.replaceAll("\\.zip$", "").replaceAll("[^a-zA-Z0-9_-]", "-");
-            } else {
-                name = "imported-skill";
-            }
-        }
-
-        log.info("[ZipSkillFetcher] Parsed: name={}, references={}, scripts={}",
-                name, extracted.references().size(), extracted.scripts().size());
-
-        Map<String, Object> fm = parsed.getFrontmatter();
-        return new SkillBundle(
-                name,
-                extracted.skillMdContent(),
-                extracted.references(),
-                extracted.scripts(),
-                "zip",
-                zipFile.getOriginalFilename(),
-                fm != null ? String.valueOf(fm.getOrDefault("version", "1.0.0")) : "1.0.0",
-                parsed.getDescription(),
-                fm != null ? String.valueOf(fm.getOrDefault("author", "")) : "",
-                fm != null ? String.valueOf(fm.getOrDefault("icon", "📦")) : "📦"
-        );
-    }
-
-    /**
-     * Decompress a ZIP stream into in-memory SKILL.md + references + scripts.
-     * Throws {@link IllegalArgumentException} if no SKILL.md is present.
-     *
-     * <p>Two-pass: the first pass buffers every text entry (subject to size
-     * caps) and remembers where SKILL.md lives. The second pass strips the
-     * SKILL.md parent prefix from each buffered entry and routes it into
-     * {@code references} / {@code scripts}. Anything that doesn't match
-     * either bucket is logged at WARN level so packaging mistakes surface
-     * instead of being silently dropped.
-     */
-    public static ExtractedSkill extract(InputStream zipStream) throws IOException {
-        List<RawEntry> raws = new ArrayList<>();
         String skillMdContent = null;
-        String skillMdPrefix = "";
+        String skillMdPrefix = "";  // 如果 SKILL.md 在子目录中，记录前缀
+        Map<String, String> references = new HashMap<>();
+        Map<String, String> scripts = new HashMap<>();
         long totalSize = 0;
 
-        try (ZipInputStream zis = new ZipInputStream(zipStream, StandardCharsets.UTF_8)) {
+        try (InputStream is = zipFile.getInputStream();
+             ZipInputStream zis = new ZipInputStream(is, StandardCharsets.UTF_8)) {
+
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 if (entry.isDirectory()) {
@@ -150,7 +71,7 @@ public class ZipSkillFetcher {
 
                 String entryName = entry.getName();
 
-                // Zip Slip guard: normalize and reject absolute / traversal entries.
+                // Zip Slip 防护：normalize 后检查是否逃逸
                 Path entryPath = Path.of(entryName).normalize();
                 if (entryPath.isAbsolute() || entryName.contains("..")) {
                     log.warn("[ZipSkillFetcher] Skipping suspicious entry: {}", entryName);
@@ -158,39 +79,49 @@ public class ZipSkillFetcher {
                     continue;
                 }
 
-                long declaredSize = entry.getSize();
-                if (declaredSize > MAX_FILE_SIZE) {
-                    log.warn("[ZipSkillFetcher] Skipping oversized entry: {} ({}bytes)", entryName, declaredSize);
+                // 文件大小检查
+                long size = entry.getSize();
+                if (size > MAX_FILE_SIZE) {
+                    log.warn("[ZipSkillFetcher] Skipping oversized entry: {} ({}bytes)", entryName, size);
                     zis.closeEntry();
                     continue;
                 }
 
+                // 读取内容
                 byte[] bytes = zis.readAllBytes();
-                if (bytes.length > MAX_FILE_SIZE) {
-                    log.warn("[ZipSkillFetcher] Skipping oversized entry post-read: {} ({}bytes)", entryName, bytes.length);
-                    zis.closeEntry();
-                    continue;
-                }
                 totalSize += bytes.length;
                 if (totalSize > MAX_TOTAL_SIZE) {
                     throw new IOException("Total extracted size exceeds 50MB limit");
                 }
 
                 String content = new String(bytes, StandardCharsets.UTF_8);
-                String normalizedName = entryPath.toString().replace('\\', '/');
                 String fileName = entryPath.getFileName().toString();
 
-                // First match wins for SKILL.md so we lock onto the shallowest one.
+                // 定位 SKILL.md（根目录或一级子目录）
                 if (skillMdContent == null && (SKILL_MD.equals(fileName) || SKILL_MD_LOWER.equals(fileName))) {
                     skillMdContent = content;
-                    int slashIdx = normalizedName.lastIndexOf('/');
-                    skillMdPrefix = slashIdx > 0 ? normalizedName.substring(0, slashIdx + 1) : "";
-                    log.info("[ZipSkillFetcher] Found SKILL.md at: {}", normalizedName);
-                } else {
-                    raws.add(new RawEntry(normalizedName, content));
+                    // 确定子目录前缀（如 "my-skill/SKILL.md" → prefix = "my-skill/"）
+                    int slashIdx = entryName.lastIndexOf('/');
+                    skillMdPrefix = slashIdx > 0 ? entryName.substring(0, slashIdx + 1) : "";
+                    log.info("[ZipSkillFetcher] Found SKILL.md at: {}", entryName);
                 }
 
                 zis.closeEntry();
+
+                // 先收集所有文件，后面按前缀过滤
+                String normalizedName = entryPath.toString().replace('\\', '/');
+
+                // 收集 references/ 和 scripts/ 文件
+                String relativeName = normalizedName;
+                if (!skillMdPrefix.isEmpty() && normalizedName.startsWith(skillMdPrefix)) {
+                    relativeName = normalizedName.substring(skillMdPrefix.length());
+                }
+
+                if (relativeName.startsWith("references/")) {
+                    references.put(relativeName, content);
+                } else if (relativeName.startsWith("scripts/")) {
+                    scripts.put(relativeName, content);
+                }
             }
         }
 
@@ -198,61 +129,33 @@ public class ZipSkillFetcher {
             throw new IllegalArgumentException("ZIP does not contain SKILL.md");
         }
 
-        Map<String, String> references = new HashMap<>();
-        Map<String, String> scripts = new HashMap<>();
-
-        for (RawEntry raw : raws) {
-            String relative = raw.name();
-            if (!skillMdPrefix.isEmpty() && relative.startsWith(skillMdPrefix)) {
-                relative = relative.substring(skillMdPrefix.length());
-            }
-
-            if (relative.startsWith("references/")) {
-                references.put(relative.substring("references/".length()), raw.content());
-            } else if (relative.startsWith("scripts/")) {
-                scripts.put(relative.substring("scripts/".length()), raw.content());
-            } else if (!relative.contains("/")) {
-                // Sibling of SKILL.md (post-prefix-strip). Some real-world
-                // packagers — notably the official tencent-meeting-mcp.zip —
-                // put setup.sh at the package root instead of under scripts/.
-                // Fall back to extension-based classification so those zips
-                // install cleanly without forcing the user to repackage.
-                String classified = classifyRootFile(relative);
-                if ("scripts".equals(classified)) {
-                    scripts.put(relative, raw.content());
-                    log.info("[ZipSkillFetcher] Classified root-level entry '{}' as script by extension", relative);
-                } else if ("references".equals(classified)) {
-                    references.put(relative, raw.content());
-                    log.info("[ZipSkillFetcher] Classified root-level entry '{}' as reference by extension", relative);
-                } else {
-                    log.warn("[ZipSkillFetcher] Ignoring root-level entry with unknown extension: {}", raw.name());
-                }
+        // 解析 frontmatter
+        var parsed = parser.parse(skillMdContent);
+        String name = parsed.getName();
+        if (name == null || name.isBlank()) {
+            // 从 ZIP 文件名推断
+            String zipName = zipFile.getOriginalFilename();
+            if (zipName != null) {
+                name = zipName.replaceAll("\\.zip$", "").replaceAll("[^a-zA-Z0-9_-]", "-");
             } else {
-                log.warn("[ZipSkillFetcher] Ignoring entry outside references/ or scripts/: {} (skill prefix={})",
-                        raw.name(), skillMdPrefix.isEmpty() ? "<root>" : skillMdPrefix);
+                name = "imported-skill";
             }
         }
 
-        return new ExtractedSkill(skillMdContent, references, scripts);
-    }
+        log.info("[ZipSkillFetcher] Parsed: name={}, references={}, scripts={}, totalSize={}",
+                name, references.size(), scripts.size(), totalSize);
 
-    /**
-     * Classify a root-level file (sibling of SKILL.md, no directory prefix)
-     * by extension. Returns {@code "scripts"} / {@code "references"} for
-     * recognized extensions, {@code null} for everything else.
-     *
-     * <p>Only invoked for entries that are NOT already nested under
-     * {@code scripts/} or {@code references/}, so well-formed packages
-     * are unaffected.
-     */
-    private static String classifyRootFile(String fileName) {
-        if (fileName == null) return null;
-        String lower = fileName.toLowerCase();
-        int dot = lower.lastIndexOf('.');
-        if (dot < 0) return null;
-        String ext = lower.substring(dot);
-        if (SCRIPT_EXTENSIONS.contains(ext)) return "scripts";
-        if (REFERENCE_EXTENSIONS.contains(ext)) return "references";
-        return null;
+        return new SkillBundle(
+                name,
+                skillMdContent,
+                references,
+                scripts,
+                "zip",
+                zipFile.getOriginalFilename(),
+                parsed.getFrontmatter() != null ? String.valueOf(parsed.getFrontmatter().getOrDefault("version", "1.0.0")) : "1.0.0",
+                parsed.getDescription(),
+                parsed.getFrontmatter() != null ? String.valueOf(parsed.getFrontmatter().getOrDefault("author", "")) : "",
+                parsed.getFrontmatter() != null ? String.valueOf(parsed.getFrontmatter().getOrDefault("icon", "📦")) : "📦"
+        );
     }
 }

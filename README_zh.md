@@ -28,10 +28,6 @@
 
 ---
 
-> **别的 AI 助手是给一个人用的。MateClaw 是公司允许部署的那一个。**
->
-> 多用户工作空间。敏感操作走审批。完整审计日志。Spring Boot Actuator 健康监控。单个渠道挂掉不影响其他渠道的错误隔离。一个 JAR 包跑在自己机器上，数据不出门。
-
 大多数 AI 工具一到厂商抽风那天就两手一摊。关一次标签页就忘了你是谁。给你一个聊天框，就敢叫产品。
 
 **MateClaw 是完整的一整套。** 一次部署——推理、知识、记忆、工具、多渠道入口，从第一天就一起设计，不是事后拼接。主模型挂了，下一家接着把这句话说完。
@@ -60,10 +56,10 @@ MateClaw 的 **LLM Wiki** 把它消化成结构化页面，页面之间自己长
 
 | 入口 | 它是什么 |
 |---|---|
-| **Web 控制台** | 完整的管理后台——数字员工、模型、技能、知识、安全、定时任务、**运行时控制台**（看见每位员工正在干什么、一键回收） |
+| **Web 控制台** | 完整的管理后台——智能体、模型、工具、技能、知识、安全、定时任务 |
 | **桌面端** | Electron + 内嵌 JRE 21，双击即用，无需装 Java |
 | **网页嵌入式聊天** | 一个 `<script>` 标签就能嵌进任何网站 |
-| **IM 渠道** | 钉钉 · 飞书 · 企业微信 · 微信 · Telegram · Discord · QQ · Slack |
+| **IM 渠道** | 钉钉 · 飞书 · 企业微信 · Telegram · Discord · QQ |
 | **插件 SDK** | Java 模块，供第三方扩展能力包 |
 
 同一个大脑。同一份记忆。同一套工具。不同的门。
@@ -74,28 +70,22 @@ MateClaw 的 **LLM Wiki** 把它消化成结构化页面，页面之间自己长
 
 ## 盒子里有什么
 
-### 数字员工，不是聊天机器人
-你雇佣员工，不是开聊天框。每位有**角色**、**目标**、**背景故事**，像素艺术头像、专属配色——5 个职业模板（产品研究员 · 客户支持 · 知识管理员 · 数据分析师 · 行政助理）开箱可用。**ReAct** 做迭代推理，**Plan-and-Execute** 做复杂多步任务，员工之间可以并行委派。动态上下文裁剪、智能截断、僵死流清理——让长对话真正能用的那些"不起眼"的基础设施。
+### 智能体引擎
+**ReAct** 做迭代推理。**Plan-and-Execute** 做复杂多步任务。动态上下文裁剪、智能截断、僵死流清理——让长对话真正能用的那些"不起眼"的基础设施。
 
 ### 知识与记忆
-- **LLM Wiki** — 原始材料消化成有链接、带引用的结构化页面；**热点缓存**自动注入到员工的 system prompt
+- **LLM Wiki** — 原始材料消化成有链接、带引用的结构化页面
 - **工作区记忆** — `AGENTS.md` / `SOUL.md` / `PROFILE.md` / `MEMORY.md` / 每日笔记
-- **记忆生命周期** — 对话后自动提取 · 定时整理 · Dreaming 工作流
+- **记忆生命周期** — 对话后自动提取 · 定时整理 · 记忆涌现工作流
 
-### 技能 · MCP · ACP — 三种"接外部能力"的方式
-- **SKILL.md 技能包** — 一份 manifest + prompt + 工具列表 + **LESSONS.md（用得越多越聪明）**。8 个起步模板 + 5 步创作向导，安装前自动跑 **Pre-flight 检查**告诉你缺什么
-- **MCP** — stdio / SSE / Streamable HTTP 三种传输，接入任意外部工具服务器
-- **ACP** — 把 Claude Code、Codex 这种顶级编码 Agent 以"员工"身份接入，桥接成技能卡 + 包装工具
-- **Tool Guard** — RBAC + 审批流 + 文件路径保护。能力必须有边界
-
-### 你看得见每位员工正在干什么
-**Admin 运行时控制台**（`后台 → 系统 → 运行时`）——谁在跑、跑到哪一步、占多少 token、卡住了一键回收。流式分阶段显示（思考 / 工具 / 回答），SSE 每事件 ID 支持安全重连，多员工协作不打架，长任务必须有真实证据才回答。
+### 工具、技能、MCP
+内置工具覆盖搜索、文件、记忆、日期。**MCP** 支持 stdio / SSE / Streamable HTTP 三种传输。**SKILL.md** 包可从 ClawHub 市场安装。**工具防护**层提供 RBAC、审批流、文件路径保护——能力必须有边界。
 
 ### 多模态创作
-语音合成 · 语音识别 · 图片 · 音乐 · 视频 · 3D。一等公民，不是附加插件。
+语音合成 · 语音识别 · 图片 · 音乐 · 视频。一等公民，不是附加插件。
 
 ### 企业就绪
-RBAC + JWT。**Personal Access Token** 给无人值守脚本和 CI 用。**Webhook 出站 HMAC-SHA-256 签名**。**Cron 分布式锁**多实例不双发。完整审计事件流。Flyway 管理数据库 schema，升级时自愈。一个 JAR 交付。生产用 MySQL，开发用 H2，代码零改动。
+RBAC + JWT。完整审计事件流。Flyway 管理数据库 schema，升级时自愈。一个 JAR 交付。生产用 MySQL，开发用 H2，代码零改动。
 
 ---
 
@@ -115,15 +105,14 @@ RBAC + JWT。**Personal Access Token** 给无人值守脚本和 CI 用。**Webho
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **多厂商失败转移** | **Chain + 健康追踪 + 冷却** | 切换供应商（改配置） | 内置编排重试 | 仅 Anthropic | 单模型 |
 | **知识消化式加工** | **Wiki + 页面级引用溯源** | Canvas + 记忆 | Skills Hub + 记忆 | — | 代码索引 |
-| **多用户管理** | **RBAC + 审批流 + 审计 + 运行时控制台** | 配置文件优先 | 单用户 CLI | 企业版 | 团队版 |
-| **能力扩展接口** | **技能 (LESSONS) + MCP + ACP** | — | — | MCP | MCP |
-| **用户触点** | Web 管理台 + 桌面 + 嵌入 + SDK + 8 IM | 25+ 聊天渠道 | 15+ 渠道（CLI 为主） | 3 IM（预览） | 仅 IDE |
+| **多用户管理** | **RBAC + 审批流 + 审计** | 配置文件优先 | 单用户 CLI | 企业版 | 团队版 |
+| **用户触点** | Web 管理台 + 桌面 + 嵌入 + SDK + 6 IM | 25+ 聊天渠道 | 15+ 渠道（CLI 为主） | 3 IM（预览） | 仅 IDE |
 | **技术栈** | **Java（Spring Boot）** | TypeScript | Python | TypeScript | Electron/TS |
 | **许可 / 定价** | **Apache 2.0 · 免费** | MIT · 免费 | MIT · 免费 | 闭源 · $20–200/月 | 闭源 · $0–200/月 |
 
 **OpenClaw 和 Hermes Agent 是优秀的个人 AI 平台**——如果你是一个人、一台笔记本、习惯从 CLI 搭自己的 agent、所有东西都靠手工配置文件调优，选它们没问题。两家的社区规模今天都大于 MateClaw。
 
-**MateClaw 是那个给团队用的版本。** 每位数字员工、每个模型、每个工具都有 RBAC。危险动作自动暂停等审批。完整审计事件流。Admin 运行时控制台让一个运维能实时看到 50 位员工跑在 14 家供应商上的状态——卡住了一键回收。底座是 Spring Boot——任何一家已经在生产跑 Java 服务的公司可以直接并入。
+**MateClaw 是那个给团队用的版本。** 每个 agent、每个模型、每个工具都有 RBAC。危险动作自动暂停等审批。完整审计事件流。一个 Web 管理台里，一个运维能同时管 50 个 agent 跑在 14 家供应商上。底座是 Spring Boot——任何一家已经在生产跑 Java 服务的公司可以直接并入。
 
 **同一套"完整一整套"哲学，不同的重心。**
 
@@ -153,6 +142,90 @@ docker compose up -d          # http://localhost:18080
 ### 桌面端
 
 从 [GitHub Releases](https://github.com/matevip/mateclaw/releases) 下载安装包。内嵌 JRE 21，无需额外装 Java。
+
+### 桌面端本地打包测试
+
+仓库内已补充 `mateclaw-desktop/` Electron 测试壳，可用于本地桌面端联调与打包验证。
+
+```bash
+# 1) 启动后端（默认桌面壳连接 http://127.0.0.1:18088）
+cd mateclaw-server
+mvn spring-boot:run
+
+# 2) 新开终端，安装并启动桌面壳
+cd ../mateclaw-desktop
+pnpm install
+pnpm dev
+```
+
+如果你要直接连接前端 Vite 开发服务：
+
+```bash
+cd mateclaw-ui
+pnpm install && pnpm dev
+
+cd ../mateclaw-desktop
+pnpm dev:ui
+```
+
+打包 Windows 测试包：
+
+```bash
+cd mateclaw-desktop
+pnpm dist
+```
+
+输出目录：`mateclaw-desktop/release/`
+
+### 同步上游仓库
+
+已为当前仓库配置上游远程：`https://github.com/matevip/mateclaw`
+
+```bash
+git remote -v
+git fetch upstream main --depth=1
+git branch upstream-main upstream/main
+```
+
+为避免上游同步影响本地开发，推荐采用以下本地分支约定：
+
+- `dev-local`：日常开发分支，基于 `upstream/main`，叠加本地功能改动
+- `local-snapshot-20260513`：本地开发快照备份，保底回滚用
+- `upstream-main`：上游主线参考分支
+
+建议后续始终在 `dev-local` 上开发：
+
+```bash
+git checkout dev-local
+```
+
+当云端有新的 bugfix 或功能更新时，本地同步方式：
+
+```bash
+git checkout dev-local
+git fetch upstream
+git merge upstream/main
+```
+
+如果你更偏好线性历史，也可以改用：
+
+```bash
+git checkout dev-local
+git fetch upstream
+git rebase upstream/main
+```
+
+说明：
+
+- 当前 `dev-local` 已经是“上游最新代码 + 本地功能覆盖”的安全分支
+- 本流程不会自动推送到 GitHub
+- 如果同步后发现问题，可随时切回本地快照：
+
+```bash
+git checkout local-snapshot-20260513
+```
+
+更完整的团队协作 / 本地同步说明见 [docs/git-workflow.md](docs/git-workflow.md)。
 
 ---
 
@@ -191,8 +264,7 @@ mateclaw/
 | 层次 | 技术 |
 |---|---|
 | 后端 | Spring Boot 3.5 · Spring AI Alibaba 1.1 · MyBatis Plus · Flyway |
-| 数字员工运行时 | StateGraph · ReAct + Plan-Execute · 角色 / 目标 / 背景故事 · LESSONS 自我进化 |
-| 能力扩展 | SKILL.md 包 · MCP 协议（stdio / SSE / HTTP）· ACP 桥接（Claude Code / Codex） |
+| 智能体 | StateGraph 运行时 · ReAct + Plan-Execute |
 | 数据库 | H2（开发）· MySQL 8.0+（生产）|
 | 认证 | Spring Security + JWT |
 | 前端 | Vue 3 · TypeScript · Vite · Element Plus · TailwindCSS 4 |
@@ -207,7 +279,7 @@ mateclaw/
 
 ## 路线图
 
-更强的多员工协作 · 更智能的模型路由 · 更深度的多模态理解 · 更长久的记忆 · 更繁荣的 ClawHub · 更多 ACP 上游集成。
+更强的多智能体协作 · 更智能的模型路由 · 更深度的多模态理解 · 更长久的记忆 · 更繁荣的 ClawHub。
 
 ## 参与贡献
 

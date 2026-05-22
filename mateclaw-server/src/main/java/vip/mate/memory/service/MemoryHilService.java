@@ -2,9 +2,10 @@ package vip.mate.memory.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-import vip.mate.memory.event.MemoryWriteEvent;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 
@@ -25,7 +26,7 @@ import java.time.LocalDate;
 public class MemoryHilService {
 
     private final WorkspaceFileService workspaceFileService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final MemoryWriteProvenancePublisher provenancePublisher;
 
     /**
      * Edit a section in MEMORY.md identified by key (section heading).
@@ -61,7 +62,13 @@ public class MemoryHilService {
         }
 
         workspaceFileService.saveFile(agentId, "MEMORY.md", memoryContent);
-        eventPublisher.publishEvent(new MemoryWriteEvent(agentId, "MEMORY.md", "user-edit", newContent));
+    provenancePublisher.publishRequired(agentId, null,
+        MemorySurfaceType.DIRECT_FILE_TOOL,
+        MemoryOperation.WRITE,
+        "MEMORY.md",
+        "user-edit",
+        memoryContent,
+        java.util.Map.of("writer", "MemoryHilService", "editor", "user"));
         log.info("[HiL] User edited MEMORY.md section '{}' for agent={}", key, agentId);
     }
 

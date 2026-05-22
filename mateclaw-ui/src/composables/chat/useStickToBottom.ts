@@ -96,12 +96,9 @@ export function useStickToBottom(
       
       // 等待滚动完成
       await new Promise<void>((resolve) => {
-        const startedAt = performance.now()
         const checkScrollEnd = () => {
-          if (!isScrolling || Math.abs(element.scrollTop - targetScrollTop) < 1
-              || performance.now() - startedAt > opts.duration * 2) {
+          if (Math.abs(element.scrollTop - targetScrollTop) < 1) {
             isScrolling = false
-            lastScrollTop = element.scrollTop
             resolve()
           } else {
             requestAnimationFrame(checkScrollEnd)
@@ -113,7 +110,6 @@ export function useStickToBottom(
       // 直接滚动
       element.scrollTop = targetScrollTop
       isScrolling = false
-      lastScrollTop = element.scrollTop
     }
 
     isAtBottom.value = true
@@ -127,11 +123,7 @@ export function useStickToBottom(
 
   // 处理滚动事件
   const handleScroll = () => {
-    if (!scrollRef.value) return
-    if (isScrolling) {
-      lastScrollTop = scrollRef.value.scrollTop
-      return
-    }
+    if (!scrollRef.value || isScrolling) return
 
     const element = scrollRef.value
     const currentScrollTop = element.scrollTop
@@ -149,7 +141,7 @@ export function useStickToBottom(
     }
 
     // 向下滚动到底部，恢复自动滚动
-    if ((isScrollingDown || checkIsAtBottom()) && isNearBottom.value) {
+    if (isScrollingDown && isNearBottom.value) {
       escapedFromLock.value = false
       isAtBottom.value = true
     }
@@ -157,13 +149,11 @@ export function useStickToBottom(
 
   // 处理鼠标滚轮
   const handleWheel = (e: WheelEvent) => {
-    if (!scrollRef.value) return
+    if (!scrollRef.value || !escapedFromLock.value) return
     
     // 如果用户向上滚动，确保我们记录这个行为
     if (e.deltaY < 0) {
-      isScrolling = false
       escapedFromLock.value = true
-      isAtBottom.value = false
     }
   }
 
@@ -185,6 +175,7 @@ export function useStickToBottom(
 
   // ResizeObserver 监听内容变化
   let resizeObserver: ResizeObserver | null = null
+  let mutationObserver: MutationObserver | null = null
 
   onMounted(() => {
     if (!scrollRef.value) return
@@ -210,6 +201,20 @@ export function useStickToBottom(
       resizeObserver.observe(contentRef.value)
     }
 
+    if (contentRef.value && window.MutationObserver) {
+      mutationObserver = new MutationObserver(() => {
+        if (!opts.enabled) return
+        if (escapedFromLock.value) return
+        if (!isAtBottom.value && !isNearBottom.value) return
+        scrollToBottom({ smooth: false })
+      })
+      mutationObserver.observe(contentRef.value, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      })
+    }
+
     // 初始化滚动位置
     if (opts.enabled) {
       scrollToBottom({ smooth: false })
@@ -233,6 +238,10 @@ export function useStickToBottom(
     if (resizeObserver) {
       resizeObserver.disconnect()
       resizeObserver = null
+    }
+    if (mutationObserver) {
+      mutationObserver.disconnect()
+      mutationObserver = null
     }
   })
 

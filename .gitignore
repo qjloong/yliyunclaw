@@ -58,6 +58,7 @@ Servers
 .metadata
 upload
 gen_code
+.release
 
 ### node ###
 node_modules
@@ -79,9 +80,7 @@ mateclaw-server/data/
 # VitePress build output and cache (do not commit)
 docs/.vitepress/cache/
 docs/.vitepress/dist/
-
-# Astro build cache (do not commit)
-.astro/
+docs/claude-code-book-main/
 
 # SSL certificates (do not commit)
 deploy/nginx/ssl/*.crt
@@ -91,6 +90,10 @@ deploy/nginx/ssl/*.pem
 # Deploy env
 deploy/.env
 
+# docker
+docker/runtime
+docker/searxng
+
 # Claude Code local settings
 CLAUDE.md
 .claude/settings.local.json
@@ -99,9 +102,13 @@ CLAUDE.md
 # Codex CLI local artifacts
 .codex/
 
-# Sync tooling local state (generated each run; report is intentionally tracked)
-scripts/.*-sync-state.json
+# MateClaw desktop test shell artifacts
+mateclaw-desktop/node_modules/
+mateclaw-desktop/release/
+mateclaw-desktop/dist/
 
-# Sandbox / external client work that lives in this directory
-# but should not ship in the repo.
-outputs/
+
+tmp/
+
+
+docs/channel.md

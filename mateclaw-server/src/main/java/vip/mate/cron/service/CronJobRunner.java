@@ -41,7 +41,6 @@ public class CronJobRunner {
     private final CronJobLifecycleService lifecycle;
     private final AgentService agentService;
     private final CronChatOriginFactory originFactory;
-    private final vip.mate.cron.CronConversationResolver conversationResolver;
 
     /**
      * Scheduler-facing entry. Runs three logical segments:
@@ -70,45 +69,12 @@ public class CronJobRunner {
                 ? job.getRequestBody()
                 : job.getTriggerMessage();
 
-        // Resolve once and pass through the lifecycle. CronConversationResolver
-        // routes Web-origin jobs to tasks_<wsId> (single visible conversation
-        // per workspace) and IM-bound jobs to the channel session conversation
-        // when one already exists, so cron output appears where the user
-        // naturally looks rather than in an orphan cron_<id> row.
-        String conversationId = conversationResolver.resolve(job);
-
         // T1 — short tx
         CronJobRunEntity run;
         try {
-            run = lifecycle.startRun(job, userMessage, triggerType, conversationId);
+            run = lifecycle.startRun(job, userMessage, triggerType);
         } catch (Exception e) {
             log.error("[CronRunner] T1 startRun failed for job {}: {}", job.getId(), e.getMessage(), e);
-            return;
-        }
-
-        // task_type='reminder' — pure notification, no LLM call. The user
-        // (or the create_reminder tool on their behalf) supplied the exact
-        // text they want pushed; running it through chat() only echoes /
-        // rephrases it ("收到提醒，请立即前往…"). Hand the trigger_message
-        // straight to T2 so the recipient sees the literal reminder.
-        // 'text' jobs still go through the LLM path below (they may need
-        // tool use, e.g. weather lookup, news search).
-        if ("reminder".equals(job.getTaskType())
-                && job.getTriggerMessage() != null
-                && !job.getTriggerMessage().isBlank()) {
-            try {
-                AssistantMessage direct = new AssistantMessage(job.getTriggerMessage());
-                lifecycle.finishRunAndPublish(job, run, userMessage, direct, conversationId);
-            } catch (Exception e) {
-                log.error("[CronRunner] reminder direct-push failed for job {}: {}",
-                        job.getId(), e.getMessage(), e);
-                try {
-                    lifecycle.markRunFailed(run, e);
-                } catch (Exception markErr) {
-                    log.warn("[CronRunner] markRunFailed after reminder failure also failed for run {}: {}",
-                            run.getId(), markErr.getMessage());
-                }
-            }
             return;
         }
 
@@ -116,8 +82,8 @@ public class CronJobRunner {
         // any DB connection during this call.
         AssistantMessage result;
         try {
-            ChatOrigin origin = originFactory.from(job, conversationId);
-            result = runAgent(job, userMessage, origin, conversationId);
+            ChatOrigin origin = originFactory.from(job, "cron:" + job.getId());
+            result = runAgent(job, userMessage, origin);
         } catch (Exception e) {
             log.error("[CronRunner] runAgent failed for job {}: {}", job.getId(), e.getMessage(), e);
             try {
@@ -132,7 +98,7 @@ public class CronJobRunner {
 
         // T2 — short tx
         try {
-            lifecycle.finishRunAndPublish(job, run, userMessage, result, conversationId);
+            lifecycle.finishRunAndPublish(job, run, userMessage, result);
         } catch (Exception e) {
             log.error("[CronRunner] T2 finishRunAndPublish failed for job {}: {}", job.getId(), e.getMessage(), e);
             try {
@@ -151,12 +117,11 @@ public class CronJobRunner {
      * mateclaw cli to send to wechat") by telling the model that delivery is
      * framework-handled.
      */
-    private AssistantMessage runAgent(CronJobEntity job, String userMessage, ChatOrigin origin,
-                                      String conversationId) {
+    private AssistantMessage runAgent(CronJobEntity job, String userMessage, ChatOrigin origin) {
         String guarded = wrapWithDeliveryGuard(userMessage, origin);
         String text = "agent".equals(job.getTaskType())
-                ? agentService.execute(job.getAgentId(), guarded, conversationId, origin)
-                : agentService.chat(job.getAgentId(), guarded, conversationId, origin);
+                ? agentService.execute(job.getAgentId(), guarded, "cron:" + job.getId(), origin)
+                : agentService.chat(job.getAgentId(), guarded, "cron:" + job.getId(), origin);
         return new AssistantMessage(text != null ? text : "");
     }
 

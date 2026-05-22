@@ -112,21 +112,6 @@ public class ModelConfigController {
         return R.ok();
     }
 
-    /**
-     * Issue #39 fallback: query-param variant for provider IDs that cannot be
-     * expressed as a single path segment (slashes, spaces, etc.). The path
-     * variant above is the primary entry point — this exists so users with
-     * already-persisted invalid IDs can still clean up their data, since
-     * Spring's {@code {providerId}} doesn't match across {@code /} and the
-     * dispatcher would otherwise fall through to the static-resource handler.
-     */
-    @Operation(summary = "删除自定义 Provider（查询参数变体，兼容含特殊字符的旧 ID）")
-    @DeleteMapping("/custom-providers")
-    public R<Void> deleteCustomProviderByQuery(@RequestParam("providerId") String providerId) {
-        modelProviderService.deleteCustomProvider(providerId);
-        return R.ok();
-    }
-
     @Operation(summary = "向 Provider 添加模型")
     @PostMapping("/{providerId}/models")
     public R<ProviderInfoDTO> addProviderModel(@PathVariable String providerId,
@@ -204,12 +189,10 @@ public class ModelConfigController {
 
     // ==================== Embedding 模型管理 ====================
 
-    @Operation(summary = "按类型筛选模型（chat / embedding），可选 modality 过滤")
+    @Operation(summary = "按类型筛选模型（chat / embedding）")
     @GetMapping("/by-type")
-    public R<List<ModelConfigEntity>> listByType(
-            @RequestParam(defaultValue = "chat") String modelType,
-            @RequestParam(required = false) String modality) {
-        return R.ok(modelConfigService.listByType(modelType, modality));
+    public R<List<ModelConfigEntity>> listByType(@RequestParam(defaultValue = "chat") String modelType) {
+        return R.ok(modelConfigService.listByType(modelType));
     }
 
     @Operation(summary = "测试 Embedding 模型连通性（嵌入一个短文本验证 API key）")

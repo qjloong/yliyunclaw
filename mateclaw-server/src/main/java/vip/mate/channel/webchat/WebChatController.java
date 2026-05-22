@@ -112,6 +112,7 @@ public class WebChatController {
 
                 // 初始化 SSE 流跟踪
                 streamTracker.register(conversationId);
+                streamTracker.setRunMetadata(conversationId, agentId, "webchat:" + visitorId);
                 streamTracker.attach(conversationId, emitter);
 
                 // Accumulate the assistant reply so it can be persisted on stream completion.

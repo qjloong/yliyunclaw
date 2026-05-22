@@ -22,6 +22,7 @@ export function useProviderDiscovery(deps: ListDeps) {
   const providerModelForm = reactive({
     id: '',
     name: '',
+    modelType: 'chat' as 'chat' | 'embedding',
   })
 
   const discovering = ref(false)
@@ -43,6 +44,7 @@ export function useProviderDiscovery(deps: ListDeps) {
     deps.currentProvider.value = provider
     providerModelForm.id = ''
     providerModelForm.name = ''
+    providerModelForm.modelType = 'chat'
     showManageModelsModal.value = true
   }
 
@@ -64,10 +66,12 @@ export function useProviderDiscovery(deps: ListDeps) {
     await modelApi.addProviderModel(deps.currentProvider.value.id, {
       id: providerModelForm.id,
       name: providerModelForm.name || providerModelForm.id,
+      modelType: providerModelForm.modelType,
     })
     await deps.refreshCurrentProvider(deps.currentProvider.value.id)
     providerModelForm.id = ''
     providerModelForm.name = ''
+    providerModelForm.modelType = 'chat'
   }
 
   async function removeProviderModel(model: ProviderModelInfo) {

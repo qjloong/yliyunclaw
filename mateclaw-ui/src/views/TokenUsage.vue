@@ -47,11 +47,11 @@
           <div v-if="data.totalMessages > 0" class="summary-cards">
             <div class="summary-card">
               <div class="card-kicker">{{ t('tokenUsage.promptTokens') }}</div>
-              <div class="card-value">{{ formatNumber(data.totalPromptTokens) }}</div>
+              <div class="card-value" :title="formatNumber(data.totalPromptTokens)">{{ formatTokenCount(data.totalPromptTokens) }}</div>
             </div>
             <div class="summary-card">
               <div class="card-kicker">{{ t('tokenUsage.completionTokens') }}</div>
-              <div class="card-value">{{ formatNumber(data.totalCompletionTokens) }}</div>
+              <div class="card-value" :title="formatNumber(data.totalCompletionTokens)">{{ formatTokenCount(data.totalCompletionTokens) }}</div>
             </div>
             <div class="summary-card">
               <div class="card-kicker">{{ t('tokenUsage.assistantMessages') }}</div>
@@ -70,8 +70,8 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>{{ t('tokenUsage.provider') }}</th>
-                    <th>{{ t('tokenUsage.model') }}</th>
+                    <th style="text-align: left;">{{ t('tokenUsage.provider') }}</th>
+                    <th style="text-align: left;" >{{ t('tokenUsage.model') }}</th>
                     <th class="num-col">{{ t('tokenUsage.promptTokens') }}</th>
                     <th class="num-col">{{ t('tokenUsage.completionTokens') }}</th>
                     <th class="num-col">{{ t('tokenUsage.messageCount') }}</th>
@@ -81,8 +81,8 @@
                   <tr v-for="(item, idx) in data.byModel" :key="idx">
                     <td><span class="mono-text mono-text--truncate" :title="item.runtimeProvider || '-'">{{ item.runtimeProvider || '-' }}</span></td>
                     <td><span class="mono-text mono-text--truncate mono-text--wide" :title="item.runtimeModel || '-'">{{ item.runtimeModel || '-' }}</span></td>
-                    <td class="num-col">{{ formatNumber(item.promptTokens) }}</td>
-                    <td class="num-col">{{ formatNumber(item.completionTokens) }}</td>
+                    <td class="num-col" :title="formatNumber(item.promptTokens)">{{ formatTokenCount(item.promptTokens) }}</td>
+                    <td class="num-col" :title="formatNumber(item.completionTokens)">{{ formatTokenCount(item.completionTokens) }}</td>
                     <td class="num-col">{{ formatNumber(item.messageCount) }}</td>
                   </tr>
                 </tbody>
@@ -96,7 +96,7 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>{{ t('tokenUsage.date') }}</th>
+                    <th style="text-align: left;">{{ t('tokenUsage.date') }}</th>
                     <th class="num-col">{{ t('tokenUsage.promptTokens') }}</th>
                     <th class="num-col">{{ t('tokenUsage.completionTokens') }}</th>
                     <th class="num-col">{{ t('tokenUsage.messageCount') }}</th>
@@ -105,8 +105,8 @@
                 <tbody>
                   <tr v-for="item in data.byDate" :key="item.date">
                     <td>{{ item.date }}</td>
-                    <td class="num-col">{{ formatNumber(item.promptTokens) }}</td>
-                    <td class="num-col">{{ formatNumber(item.completionTokens) }}</td>
+                    <td class="num-col" :title="formatNumber(item.promptTokens)">{{ formatTokenCount(item.promptTokens) }}</td>
+                    <td class="num-col" :title="formatNumber(item.completionTokens)">{{ formatTokenCount(item.completionTokens) }}</td>
                     <td class="num-col">{{ formatNumber(item.messageCount) }}</td>
                   </tr>
                 </tbody>
@@ -144,6 +144,20 @@ const dateRange = ref<[string, string]>([toDateStr(thirtyDaysAgo), toDateStr(tod
 function formatNumber(n: number): string {
   if (n == null) return '0'
   return n.toLocaleString()
+}
+
+function formatTokenCount(n: number): string {
+  if (n == null) return '0'
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000_000) return `${trimUnit(n / 1_000_000_000)}B`
+  if (abs >= 1_000_000) return `${trimUnit(n / 1_000_000)}M`
+  if (abs >= 1_000) return `${trimUnit(n / 1_000)}K`
+  return String(n)
+}
+
+function trimUnit(value: number): string {
+  const fixed = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1)
+  return fixed.replace(/\.0$/, '')
 }
 
 async function fetchData() {
@@ -335,7 +349,7 @@ onMounted(fetchData)
   top: 0;
   z-index: 1;
   padding: 12px 16px;
-  text-align: left;
+  /* text-align: left; */
   font-size: 11px;
   font-weight: 700;
   color: var(--mc-text-secondary);

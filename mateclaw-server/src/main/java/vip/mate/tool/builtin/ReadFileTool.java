@@ -94,7 +94,9 @@ public class ReadFileTool {
                 path = attachment;
             }
             if (Files.isDirectory(path)) {
-                return errorResult(filePath, i18n.msg("tool.read_file.error.is_directory", path));
+                return errorResult(filePath,
+                        i18n.msg("tool.read_file.error.is_directory", path)
+                                + "。请先调用 list_directory(directoryPath=\"" + path + "\") 或 index_directory_materials(directoryPath=\"" + path + "\") 建立目录索引，再按需读取具体文件。");
             }
             if (!Files.isReadable(path)) {
                 return errorResult(filePath, i18n.msg("tool.read_file.error.not_readable", path));

@@ -83,15 +83,6 @@ public final class MateClawStateKeys {
     // ===== 事件流（APPEND 策略）=====
     public static final String PENDING_EVENTS = "pending_events";
 
-    /**
-     * Multimodal routing decision for the current turn (REPLACE strategy).
-     * Stored as a Map ready for JSON serialization. Set by BaseAgent before
-     * the reasoning node runs; read back by FinalAnswerNode and (separately)
-     * emitted as a graph event for the SSE accumulator to write into the
-     * persisted message metadata under {@code metadata.routing}.
-     */
-    public static final String ROUTING_DECISION = "routing_decision";
-
     // ===== 阶段标记（REPLACE 策略）=====
     public static final String CURRENT_PHASE = "current_phase";
 
@@ -164,9 +155,6 @@ public final class MateClawStateKeys {
      * tool batch, used by FinalAnswerNode to assemble the final answer.
      */
     public static final String DIRECT_TOOL_OUTPUTS = "direct_tool_outputs";
-
-    /** Source references observed from successful tool results during this run. */
-    public static final String SOURCE_EVIDENCE_LEDGER = "source_evidence_ledger";
 
     // ===== RFC-063r: ChatOrigin propagation through the StateGraph =====
 

@@ -18,8 +18,6 @@ import vip.mate.wiki.job.model.WikiProcessingJobEntity;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
-import vip.mate.wiki.model.WikiTransformationEntity;
-import vip.mate.wiki.model.WikiTransformationRunEntity;
 import vip.mate.wiki.repository.WikiRawMaterialMapper;
 import vip.mate.wiki.service.*;
 
@@ -61,16 +59,6 @@ public class WikiTool {
     @Autowired(required = false)
     private WikiCompileService compileService;
 
-    /** Optional transformation engine. Tools degrade with a clear error when missing. */
-    @Autowired(required = false)
-    private WikiTransformationService transformationService;
-
-    @Autowired(required = false)
-    private WikiTransformationExecutor transformationExecutor;
-
-    @Autowired(required = false)
-    private WikiTransformationAggregator transformationAggregator;
-
     public WikiTool(WikiPageService pageService,
                      WikiKnowledgeBaseService kbService,
                      WikiRawMaterialService rawService,
@@ -101,15 +89,18 @@ public class WikiTool {
             return error("slug is required");
         }
 
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) {
+        List<BoundKnowledgeBase> knowledgeBases = resolveKnowledgeBases(agentId);
+        if (knowledgeBases.isEmpty()) {
             return error("No wiki knowledge base found for this agent");
         }
 
-        WikiPageEntity page = pageService.getBySlug(kbId, slug);
-        if (page == null) {
+        ResolvedWikiPage resolved = findPage(knowledgeBases, slug);
+        if (resolved == null) {
             return error("Page not found: " + slug);
         }
+
+        Long kbId = resolved.kbId();
+        WikiPageEntity page = resolved.page();
 
         pageService.trackReference(kbId, slug);
 
@@ -123,6 +114,8 @@ public class WikiTool {
         }
 
         JSONObject result = JSONUtil.createObj()
+            .set("kbId", kbId)
+            .set("kbName", resolved.kbName())
                 .set("title", page.getTitle())
                 .set("slug", page.getSlug())
                 .set("version", page.getVersion())
@@ -142,44 +135,55 @@ public class WikiTool {
             @ToolParam(description = "Agent ID") Long agentId,
             @ToolParam(description = "Title keyword filter (optional)", required = false) String query) {
 
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) {
+        List<BoundKnowledgeBase> knowledgeBases = resolveKnowledgeBases(agentId);
+        if (knowledgeBases.isEmpty()) {
             return error("No wiki knowledge base found for this agent");
         }
 
-        List<WikiPageLite> pages;
-        if (query != null && !query.isBlank()) {
-            List<Long> ids = pageService.searchPages(kbId, query).stream()
-                    .filter(p -> !"system".equals(p.getPageType()))
-                    .map(WikiPageEntity::getId).limit(30).toList();
-            if (ids.isEmpty()) {
-                pages = List.of();
-            } else {
-                pages = pageService.listSummaries(kbId).stream()
+        List<JSONObject> pages = new ArrayList<>();
+        for (BoundKnowledgeBase kb : knowledgeBases) {
+            List<WikiPageLite> kbPages;
+            if (query != null && !query.isBlank()) {
+                List<Long> ids = pageService.searchPages(kb.id(), query).stream()
                         .filter(p -> !"system".equals(p.getPageType()))
-                        .filter(p -> ids.stream().anyMatch(id -> Objects.equals(id, p.getId())))
+                        .map(WikiPageEntity::getId)
+                        .limit(30)
+                        .toList();
+                if (ids.isEmpty()) {
+                    kbPages = List.of();
+                } else {
+                    kbPages = pageService.listSummaries(kb.id()).stream()
+                            .filter(p -> !"system".equals(p.getPageType()))
+                            .filter(p -> ids.stream().anyMatch(id -> Objects.equals(id, p.getId())))
+                            .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary(), p.getPageType()))
+                            .toList();
+                }
+            } else {
+                // RFC-051 PR-2: hide system pages (overview / log) from default listings.
+                // Agents can still wiki_read_page("overview") explicitly.
+                kbPages = pageService.listSummaries(kb.id()).stream()
+                        .filter(p -> !"system".equals(p.getPageType()))
                         .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary(), p.getPageType()))
                         .toList();
             }
-        } else {
-            // RFC-051 PR-2: hide system pages (overview / log) from default listings.
-            // Agents can still wiki_read_page("overview") explicitly.
-            pages = pageService.listSummaries(kbId).stream()
-                    .filter(p -> !"system".equals(p.getPageType()))
-                    .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary(), p.getPageType()))
-                    .toList();
+
+            for (WikiPageLite page : kbPages) {
+                pages.add(JSONUtil.createObj()
+                        .set("kbId", kb.id())
+                        .set("kbName", kb.name())
+                        .set("slug", page.slug())
+                        .set("title", page.title())
+                        .set("summary", page.summary()));
+            }
         }
 
         JSONArray arr = new JSONArray();
-        for (WikiPageLite page : pages) {
-            arr.add(JSONUtil.createObj()
-                    .set("slug", page.slug())
-                    .set("title", page.title())
-                    .set("summary", page.summary()));
+        for (JSONObject page : pages) {
+            arr.add(page);
         }
 
         return JSONUtil.createObj()
-                .set("kbId", kbId)
+                .set("kbIds", knowledgeBases.stream().map(BoundKnowledgeBase::id).toList())
                 .set("pageCount", pages.size())
                 .set("pages", arr)
                 .toString();
@@ -203,31 +207,38 @@ public class WikiTool {
             return error("query is required");
         }
 
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) {
+        List<BoundKnowledgeBase> knowledgeBases = resolveKnowledgeBases(agentId);
+        if (knowledgeBases.isEmpty()) {
             return error("No wiki knowledge base found for this agent");
         }
 
         int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
-        List<PageSearchResult> results = hybridRetriever.search(kbId, query, mode, k);
+        List<ScopedPageSearchResult> results = knowledgeBases.stream()
+                .flatMap(kb -> hybridRetriever.search(kb.id(), query, mode, k).stream()
+                        .map(result -> new ScopedPageSearchResult(kb.id(), kb.name(), result)))
+                .sorted(Comparator.comparingDouble(ScopedPageSearchResult::score).reversed())
+                .limit(k)
+                .toList();
 
-        for (PageSearchResult r : results) {
-            pageService.trackReference(kbId, r.slug());
+        for (ScopedPageSearchResult r : results) {
+            pageService.trackReference(r.kbId(), r.result().slug());
         }
 
         JSONArray arr = new JSONArray();
-        for (PageSearchResult r : results) {
+        for (ScopedPageSearchResult r : results) {
             arr.add(JSONUtil.createObj()
-                    .set("slug", r.slug())
-                    .set("title", r.title())
-                    .set("snippet", r.snippet() != null ? r.snippet() : r.summary())
-                    .set("matchedBy", r.matchedBy())
-                    .set("reason", r.reason() != null ? r.reason() : "")
-                    .set("score", String.format("%.4f", r.score())));
+                    .set("kbId", r.kbId())
+                    .set("kbName", r.kbName())
+                    .set("slug", r.result().slug())
+                    .set("title", r.result().title())
+                    .set("snippet", r.result().snippet() != null ? r.result().snippet() : r.result().summary())
+                    .set("matchedBy", r.result().matchedBy())
+                    .set("reason", r.result().reason() != null ? r.result().reason() : "")
+                    .set("score", String.format("%.4f", r.result().score())));
         }
 
         return JSONUtil.createObj()
-                .set("kbId", kbId)
+                .set("kbIds", knowledgeBases.stream().map(BoundKnowledgeBase::id).toList())
                 .set("query", query)
                 .set("mode", mode != null ? mode : "hybrid")
                 .set("matchCount", results.size())
@@ -252,17 +263,22 @@ public class WikiTool {
             return error("query is required");
         }
 
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) {
+        List<BoundKnowledgeBase> knowledgeBases = resolveKnowledgeBases(agentId);
+        if (knowledgeBases.isEmpty()) {
             return error("No wiki knowledge base found for this agent");
         }
 
         int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
-        List<HybridRetriever.ChunkHit> hits = hybridRetriever.searchChunks(kbId, query, k);
+        List<ScopedChunkHit> hits = knowledgeBases.stream()
+            .flatMap(kb -> hybridRetriever.searchChunks(kb.id(), query, k).stream()
+                .map(hit -> new ScopedChunkHit(kb.id(), kb.name(), hit)))
+            .sorted(Comparator.comparingDouble(ScopedChunkHit::score).reversed())
+            .limit(k)
+            .toList();
 
         if (hits.isEmpty()) {
             return JSONUtil.createObj()
-                    .set("kbId", kbId)
+                .set("kbIds", knowledgeBases.stream().map(BoundKnowledgeBase::id).toList())
                     .set("query", query)
                     .set("matchCount", 0)
                     .set("message", "No semantic matches found. Try wiki_search_pages with mode=keyword.")
@@ -270,7 +286,7 @@ public class WikiTool {
         }
 
         // RFC-032: Batch-fetch raw titles (N+1 fix)
-        Set<Long> rawIds = hits.stream().map(HybridRetriever.ChunkHit::rawId).collect(Collectors.toSet());
+        Set<Long> rawIds = hits.stream().map(ScopedChunkHit::rawId).collect(Collectors.toSet());
         Map<Long, String> rawTitles;
         if (rawMaterialMapper != null && !rawIds.isEmpty()) {
             rawTitles = rawMaterialMapper.selectBatchTitles(rawIds)
@@ -280,12 +296,14 @@ public class WikiTool {
         }
 
         JSONArray arr = new JSONArray();
-        for (HybridRetriever.ChunkHit hit : hits) {
+        for (ScopedChunkHit hit : hits) {
             cn.hutool.json.JSONObject obj = JSONUtil.createObj()
-                    .set("chunkId", hit.chunkId())
-                    .set("rawTitle", rawTitles.getOrDefault(hit.rawId(), "unknown"))
-                    .set("snippet", hit.snippet())
-                    .set("score", String.format("%.4f", hit.score()));
+                .set("kbId", hit.kbId())
+                .set("kbName", hit.kbName())
+                .set("chunkId", hit.chunkId())
+                .set("rawTitle", rawTitles.getOrDefault(hit.rawId(), "unknown"))
+                .set("snippet", hit.snippet())
+                .set("score", String.format("%.4f", hit.score()));
             // RFC-051 PR-1c: surface chunk metadata when available so the agent
             // can cite "page 12, section 'Setup / Linux'" rather than an opaque snippet.
             if (hit.pageNumber() != null) obj.set("pageNumber", hit.pageNumber());
@@ -296,7 +314,7 @@ public class WikiTool {
         }
 
         return JSONUtil.createObj()
-                .set("kbId", kbId)
+        .set("kbIds", knowledgeBases.stream().map(BoundKnowledgeBase::id).toList())
                 .set("query", query)
                 .set("matchCount", hits.size())
                 .set("chunks", arr)
@@ -315,17 +333,22 @@ public class WikiTool {
             return error("slug is required");
         }
 
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) {
+        List<BoundKnowledgeBase> knowledgeBases = resolveKnowledgeBases(agentId);
+        if (knowledgeBases.isEmpty()) {
             return error("No wiki knowledge base found for this agent");
         }
 
-        WikiPageEntity page = pageService.getBySlug(kbId, slug);
-        if (page == null) {
+        ResolvedWikiPage resolved = findPage(knowledgeBases, slug);
+        if (resolved == null) {
             return error("Page not found: " + slug);
         }
 
+        Long kbId = resolved.kbId();
+        WikiPageEntity page = resolved.page();
+
         return JSONUtil.createObj()
+                .set("kbId", kbId)
+                .set("kbName", resolved.kbName())
                 .set("pageTitle", page.getTitle())
                 .set("pageSlug", page.getSlug())
                 .set("sourceFiles", resolveSourceFiles(page.getSourceRawIds()))
@@ -441,8 +464,8 @@ public class WikiTool {
             @ToolParam(description = "Max chars returned per page (default 2000, max 8000)", required = false) Integer maxCharsPerPage) {
 
         if (slugs == null || slugs.isBlank()) return error("slugs is required");
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        List<BoundKnowledgeBase> knowledgeBases = resolveKnowledgeBases(agentId);
+        if (knowledgeBases.isEmpty()) return error("No wiki knowledge base found for this agent");
 
         int cap = (maxCharsPerPage == null || maxCharsPerPage <= 0) ? 2000 : Math.min(8000, maxCharsPerPage);
         List<String> slugList = Arrays.stream(slugs.split(","))
@@ -451,15 +474,19 @@ public class WikiTool {
 
         JSONArray arr = new JSONArray();
         for (String s : slugList) {
-            WikiPageEntity page = pageService.getBySlug(kbId, s);
-            if (page == null) {
+            ResolvedWikiPage resolved = findPage(knowledgeBases, s);
+            if (resolved == null) {
                 arr.add(JSONUtil.createObj().set("slug", s).set("found", false));
                 continue;
             }
+            Long kbId = resolved.kbId();
+            WikiPageEntity page = resolved.page();
             String content = page.getContent() == null ? "" : page.getContent();
             boolean truncated = content.length() > cap;
             if (truncated) content = content.substring(0, cap) + "\n…(truncated)";
             arr.add(JSONUtil.createObj()
+                .set("kbId", kbId)
+                .set("kbName", resolved.kbName())
                     .set("slug", s)
                     .set("found", true)
                     .set("title", page.getTitle())
@@ -469,7 +496,7 @@ public class WikiTool {
             pageService.trackReference(kbId, s);
         }
         return JSONUtil.createObj()
-                .set("kbId", kbId)
+            .set("kbIds", knowledgeBases.stream().map(BoundKnowledgeBase::id).toList())
                 .set("requestedCount", slugList.size())
                 .set("pages", arr)
                 .toString();
@@ -644,181 +671,27 @@ public class WikiTool {
         return "Wikilink enrichment queued for: " + slug;
     }
 
-    // ==================== Transformations ====================
-
-    @Tool(description = """
-            List the transformation templates available to this agent's wiki KB.
-            Each result has a name (use it with wiki_apply_transformation), a
-            human title, and a description of what the prompt produces.
-            """)
-    public String wiki_list_transformations(
-            @ToolParam(description = "Agent ID") Long agentId) {
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) return error("No wiki knowledge base found for this agent");
-        if (transformationService == null) return error("Transformations not available");
-
-        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
-        Long wsId = (kb == null || kb.getWorkspaceId() == null) ? 1L : kb.getWorkspaceId();
-
-        List<WikiTransformationEntity> templates = transformationService.listForKb(kbId, wsId);
-        JSONArray arr = new JSONArray();
-        for (WikiTransformationEntity t : templates) {
-            if (Boolean.FALSE.equals(t.getEnabled())) continue;
-            arr.add(JSONUtil.createObj()
-                    .set("name", t.getName())
-                    .set("title", t.getTitle())
-                    .set("description", t.getDescription())
-                    .set("applyDefault", Boolean.TRUE.equals(t.getApplyDefault())));
-        }
-        return JSONUtil.createObj().set("kbId", kbId).set("transformations", arr).toString();
-    }
-
-    @Tool(description = """
-            Run a transformation template against one raw material and return the
-            generated text. Use wiki_list_transformations first to discover names.
-            The run is also persisted so the result is visible in the wiki UI.
-            """)
-    public String wiki_apply_transformation(
-            @ToolParam(description = "Agent ID") Long agentId,
-            @ToolParam(description = "Transformation name (from wiki_list_transformations)") String name,
-            @ToolParam(description = "Raw material ID to run the transformation against") Long rawId) {
-        if (name == null || name.isBlank()) return error("name is required");
-        if (rawId == null) return error("rawId is required");
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) return error("No wiki knowledge base found for this agent");
-        if (transformationService == null || transformationExecutor == null) {
-            return error("Transformations not available");
-        }
-
-        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
-        Long wsId = (kb == null || kb.getWorkspaceId() == null) ? 1L : kb.getWorkspaceId();
-
-        WikiTransformationEntity template = transformationService.findByName(kbId, wsId, name).orElse(null);
-        if (template == null) return error("Transformation not found: " + name);
-
-        try {
-            WikiTransformationRunEntity run = transformationExecutor.runOnRawSync(template, rawId, "agent_tool");
-            if (run == null) return error("Transformation is disabled: " + name);
-            if ("failed".equals(run.getStatus())) {
-                return error("Transformation failed: " + run.getError());
-            }
-            return JSONUtil.createObj()
-                    .set("ok", true)
-                    .set("runId", run.getId())
-                    .set("transformation", template.getName())
-                    .set("output", run.getOutput())
-                    .toString();
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            return error(e.getMessage());
-        } catch (Exception e) {
-            log.warn("[WikiTool] wiki_apply_transformation failed: {}", e.getMessage());
-            return error("Apply failed: " + e.getMessage());
-        }
-    }
-
-    @Tool(description = """
-            Run a transformation template against an existing wiki page and return
-            the generated text. Use this when you want to derive a new artifact
-            from an existing page — e.g. "summarize the contract-review page",
-            "extract action items from this meeting-notes page". The run output
-            is persisted in the wiki UI; pass slug (not page id) for convenience.
-            """)
-    public String wiki_apply_transformation_to_page(
-            @ToolParam(description = "Agent ID") Long agentId,
-            @ToolParam(description = "Transformation name (from wiki_list_transformations)") String name,
-            @ToolParam(description = "Source wiki page slug to run the transformation against") String slug) {
-        if (name == null || name.isBlank()) return error("name is required");
-        if (slug == null || slug.isBlank()) return error("slug is required");
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) return error("No wiki knowledge base found for this agent");
-        if (transformationService == null || transformationExecutor == null) {
-            return error("Transformations not available");
-        }
-
-        WikiPageEntity page = pageService.getBySlug(kbId, slug);
-        if (page == null) return error("Page not found: " + slug);
-
-        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
-        Long wsId = (kb == null || kb.getWorkspaceId() == null) ? 1L : kb.getWorkspaceId();
-
-        WikiTransformationEntity template = transformationService.findByName(kbId, wsId, name).orElse(null);
-        if (template == null) return error("Transformation not found: " + name);
-
-        try {
-            WikiTransformationRunEntity run = transformationExecutor.runOnPageSync(template, page.getId(), "agent_tool");
-            if (run == null) return error("Transformation is disabled: " + name);
-            if ("failed".equals(run.getStatus())) {
-                return error("Transformation failed: " + run.getError());
-            }
-            return JSONUtil.createObj()
-                    .set("ok", true)
-                    .set("runId", run.getId())
-                    .set("transformation", template.getName())
-                    .set("inputPage", slug)
-                    .set("output", run.getOutput())
-                    .toString();
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            return error(e.getMessage());
-        } catch (Exception e) {
-            log.warn("[WikiTool] wiki_apply_transformation_to_page failed: {}", e.getMessage());
-            return error("Apply failed: " + e.getMessage());
-        }
-    }
-
-    @Tool(description = """
-            Aggregate all completed runs of a transformation template across every
-            raw material in this KB into a single synthesis wiki page. Use this
-            after running a template against multiple sources to get a KB-level
-            unified document (e.g. one consolidated 题型库 across 5 different
-            mock exam PDFs, one customer-account brief across all sources for an
-            account). Idempotent — re-running upserts the same slug.
-            """)
-    public String wiki_aggregate_transformation(
-            @ToolParam(description = "Agent ID") Long agentId,
-            @ToolParam(description = "Transformation name (from wiki_list_transformations)") String name) {
-        if (name == null || name.isBlank()) return error("name is required");
-        Long kbId = resolveKbId(agentId);
-        if (kbId == null) return error("No wiki knowledge base found for this agent");
-        if (transformationService == null || transformationAggregator == null) {
-            return error("Transformations not available");
-        }
-
-        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
-        Long wsId = (kb == null || kb.getWorkspaceId() == null) ? 1L : kb.getWorkspaceId();
-
-        WikiTransformationEntity template = transformationService.findByName(kbId, wsId, name).orElse(null);
-        if (template == null) return error("Transformation not found: " + name);
-
-        try {
-            var res = transformationAggregator.aggregate(template, kbId, "agent_tool");
-            if (res.pageId() == null) {
-                return JSONUtil.createObj()
-                        .set("ok", true)
-                        .set("aggregated", false)
-                        .set("reason", res.title())
-                        .toString();
-            }
-            return JSONUtil.createObj()
-                    .set("ok", true)
-                    .set("aggregated", true)
-                    .set("pageSlug", res.slug())
-                    .set("pageTitle", res.title())
-                    .set("sourcesUsed", res.sourcesUsed())
-                    .set("created", res.created())
-                    .toString();
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            return error(e.getMessage());
-        } catch (Exception e) {
-            log.warn("[WikiTool] wiki_aggregate_transformation failed: {}", e.getMessage());
-            return error("Aggregate failed: " + e.getMessage());
-        }
-    }
-
     // ==================== Helpers ====================
 
     private Long resolveKbId(Long agentId) {
-        List<WikiKnowledgeBaseEntity> kbs = kbService.listByAgentId(agentId);
-        return kbs.isEmpty() ? null : kbs.get(0).getId();
+        List<BoundKnowledgeBase> kbs = resolveKnowledgeBases(agentId);
+        return kbs.isEmpty() ? null : kbs.get(0).id();
+    }
+
+    private List<BoundKnowledgeBase> resolveKnowledgeBases(Long agentId) {
+        return kbService.listByAgentId(agentId).stream()
+                .map(kb -> new BoundKnowledgeBase(kb.getId(), kb.getName()))
+                .toList();
+    }
+
+    private ResolvedWikiPage findPage(List<BoundKnowledgeBase> knowledgeBases, String slug) {
+        for (BoundKnowledgeBase kb : knowledgeBases) {
+            WikiPageEntity page = pageService.getBySlug(kb.id(), slug);
+            if (page != null) {
+                return new ResolvedWikiPage(kb.id(), kb.name(), page);
+            }
+        }
+        return null;
     }
 
     private JSONArray resolveSourceFiles(String sourceRawIdsJson) {
@@ -868,5 +741,41 @@ public class WikiTool {
 
     private String error(String message) {
         return JSONUtil.createObj().set("error", message).toString();
+    }
+
+    private record BoundKnowledgeBase(Long id, String name) {}
+
+    private record ResolvedWikiPage(Long kbId, String kbName, WikiPageEntity page) {}
+
+    private record ScopedPageSearchResult(Long kbId, String kbName, PageSearchResult result) {
+        private double score() {
+            return result.score();
+        }
+    }
+
+    private record ScopedChunkHit(Long kbId, String kbName, HybridRetriever.ChunkHit hit) {
+        private Long chunkId() {
+            return hit.chunkId();
+        }
+
+        private Long rawId() {
+            return hit.rawId();
+        }
+
+        private String snippet() {
+            return hit.snippet();
+        }
+
+        private float score() {
+            return hit.score();
+        }
+
+        private Integer pageNumber() {
+            return hit.pageNumber();
+        }
+
+        private String headerBreadcrumb() {
+            return hit.headerBreadcrumb();
+        }
     }
 }

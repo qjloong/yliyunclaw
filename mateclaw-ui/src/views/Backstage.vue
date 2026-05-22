@@ -329,7 +329,7 @@ function progressFillStyle(run: BackstageRunCard) {
 }
 
 function childrenOf(run: BackstageRunCard): BackstageSubagentCard[] {
-  return snapshot.value?.subagents.filter(s => s.parentConversationId === run.conversationId) ?? []
+  return snapshot.value?.subagents.filter((s: BackstageSubagentCard) => s.parentConversationId === run.conversationId) ?? []
 }
 
 function openDetail(run: BackstageRunCard) {
@@ -354,7 +354,7 @@ async function refresh() {
     const res: any = await backstageApi.snapshot()
     snapshot.value = (res?.data ?? res) as BackstageSnapshot
     if (detail.value && snapshot.value) {
-      const fresh = snapshot.value.runs.find(r => r.conversationId === detail.value!.conversationId)
+      const fresh = snapshot.value.runs.find((r: BackstageRunCard) => r.conversationId === detail.value!.conversationId)
       if (fresh) detail.value = fresh
     }
   } catch (e: any) {

@@ -3,13 +3,14 @@ package vip.mate.cron;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.repository.AgentMapper;
 import vip.mate.channel.ChannelSessionStore;
 import vip.mate.channel.model.ChannelSessionEntity;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.model.DeliveryConfig;
 
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Single source of truth for the {@code conversationId} a cron run writes to.
@@ -46,6 +47,7 @@ import java.util.Optional;
 public class CronConversationResolver {
 
     private final ChannelSessionStore channelSessionStore;
+    private final AgentMapper agentMapper;
 
     public String resolve(CronJobEntity job) {
         if (job == null) return "tasks_1";
@@ -61,26 +63,32 @@ public class CronConversationResolver {
         }
 
         // Web-origin cron: unified per-workspace tasks conversation.
-        Long ws = job.getWorkspaceId() != null ? job.getWorkspaceId() : 1L;
+        Long ws = resolveWorkspaceId(job);
         return "tasks_" + ws;
+    }
+
+    private Long resolveWorkspaceId(CronJobEntity job) {
+        if (job == null || job.getAgentId() == null) {
+            return 1L;
+        }
+        try {
+            AgentEntity agent = agentMapper.selectById(job.getAgentId());
+            return agent != null && agent.getWorkspaceId() != null ? agent.getWorkspaceId() : 1L;
+        } catch (Exception e) {
+            log.debug("[CronConvResolver] workspace lookup failed for job {}: {}",
+                    job.getId(), e.getMessage());
+            return 1L;
+        }
     }
 
     /**
      * Find the existing channel session for the cron's creator. Match
-     * priority — most specific first:
+     * priority:
      * <ol>
-     *   <li>{@code (channelId, dc.userId)} — the senderId of who created
-     *       this cron, captured by {@code CronJobTool.propagateChannelBinding}.
-     *       This is the stable identifier across replyToken rotations.</li>
-     *   <li>{@code (channelId, dc.targetId)} — fallback for legacy rows that
-     *       were written before the {@code userId} field was added (V62
-     *       baseline / older). Matches when the channel adapter happens to
-     *       use the same value for {@code session.targetId} and
-     *       {@code dc.targetId} (Slack / Discord / Telegram). Will miss for
-     *       DingTalk-style replyToken adapters but those rows will never
-     *       have written a useful targetId match either, so behavior is
-     *       no worse than before.</li>
-     *   <li>If both miss, return null and fall back to {@code cron_<id>}.</li>
+     *   <li>{@code (channelId, dc.targetId)} — matches when the channel adapter
+     *       uses the same stable identifier for both the stored session target
+     *       and the cron delivery target (Slack / Discord / Telegram).</li>
+     *   <li>If it misses, return null and fall back to {@code cron_<id>}.</li>
      * </ol>
      */
     private String findChannelSessionConvId(CronJobEntity job) {
@@ -90,17 +98,7 @@ public class CronConversationResolver {
             List<ChannelSessionEntity> sessions = channelSessionStore.listByChannelId(job.getChannelId());
             if (sessions.isEmpty()) return null;
 
-            // Preferred: match by creator's senderId (V63+ rows).
-            if (dc.userId() != null && !dc.userId().isBlank()) {
-                String byUser = sessions.stream()
-                        .filter(s -> dc.userId().equals(s.getSenderId()))
-                        .map(ChannelSessionEntity::getConversationId)
-                        .findFirst()
-                        .orElse(null);
-                if (byUser != null) return byUser;
-            }
-
-            // Fallback: legacy targetId match (works for non-replyToken adapters).
+            // Match by persisted delivery target when the adapter uses a stable targetId.
             if (dc.targetId() != null && !dc.targetId().isBlank()) {
                 return sessions.stream()
                         .filter(s -> dc.targetId().equals(s.getTargetId()))

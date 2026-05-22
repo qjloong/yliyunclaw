@@ -43,7 +43,8 @@ public record GuardFinding(
                 Map.entry("toolName", toolName != null ? toolName : ""),
                 Map.entry("paramName", paramName != null ? paramName : ""),
                 Map.entry("matchedPattern", matchedPattern != null ? matchedPattern : ""),
-                Map.entry("snippet", snippet != null ? snippet : "")
+                                Map.entry("snippet", snippet != null ? snippet : ""),
+                                Map.entry("metadata", metadata != null ? metadata : Map.of())
         );
     }
 }

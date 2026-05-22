@@ -7,15 +7,13 @@ import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
-import vip.mate.dashboard.model.ActiveCronRunVO;
+import vip.mate.cron.service.CronExecutionSummaryResolver;
 import vip.mate.dashboard.model.CronJobRunEntity;
 import vip.mate.dashboard.repository.CronJobRunMapper;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -42,6 +40,8 @@ public class CronJobRunService {
         run.setStatus("running");
         run.setTriggerType(triggerType);
         run.setStartedAt(LocalDateTime.now());
+        run.setExecutionSummaryStatus(CronExecutionSummaryResolver.STATUS_RUNNING);
+        run.setExecutionSummaryText(CronExecutionSummaryResolver.defaultText(CronExecutionSummaryResolver.STATUS_RUNNING));
         runMapper.insert(run);
         return run;
     }
@@ -55,6 +55,8 @@ public class CronJobRunService {
             run.setStatus("completed");
             run.setFinishedAt(LocalDateTime.now());
             run.setTokenUsage(tokenUsage);
+            run.setExecutionSummaryStatus(CronExecutionSummaryResolver.STATUS_EXECUTION_SUCCEEDED);
+            run.setExecutionSummaryText(CronExecutionSummaryResolver.defaultText(CronExecutionSummaryResolver.STATUS_EXECUTION_SUCCEEDED));
             runMapper.updateById(run);
         }
     }
@@ -65,9 +67,12 @@ public class CronJobRunService {
     public void recordFailed(Long runId, String errorMessage) {
         CronJobRunEntity run = runMapper.selectById(runId);
         if (run != null) {
+            CronExecutionSummaryResolver.Summary summary = CronExecutionSummaryResolver.fromFailureMessage(errorMessage);
             run.setStatus("failed");
             run.setFinishedAt(LocalDateTime.now());
             run.setErrorMessage(errorMessage);
+            run.setExecutionSummaryStatus(summary.status());
+            run.setExecutionSummaryText(summary.text());
             runMapper.updateById(run);
         }
     }
@@ -76,21 +81,25 @@ public class CronJobRunService {
      * 查询某个 CronJob 的执行历史
      */
     public List<CronJobRunEntity> listByJobId(Long cronJobId, int limit) {
-        return runMapper.selectList(
+        List<CronJobRunEntity> runs = runMapper.selectList(
                 new LambdaQueryWrapper<CronJobRunEntity>()
                         .eq(CronJobRunEntity::getCronJobId, cronJobId)
                         .orderByDesc(CronJobRunEntity::getStartedAt)
                         .last("LIMIT " + limit));
+        runs.forEach(this::enrichExecutionSummary);
+        return runs;
     }
 
     /**
      * 查询最近的执行记录
      */
     public List<CronJobRunEntity> listRecent(int limit) {
-        return runMapper.selectList(
+        List<CronJobRunEntity> runs = runMapper.selectList(
                 new LambdaQueryWrapper<CronJobRunEntity>()
                         .orderByDesc(CronJobRunEntity::getStartedAt)
                         .last("LIMIT " + limit));
+        runs.forEach(this::enrichExecutionSummary);
+        return runs;
     }
 
     /**
@@ -115,53 +124,22 @@ public class CronJobRunService {
         Set<Long> jobIds = jobs.stream().map(CronJobEntity::getId).collect(Collectors.toSet());
 
         // 3. 这些 cronJob 的执行记录
-        return runMapper.selectList(
+        List<CronJobRunEntity> runs = runMapper.selectList(
                 new LambdaQueryWrapper<CronJobRunEntity>()
                         .in(CronJobRunEntity::getCronJobId, jobIds)
                         .orderByDesc(CronJobRunEntity::getStartedAt)
                         .last("LIMIT " + limit));
-    }
-
-    /**
-     * Active runs (status='running') for one conversation, joined with the
-     * cron job name. Used by the chat console to render a placeholder bubble
-     * while the LLM is still thinking — covers the gap between T1 (run row
-     * inserted, user message visible) and T2 (assistant message persisted),
-     * which can be 1–5 minutes when the agent does multi-iteration tool use.
-     */
-    public List<ActiveCronRunVO> listActiveByConversation(String conversationId) {
-        if (conversationId == null || conversationId.isBlank()) {
-            return Collections.emptyList();
-        }
-        List<CronJobRunEntity> runs = runMapper.selectList(
-                new LambdaQueryWrapper<CronJobRunEntity>()
-                        .eq(CronJobRunEntity::getConversationId, conversationId)
-                        .eq(CronJobRunEntity::getStatus, "running")
-                        .orderByAsc(CronJobRunEntity::getStartedAt));
-        if (runs.isEmpty()) return Collections.emptyList();
-
-        Set<Long> jobIds = runs.stream()
-                .map(CronJobRunEntity::getCronJobId)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.toSet());
-        Map<Long, String> jobNameById = new HashMap<>();
-        if (!jobIds.isEmpty()) {
-            cronJobMapper.selectList(
-                    new LambdaQueryWrapper<CronJobEntity>()
-                            .in(CronJobEntity::getId, jobIds)
-                            .select(CronJobEntity::getId, CronJobEntity::getName))
-                    .forEach(j -> jobNameById.put(j.getId(), j.getName()));
+        runs.forEach(this::enrichExecutionSummary);
+        return runs;
         }
 
-        return runs.stream().map(r -> {
-            ActiveCronRunVO vo = new ActiveCronRunVO();
-            vo.setRunId(r.getId());
-            vo.setJobId(r.getCronJobId());
-            vo.setJobName(jobNameById.getOrDefault(r.getCronJobId(), ""));
-            vo.setTriggerType(r.getTriggerType());
-            vo.setConversationId(r.getConversationId());
-            vo.setStartedAt(r.getStartedAt());
-            return vo;
-        }).toList();
+        private void enrichExecutionSummary(CronJobRunEntity run) {
+        CronExecutionSummaryResolver.Summary summary = CronExecutionSummaryResolver.fromPersistedOrFallback(
+            run.getStatus(),
+            run.getExecutionSummaryStatus(),
+            run.getExecutionSummaryText(),
+            run.getErrorMessage());
+        run.setExecutionSummaryStatus(summary.status());
+        run.setExecutionSummaryText(summary.text());
     }
 }

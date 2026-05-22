@@ -58,25 +58,6 @@ public class WikiProcessingService {
     private final WikiCitationService citationService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
-    /**
-     * Read-the-failover-chain handle. Optional so the existing constructors and
-     * lazy-mode tests don't have to thread a new dependency. When null, the
-     * fallback hop iterates {@code listEnabledModels} in DB order — same
-     * behavior as before this PR.
-     */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private vip.mate.llm.service.ModelProviderService modelProviderService;
-
-    /**
-     * Per-provider failure counter / cooldown bookkeeping. Optional for the
-     * same reason. When wired, fatal errors mark the provider down so other
-     * code paths (chat agent, fallback chain) skip it during cooldown; on a
-     * successful call we clear the failure counter for the provider that
-     * actually responded.
-     */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
-
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private vip.mate.wiki.job.WikiProcessingJobService wikiJobService;
@@ -113,15 +94,6 @@ public class WikiProcessingService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WikiLogService logService;
-
-    /**
-     * Optional. When present, every successful ingest triggers an async sweep
-     * of the KB's apply-default transformation templates. Missing in the
-     * legacy unit tests that wire this service directly.
-     */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    @org.springframework.context.annotation.Lazy
-    private WikiTransformationExecutor transformationExecutor;
 
     /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
@@ -312,17 +284,7 @@ public class WikiProcessingService {
 
             String finalStatus;
             String finalDetail = null;
-            // Cancellation takes precedence over the normal terminal-state logic:
-            // chunks that observed the cancel flag returned early as "failed", but
-            // those aren't real failures — the user asked to stop. Surface that
-            // intent explicitly so the UI can show "cancelled" instead of "failed"
-            // or "partial".
-            if (rawService.isCancelRequested(rawId)) {
-                finalDetail = "Cancelled by user (" + totalPages + " page(s) generated, "
-                        + (totalChunks - failedChunks) + "/" + totalChunks + " chunks completed before stop).";
-                rawService.updateProcessingStatus(rawId, "cancelled", finalDetail);
-                finalStatus = "cancelled";
-            } else if (totalPages == 0) {
+            if (totalPages == 0) {
                 // RFC-051 follow-up: previously this was an unconditional "failed".
                 // But chunks were already persisted (and the materials are searchable
                 // via wiki_semantic_search) — the only thing that actually went wrong
@@ -390,43 +352,32 @@ public class WikiProcessingService {
                     var terminalStage = switch (finalStatus) {
                         case "failed" -> vip.mate.wiki.job.WikiJobStage.FAILED;
                         case "partial" -> vip.mate.wiki.job.WikiJobStage.PARTIAL;
-                        case "cancelled" -> vip.mate.wiki.job.WikiJobStage.CANCELLED;
                         default -> vip.mate.wiki.job.WikiJobStage.COMPLETED;
                     };
                     wikiJobService.transition(jobId, terminalStage);
                 } catch (Exception ignored) {}
             }
 
-            // Skip the post-terminal side effects (log line, overview rebuild,
-            // KB-dirty event) for cancelled and failed runs. A cancelled run
-            // means the user explicitly stopped — don't burn LLM tokens on
-            // overview regeneration over an unstable partial state.
-            boolean nonTerminalSideEffects = !"failed".equals(finalStatus) && !"cancelled".equals(finalStatus);
-            if (logService != null && nonTerminalSideEffects) {
+            // RFC-051 PR-2c: log every non-failed eager ingest. Failures already get a
+            // RAW_FAILED broadcast and an error message in the raw row. Title goes first
+            // so the log reads as "what just landed" instead of an opaque raw id.
+            if (logService != null && !"failed".equals(finalStatus)) {
                 String title = (raw.getTitle() == null || raw.getTitle().isBlank())
                         ? ("raw#" + rawId) : raw.getTitle();
                 logService.append(kb.getId(), WikiLogService.EventType.INGEST,
                         "eager " + finalStatus + " · " + title
                                 + " · " + totalPages + " pages · " + totalChunks + " chunks");
             }
-            // Refresh overview stats whenever a raw lands in a terminal state
-            // (completed or partial). Failures and cancellations don't shift the stats meaningfully.
-            if (overviewService != null && nonTerminalSideEffects) {
+            // RFC-051 PR-2b: refresh overview stats whenever a raw lands in a terminal state
+            // (completed or partial). Failures don't shift the stats meaningfully.
+            if (overviewService != null && !"failed".equals(finalStatus)) {
                 overviewService.rebuild(kb.getId());
             }
             // Tier 2: signal "KB content is dirty" so WikiNarrativeService can
             // schedule (debounced) an LLM-generated overview narrative refresh.
             // Stats rebuild above is sync; narrative regen runs after-commit.
-            if (nonTerminalSideEffects) {
+            if (!"failed".equals(finalStatus)) {
                 eventPublisher.publishEvent(new vip.mate.wiki.event.WikiKbDirtyEvent(this, kb.getId()));
-            }
-
-            // Run apply-default transformation templates against the newly
-            // ingested raw material. Fire-and-forget; failures are logged
-            // inside the executor and do not affect the ingest outcome.
-            if (transformationExecutor != null && nonTerminalSideEffects) {
-                Long wsId = kb.getWorkspaceId() == null ? 1L : kb.getWorkspaceId();
-                transformationExecutor.runDefaultsAsync(kb.getId(), wsId, rawId, "apply_default");
             }
 
             log.info("[Wiki] Processing completed for raw={}, kbId={}, generatedPages={}, totalPages={}",
@@ -440,12 +391,7 @@ public class WikiProcessingService {
             // RFC-051 follow-up: trigger embedding whenever chunks landed, not only when
             // pages were produced. Otherwise the partial-with-no-pages case above ends up
             // with chunks in DB but never embedded, so semantic search silently misses them.
-            // Skip the post-ingest embedding sweep when this run was cancelled.
-            // The user almost certainly stopped because the embedding provider
-            // is failing (out of credits, wrong key, etc.); kicking off another
-            // embedding pass on the same provider would just churn through
-            // every pending chunk and produce more "all chunks failed" noise.
-            if (totalChunks > 0 && !"cancelled".equals(finalStatus)) {
+            if (totalChunks > 0) {
                 final Long fKbId = kb.getId();
                 WIKI_EXECUTOR.submit(() -> {
                     try {
@@ -453,12 +399,6 @@ public class WikiProcessingService {
                         if (embedded > 0) {
                             log.info("[Wiki] Async embedding completed: kbId={}, embedded={}", fKbId, embedded);
                         }
-                    } catch (vip.mate.wiki.job.WikiEmbeddingProviderFailingException ex) {
-                        // Circuit-breaker tripped — the provider has consistently failed.
-                        // The exception's own log line in WikiEmbeddingService is enough;
-                        // emit a calmer notice here instead of a generic failure log.
-                        log.warn("[Wiki] Async embedding aborted by circuit-breaker for kbId={}: {}",
-                                fKbId, ex.getMessage());
                     } catch (Exception ex) {
                         log.warn("[Wiki] Async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
                     }
@@ -466,39 +406,16 @@ public class WikiProcessingService {
             }
 
         } catch (Exception e) {
-            // If the user requested cancellation while this run was in flight,
-            // surface the abort as 'cancelled' rather than 'failed' even when
-            // the exception bubbled up from somewhere mid-pipeline (e.g. a
-            // checkpoint rejected between chunks).
-            boolean cancelled = rawService.isCancelRequested(rawId);
-            String terminalStatus = cancelled ? "cancelled" : "failed";
-            String detail = cancelled
-                    ? "Cancelled by user (interrupted: " + (e.getMessage() == null ? "unknown" : e.getMessage()) + ")"
-                    : e.getMessage();
-            if (cancelled) {
-                log.info("[Wiki] Processing cancelled for raw={}: {}", rawId, e.getMessage());
-            } else {
-                log.error("[Wiki] Processing failed for raw={}: {}", rawId, e.getMessage(), e);
-            }
-            rawService.updateProcessingStatus(rawId, terminalStatus, detail);
+            log.error("[Wiki] Processing failed for raw={}: {}", rawId, e.getMessage(), e);
+            rawService.updateProcessingStatus(rawId, "failed", e.getMessage());
             kbService.updateStatus(kb.getId(), "active");
+            // Transition job to failed
             if (wikiJobService != null && jobId != null) {
-                try {
-                    wikiJobService.transition(jobId, cancelled
-                            ? vip.mate.wiki.job.WikiJobStage.CANCELLED
-                            : vip.mate.wiki.job.WikiJobStage.FAILED);
-                } catch (Exception ignored) {}
+                try { wikiJobService.transition(jobId, vip.mate.wiki.job.WikiJobStage.FAILED); } catch (Exception ignored) {}
             }
-            // Broadcast: cancelled rows reuse the COMPLETED event with status="cancelled"
-            // so subscribers can render the terminal-but-not-error UI; only true failures
-            // go through RAW_FAILED (which the UI surfaces as a red banner).
-            if (cancelled) {
-                progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_COMPLETED,
-                        java.util.Map.of("rawId", rawId, "status", "cancelled"));
-            } else {
-                progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_FAILED,
-                        java.util.Map.of("rawId", rawId, "error", e.getMessage() == null ? "unknown" : e.getMessage()));
-            }
+            // RFC-012 M3：广播异常终态
+            progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_FAILED,
+                    java.util.Map.of("rawId", rawId, "error", e.getMessage() == null ? "unknown" : e.getMessage()));
         } finally {
             // RFC-012 M2 v2 UI v2：写入最终进度并清理共享计数器
             ProgressCounter pc = progressCounters.remove(rawId);
@@ -837,35 +754,10 @@ public class WikiProcessingService {
         if (!structuredOk) {
             JsonNode routeJson = parseJsonResponse(routeResponse);
             if (routeJson == null) {
-                // Some models (GLM in "thinking" mode, Kimi with a "Let me
-                // analyze..." preamble) ignore the strict-JSON instruction
-                // on first try and emit prose instead. Their response often
-                // contains no { or } at all, so even substring extraction
-                // can't recover. Re-issue once with an explicit corrective
-                // suffix — empirically this is enough to cut the preamble
-                // and get clean JSON. One retry only; we don't want to
-                // chase down the rabbit hole if the model is fundamentally
-                // misaligned with the schema.
-                log.info("[Wiki] Route phase: first parse failed, retrying with strict-JSON correction for rawId={}", rawId);
-                String correctedUser = routeUser
-                        + "\n\n⚠️ 你上一次的回答无法解析为 JSON。"
-                        + "这次请**只输出**符合 schema 的 JSON 对象（必须以 `{` 开头、以 `}` 结尾），"
-                        + "不要包含任何思考过程、解释说明、Markdown 代码块标记或前后文字。";
-                Prompt retryPrompt = new Prompt(List.of(
-                        new SystemMessage(routeSystem),
-                        new UserMessage(correctedUser)
-                ));
-                String retryResponse = callLlmWithResilientRetry(retryPrompt,
-                        "route chunk RETRY of raw=" + rawId,
-                        kbId, vip.mate.wiki.job.WikiJobStep.ROUTE);
-                routeJson = parseJsonResponse(retryResponse);
-                if (routeJson == null) {
-                    log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
-                            kbId, rawId, retryResponse != null ? retryResponse.length() : 0,
-                            retryResponse != null ? retryResponse.substring(0, Math.min(200, retryResponse.length())) : "null");
-                    return 0;
-                }
-                log.info("[Wiki] Route phase: JSON correction retry succeeded for rawId={}", rawId);
+                log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
+                        kbId, rawId, routeResponse != null ? routeResponse.length() : 0,
+                        routeResponse != null ? routeResponse.substring(0, Math.min(200, routeResponse.length())) : "null");
+                return 0;
             }
             JsonNode createNode = routeJson.path("create");
             if (createNode.isArray()) {
@@ -1665,18 +1557,7 @@ public class WikiProcessingService {
         final int maxAttempts = Math.max(1, properties.getLlmMaxAttempts());
         final long maxTotalDurationMs = Math.max(1_000L, properties.getLlmMaxTotalDurationMs());
         final long startNanos = System.nanoTime();
-
-        ResolvedChatModel resolved = resolveChatModel(kbId, step);
-        ChatModel chatModel = resolved.chatModel;
-        Long currentModelId = resolved.modelId;
-        boolean alreadyFellBack = false;
-        // When we fail over after a primary fatal, hold onto the primary's
-        // exception so we can surface BOTH errors if the fallback also dies.
-        // Operators reading logs need to see "the GLM 1113 we tried first" —
-        // not just "DashScope timed out" with the original cause lost.
-        Throwable primaryFatalError = null;
-        String primaryRootInfo = null;
-
+        final ChatModel chatModel = buildChatModelFor(kbId, step);
         int attempt = 0;
         while (true) {
             attempt++;
@@ -1691,11 +1572,6 @@ public class WikiProcessingService {
                 if (attempt > 1) {
                     log.info("[Wiki] LLM call for {} succeeded on attempt {}", ctx, attempt);
                 }
-                // The provider that just answered is healthy: clear any pending
-                // cooldown so subsequent calls can pick it freely. No-op on the
-                // happy path (counter is already 0); cleanup after a fallback
-                // success.
-                recordProviderSuccess(currentModelId);
                 // P0 telemetry: log token usage per LLM call so we can baseline costs before optimizing
                 long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
                 try {
@@ -1712,46 +1588,8 @@ public class WikiProcessingService {
                 }
                 String rootInfo = summarizeRoot(t);
                 if (isFatalModelError(t)) {
-                    // Mark the wedged provider down so the chat-agent path,
-                    // any future fallback walks, and the admin diagnostics
-                    // know to skip it during cooldown.
-                    recordProviderFailure(currentModelId);
-                    // One-hop fallback: when the primary provider is wedged
-                    // (auth / quota / 余额不足 / model-not-found), try the next
-                    // configured chat model with a different provider before
-                    // giving up. The hop is one-shot — if the fallback also
-                    // fatals, we surface BOTH errors rather than walking the
-                    // whole chain to avoid pathological loops.
-                    if (!alreadyFellBack) {
-                        ResolvedChatModel next = pickFallbackChatModel(currentModelId);
-                        if (next != null) {
-                            log.warn("[Wiki] LLM fatal on primary model={} for {}; failing over to model={} (rootCause={}): {}",
-                                    currentModelId, ctx, next.modelId, rootInfo, t.getMessage());
-                            primaryFatalError = t;
-                            primaryRootInfo = rootInfo;
-                            chatModel = next.chatModel;
-                            currentModelId = next.modelId;
-                            alreadyFellBack = true;
-                            // Reset attempt counter so the fallback gets a fresh budget; total time
-                            // budget continues to count down.
-                            attempt = 0;
-                            backoffMs = 1000;
-                            continue;
-                        }
-                    }
-                    if (alreadyFellBack && primaryFatalError != null) {
-                        log.error("[Wiki] LLM unavailable (fatal on BOTH primary + fallback) for {}: primary rootCause={}: {} | fallback rootCause={}: {}",
-                                ctx, primaryRootInfo, primaryFatalError.getMessage(), rootInfo, t.getMessage());
-                        RuntimeException re = new RuntimeException(
-                                "LLM unavailable on both primary and fallback. Primary (rootCause="
-                                        + primaryRootInfo + "): " + primaryFatalError.getMessage()
-                                        + " | Fallback (rootCause=" + rootInfo + "): " + t.getMessage(),
-                                t);
-                        re.addSuppressed(primaryFatalError);
-                        throw re;
-                    }
-                    log.error("[Wiki] LLM unavailable (fatal) for {} after {} attempts on model={} (rootCause={}): {}",
-                            ctx, attempt, currentModelId, rootInfo, t.getMessage());
+                    log.error("[Wiki] LLM unavailable (fatal) for {} after {} attempts (rootCause={}): {}",
+                            ctx, attempt, rootInfo, t.getMessage());
                     throw new RuntimeException("LLM unavailable (rootCause=" + rootInfo + "): " + t.getMessage(), t);
                 }
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
@@ -1772,133 +1610,6 @@ public class WikiProcessingService {
                 }
                 backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
             }
-        }
-    }
-
-    private void recordProviderFailure(Long modelId) {
-        if (providerHealthTracker == null || modelId == null) return;
-        try {
-            ModelConfigEntity m = modelConfigService.getModel(modelId);
-            if (m != null && m.getProvider() != null) {
-                providerHealthTracker.recordFailure(m.getProvider());
-            }
-        } catch (Exception ignored) {}
-    }
-
-    private void recordProviderSuccess(Long modelId) {
-        if (providerHealthTracker == null || modelId == null) return;
-        try {
-            ModelConfigEntity m = modelConfigService.getModel(modelId);
-            if (m != null && m.getProvider() != null) {
-                providerHealthTracker.recordSuccess(m.getProvider());
-            }
-        } catch (Exception ignored) {}
-    }
-
-    /** Pair of modelId + built ChatModel — null modelId means we used the system default. */
-    private record ResolvedChatModel(Long modelId, ChatModel chatModel) {}
-
-    private ResolvedChatModel resolveChatModel(Long kbId, vip.mate.wiki.job.WikiJobStep step) {
-        if (modelRoutingService != null && kbId != null && step != null) {
-            try {
-                Long modelId = modelRoutingService.selectModelId(kbId, "heavy_ingest", step);
-                ModelConfigEntity model = modelConfigService.getModel(modelId);
-                if (model != null) {
-                    return new ResolvedChatModel(modelId,
-                            agentGraphBuilder.buildRuntimeChatModel(model, WIKI_NO_RETRY));
-                }
-            } catch (Exception e) {
-                log.warn("[Wiki] Model routing failed for kbId={} step={}, falling back to default: {}",
-                        kbId, step, e.getMessage());
-            }
-        }
-        ModelConfigEntity defaultModel = modelConfigService.getDefaultModel();
-        Long id = defaultModel == null ? null : defaultModel.getId();
-        return new ResolvedChatModel(id, buildChatModel());
-    }
-
-    /**
-     * Pick the next enabled chat model whose provider differs from the failed
-     * one, so we cycle to a fresh credential / billing account rather than
-     * retrying a wedged one. Returns null when no alternative exists.
-     *
-     * <p>Provider order is deterministic — driven by
-     * {@code mate_model_provider.fallback_priority} (asc, lowest first) when
-     * {@link #modelProviderService} is wired. Falls back to
-     * {@code listEnabledModels} in DB order only when the provider service
-     * isn't available (older test harnesses), so behavior is at-least
-     * stable, never random.
-     *
-     * <p>Skips providers currently in cooldown ({@link
-     * vip.mate.llm.failover.ProviderHealthTracker}) so a flapping provider
-     * doesn't keep getting tried while we wait for it to recover.
-     */
-    private ResolvedChatModel pickFallbackChatModel(Long failedModelId) {
-        try {
-            String failedProviderId = null;
-            if (failedModelId != null) {
-                ModelConfigEntity failed = modelConfigService.getModel(failedModelId);
-                if (failed != null) failedProviderId = failed.getProvider();
-            }
-
-            if (modelProviderService != null) {
-                for (var provider : modelProviderService.listFallbackChain()) {
-                    String pid = provider.getProviderId();
-                    if (pid == null) continue;
-                    if (pid.equals(failedProviderId)) continue;
-                    if (providerHealthTracker != null && providerHealthTracker.isInCooldown(pid)) continue;
-                    ResolvedChatModel built = firstChatModelForProvider(pid, failedModelId);
-                    if (built != null) return built;
-                }
-            }
-
-            // Defensive fallback path — only triggers in tests / minimal
-            // environments without ModelProviderService wired. Mirrors the
-            // pre-PR behavior so legacy tests don't regress.
-            for (ModelConfigEntity candidate : modelConfigService.listEnabledModels()) {
-                if (!isUsableChatFallback(candidate, failedModelId, failedProviderId)) continue;
-                ResolvedChatModel built = tryBuild(candidate);
-                if (built != null) return built;
-            }
-        } catch (Exception e) {
-            log.debug("[Wiki] fallback lookup failed: {}", e.getMessage());
-        }
-        return null;
-    }
-
-    private ResolvedChatModel firstChatModelForProvider(String providerId, Long failedModelId) {
-        List<ModelConfigEntity> rows;
-        try {
-            rows = modelConfigService.listModelsByProvider(providerId);
-        } catch (Exception e) {
-            log.debug("[Wiki] listModelsByProvider({}) failed: {}", providerId, e.getMessage());
-            return null;
-        }
-        for (ModelConfigEntity candidate : rows) {
-            if (!isUsableChatFallback(candidate, failedModelId, null)) continue;
-            ResolvedChatModel built = tryBuild(candidate);
-            if (built != null) return built;
-        }
-        return null;
-    }
-
-    private static boolean isUsableChatFallback(ModelConfigEntity candidate, Long failedModelId, String failedProviderId) {
-        if (candidate == null || candidate.getId() == null) return false;
-        if (candidate.getId().equals(failedModelId)) return false;
-        if (!Boolean.TRUE.equals(candidate.getEnabled())) return false;
-        String mt = candidate.getModelType();
-        if (mt != null && !mt.isBlank() && !"chat".equalsIgnoreCase(mt)) return false;
-        if (failedProviderId != null && failedProviderId.equals(candidate.getProvider())) return false;
-        return true;
-    }
-
-    private ResolvedChatModel tryBuild(ModelConfigEntity candidate) {
-        try {
-            ChatModel built = agentGraphBuilder.buildRuntimeChatModel(candidate, WIKI_NO_RETRY);
-            return new ResolvedChatModel(candidate.getId(), built);
-        } catch (Exception e) {
-            log.debug("[Wiki] fallback candidate model={} unbuildable: {}", candidate.getId(), e.getMessage());
-            return null;
         }
     }
 
@@ -1945,16 +1656,6 @@ public class WikiProcessingService {
                         || m.contains("invalidapikey") || m.contains("invalid_request_error")
                         || m.contains("quota") || m.contains("insufficient_quota")
                         || m.contains("no default model") || m.contains("model configuration")) {
-                    return true;
-                }
-                // 中文 provider 余额耗尽：Zhipu 1113 / DashScope "Throttling" 中文返回 / 通用 "余额不足"。
-                // 原本走 "transient retry" 5 次 × 1s 退避，3 分钟才放弃；归类为 fatal 后立即触发 fallback hop。
-                // Chinese patterns checked against original msg (case-insensitive in Chinese is moot);
-                // codes / English snippets against the already-lowercased m.
-                if (msg.contains("余额不足") || msg.contains("请充值")
-                        || m.contains("\"code\":\"1113\"") || m.contains("\"code\":1113")
-                        || m.contains("accountbalancenotenough")
-                        || m.contains("balance not enough")) {
                     return true;
                 }
                 // 【Review Bug 3】prompt 结构性错误：重试也得同样结果，立即终止
@@ -2228,13 +1929,8 @@ public class WikiProcessingService {
      * @return {@code true} if the raw is gone; caller should stop work
      */
     private boolean isAborted(Long rawId, String ctx) {
-        WikiRawMaterialEntity raw = rawService.getById(rawId);
-        if (raw == null) {
+        if (rawService.getById(rawId) == null) {
             log.info("[Wiki] Aborting {} for raw={}: raw was deleted mid-processing", ctx, rawId);
-            return true;
-        }
-        if (Boolean.TRUE.equals(raw.getCancelRequested())) {
-            log.info("[Wiki] Aborting {} for raw={}: cancellation requested by user", ctx, rawId);
             return true;
         }
         return false;
@@ -2329,9 +2025,6 @@ public class WikiProcessingService {
                     if (embedded > 0) {
                         log.info("[Wiki] Lazy async embedding completed: kbId={}, embedded={}", fKbId, embedded);
                     }
-                } catch (vip.mate.wiki.job.WikiEmbeddingProviderFailingException ex) {
-                    log.warn("[Wiki] Lazy async embedding aborted by circuit-breaker for kbId={}: {}",
-                            fKbId, ex.getMessage());
                 } catch (Exception ex) {
                     log.warn("[Wiki] Lazy async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
                 }

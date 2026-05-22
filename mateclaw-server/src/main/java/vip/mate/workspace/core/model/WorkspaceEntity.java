@@ -39,6 +39,14 @@ public class WorkspaceEntity {
     @TableField(value = "settings_json", updateStrategy = FieldStrategy.ALWAYS)
     private String settingsJson;
 
+    /** Project 操作权限模式：limited / full（由 settings_json 派生，非持久化列） */
+    @TableField(exist = false)
+    private String projectPermissionMode;
+
+    /** Workspace Policy（由 settings_json 派生，非持久化列） */
+    @TableField(exist = false)
+    private WorkspacePolicy workspacePolicy;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

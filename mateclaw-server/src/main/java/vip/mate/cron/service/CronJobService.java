@@ -5,17 +5,14 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.javacrumbs.shedlock.core.LockConfiguration;
-import net.javacrumbs.shedlock.core.LockProvider;
-import net.javacrumbs.shedlock.core.SimpleLock;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.channel.model.ChannelEntity;
@@ -24,21 +21,23 @@ import vip.mate.cron.model.CronJobDTO;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
 import vip.mate.exception.MateClawException;
+import vip.mate.workspace.core.model.WorkspaceEntity;
+import vip.mate.workspace.core.service.WorkspaceService;
 
-import java.time.Duration;
-import java.time.Instant;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -56,13 +55,7 @@ public class CronJobService implements ApplicationRunner {
     private final CronJobMapper cronJobMapper;
     private final AgentMapper agentMapper;
     private final ChannelMapper channelMapper;
-    /**
-     * RFC-03 Lane G2: distributed lock for fire-time execution. ShedLock's
-     * JDBC provider is configured in {@link vip.mate.cron.config.ShedLockConfig}
-     * — see also {@link #LOCK_AT_MOST_FOR} / {@link #LOCK_AT_LEAST_FOR}
-     * tuning notes on {@link #register}.
-     */
-    private final LockProvider lockProvider;
+    private final WorkspaceService workspaceService;
     /**
      * RFC-063r §2.7.1: cron-tick execution moved to {@link CronJobRunner}
      * (separate bean) so the three-segment transactional model in
@@ -94,36 +87,6 @@ public class CronJobService implements ApplicationRunner {
     private final ExecutorService cronExecutor = Executors.newThreadPerTaskExecutor(
             Thread.ofVirtual().name("cron-execute-", 0).factory());
 
-    /**
-     * Issue #50: cap concurrent cron run executions so that hundreds of jobs
-     * firing at the same minute boundary cannot exhaust the JDBC pool. Each
-     * run holds 3-4 connections in sequence (three REQUIRES_NEW segments in
-     * {@link CronJobLifecycleService} plus {@link #updateRunTimes}); without
-     * a limit, virtual threads launch unboundedly and starve the channel
-     * monitor / web traffic. Tuned alongside Hikari maximum-pool-size — keep
-     * this value well below the pool size so non-cron paths still get
-     * connections.
-     */
-    private static final int MAX_CONCURRENT_CRON_RUNS = 8;
-    private final Semaphore cronConcurrencyLimiter = new Semaphore(MAX_CONCURRENT_CRON_RUNS);
-
-    /**
-     * RFC-03 Lane G2: ShedLock duration tuning.
-     *
-     * <p>{@code lockAtMostFor} is the safety net for a node that crashes
-     * mid-execution — after this window, any other node may take over the
-     * job's next tick. 30 minutes covers all observed cron run times
-     * (longest LLM-driven jobs in production sit around p99 ≈ 8 min).
-     *
-     * <p>{@code lockAtLeastFor} prevents thundering-herd when a fast job
-     * (e.g. trivial SQL query that completes in <1s) finishes before its
-     * own next tick — without it, the same node could fire twice per tick
-     * if its clock is slightly ahead. 30s gives every other node a chance
-     * to see the lock as held even for instant-finishing jobs.
-     */
-    private static final Duration LOCK_AT_MOST_FOR = Duration.ofMinutes(30);
-    private static final Duration LOCK_AT_LEAST_FOR = Duration.ofSeconds(30);
-
     // ==================== 初始化与销毁 ====================
 
     /**
@@ -138,10 +101,6 @@ public class CronJobService implements ApplicationRunner {
         scheduler.setThreadNamePrefix("cron-job-");
         scheduler.initialize();
 
-        // RFC-083: scheduler is process-global by design — load every enabled
-        // job across all workspaces. Do NOT filter by workspace_id here,
-        // otherwise jobs in workspace B stop firing whenever the active UI
-        // workspace is A. Workspace isolation lives in the CRUD paths only.
         List<CronJobEntity> enabledJobs = cronJobMapper.selectList(
                 new LambdaQueryWrapper<CronJobEntity>()
                         .eq(CronJobEntity::getEnabled, true));
@@ -163,12 +122,11 @@ public class CronJobService implements ApplicationRunner {
 
     // ==================== CRUD ====================
 
-    public List<CronJobDTO> list(Long workspaceId) {
+    public List<CronJobDTO> list() {
         // RFC-063r §2.14: use the variant that aggregates the most-recent
         // delivery_status from mate_cron_job_run so the list page can
         // render the "最近投递" badge without a per-row N+1 query.
-        // RFC-083: scoped to the caller's workspace.
-        List<CronJobEntity> entities = cronJobMapper.selectListWithDeliveryStatus(workspaceId);
+        List<CronJobEntity> entities = cronJobMapper.selectListWithDeliveryStatus();
 
         // 批量加载 Agent 名称
         List<Long> agentIds = entities.stream()
@@ -191,24 +149,25 @@ public class CronJobService implements ApplicationRunner {
                 channelMapper.selectBatchIds(channelIds).stream()
                         .collect(Collectors.toMap(ChannelEntity::getId, ChannelEntity::getName));
 
+        Map<Long, AgentWorkspaceContext> workspaceContextMap = buildAgentWorkspaceContextMap(agentIds);
+
         return entities.stream()
                 .map(e -> {
                     CronJobDTO dto = CronJobDTO.from(e, agentNameMap.getOrDefault(e.getAgentId(), "Unknown"));
                     if (e.getChannelId() != null) {
                         dto.setChannelName(channelNameMap.get(e.getChannelId()));
                     }
+                    enrichExecutionSummary(dto, e);
+                    enrichProjectContext(dto, e, workspaceContextMap.get(e.getAgentId()));
                     return dto;
                 })
                 .collect(Collectors.toList());
     }
 
-    public CronJobDTO getById(Long id, Long workspaceId) {
+    public CronJobDTO getById(Long id) {
         // RFC-063r §2.14: detail page shows lastDeliveryStatus too — same
         // subquery shape, restricted to one id.
-        // RFC-083: scoped to the caller's workspace; cross-workspace ID access
-        // surfaces as not_found (same shape as deleted) so workspace existence
-        // is not enumerable.
-        CronJobEntity entity = cronJobMapper.selectByIdWithDeliveryStatus(id, workspaceId);
+        CronJobEntity entity = cronJobMapper.selectByIdWithDeliveryStatus(id);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -218,114 +177,42 @@ public class CronJobService implements ApplicationRunner {
             ChannelEntity channel = channelMapper.selectById(entity.getChannelId());
             if (channel != null) dto.setChannelName(channel.getName());
         }
+        enrichExecutionSummary(dto, entity);
+        enrichProjectContext(dto, entity, safeResolveAgentWorkspaceContext(entity.getAgentId()));
         return dto;
     }
 
-    public CronJobDTO create(CronJobDTO dto, Long workspaceId) {
+    public CronJobDTO create(CronJobDTO dto) {
         validateDto(dto);
+        AgentWorkspaceContext workspaceContext = requireAgentWorkspaceContext(dto.getAgentId());
         // toSpringCron 校验表达式合法性，结果复用于后续 calcNextRunTime 和 register
         String springCron = toSpringCron(dto.getCronExpression());
 
-        // Issue #50: dedup by (workspace_id, agent_id, name). LLM-driven
-        // creators (CronJobTool) call this on every retry; without this guard
-        // a single instruction can produce N identical rows that all fire on
-        // the same tick. App-level check covers the common case; the unique
-        // index added in V67 protects against races (handled below).
-        CronJobEntity duplicate = findActiveDuplicate(workspaceId, dto.getAgentId(), dto.getName());
-        if (duplicate != null) {
-            log.info("[CronJob] create dedup hit: ws={} agent={} name={} → returning existing id={}",
-                    workspaceId, dto.getAgentId(), dto.getName(), duplicate.getId());
-            return getById(duplicate.getId(), workspaceId);
-        }
-
         CronJobEntity entity = dto.toEntity();
-        // RFC-083: workspace stamped server-side from X-Workspace-Id; never
-        // trust a client-supplied value (DTO.toEntity intentionally drops it).
-        entity.setWorkspaceId(workspaceId);
         if (entity.getTimezone() == null) entity.setTimezone("Asia/Shanghai");
         if (entity.getTaskType() == null) entity.setTaskType("text");
         if (entity.getEnabled() == null) entity.setEnabled(true);
+        entity.setWorkingDirectory(normalizeWorkingDirectory(dto.getWorkingDirectory(), workspaceContext.workspaceBasePath()));
 
         entity.setNextRunTime(calcNextRunTime(springCron, entity.getTimezone()));
-        try {
-            cronJobMapper.insert(entity);
-        } catch (DuplicateKeyException e) {
-            // Race: another concurrent create won. Re-fetch and return that one.
-            CronJobEntity raced = findActiveDuplicate(workspaceId, dto.getAgentId(), dto.getName());
-            if (raced != null) {
-                log.info("[CronJob] create race resolved: ws={} agent={} name={} → existing id={}",
-                        workspaceId, dto.getAgentId(), dto.getName(), raced.getId());
-                return getById(raced.getId(), workspaceId);
-            }
-            throw e;
-        }
+        cronJobMapper.insert(entity);
 
         if (Boolean.TRUE.equals(entity.getEnabled())) {
             // register() 内部会再次调用 toSpringCron，但表达式已校验过，不会抛异常
             register(entity);
         }
 
-        return getById(entity.getId(), workspaceId);
+        return getById(entity.getId());
     }
 
-    /**
-     * Issue #50: lookup existing active row for the dedup natural key.
-     * No {@code @TableLogic} on this entity — {@code deleted=0} must be
-     * filtered explicitly.
-     */
-    /**
-     * Issue #50 review #6 — excluding-self variant for the update path.
-     * Same lookup as {@link #findActiveDuplicate} but skips the row
-     * currently being edited so a no-op save (same name, same agent)
-     * doesn't false-positive as a duplicate.
-     */
-    private CronJobEntity findActiveDuplicateExcluding(Long workspaceId, Long agentId, String name, Long excludeId) {
-        if (workspaceId == null || agentId == null || name == null) return null;
-        LambdaQueryWrapper<CronJobEntity> q = new LambdaQueryWrapper<CronJobEntity>()
-                .eq(CronJobEntity::getWorkspaceId, workspaceId)
-                .eq(CronJobEntity::getAgentId, agentId)
-                .eq(CronJobEntity::getName, name)
-                .eq(CronJobEntity::getDeleted, 0);
-        if (excludeId != null) q.ne(CronJobEntity::getId, excludeId);
-        return cronJobMapper.selectOne(q);
-    }
-
-    private CronJobEntity findActiveDuplicate(Long workspaceId, Long agentId, String name) {
-        if (workspaceId == null || agentId == null || name == null) return null;
-        return cronJobMapper.selectOne(
-                new LambdaQueryWrapper<CronJobEntity>()
-                        .eq(CronJobEntity::getWorkspaceId, workspaceId)
-                        .eq(CronJobEntity::getAgentId, agentId)
-                        .eq(CronJobEntity::getName, name)
-                        .eq(CronJobEntity::getDeleted, 0)
-                        .last("LIMIT 1"));
-    }
-
-    public CronJobDTO update(Long id, CronJobDTO dto, Long workspaceId) {
-        // RFC-083: scoped lookup — cross-workspace updates 404 the same as
-        // deleted rows.
-        CronJobEntity existing = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
+    public CronJobDTO update(Long id, CronJobDTO dto) {
+        CronJobEntity existing = cronJobMapper.selectById(id);
         if (existing == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
         validateDto(dto);
+        AgentWorkspaceContext workspaceContext = requireAgentWorkspaceContext(dto.getAgentId());
         String springCron = toSpringCron(dto.getCronExpression());
-
-        // Issue #50 review #6: excluding-self duplicate check. Without
-        // this, renaming a job onto an existing (workspace, agent, name)
-        // tuple surfaces as a raw DataIntegrityViolationException from
-        // the V69 unique index instead of a controlled validation
-        // error. Try app-level check first; the catch below is the
-        // race-protection net.
-        Long newAgentId = dto.getAgentId();
-        String newName = dto.getName();
-        if (newName != null && newAgentId != null) {
-            CronJobEntity collision = findActiveDuplicateExcluding(workspaceId, newAgentId, newName, id);
-            if (collision != null) {
-                throw new MateClawException("err.cron.duplicate_name",
-                        "已存在同名定时任务: name=" + newName + ", agentId=" + newAgentId);
-            }
-        }
 
         existing.setName(dto.getName());
         existing.setCronExpression(dto.getCronExpression());
@@ -334,21 +221,13 @@ public class CronJobService implements ApplicationRunner {
         existing.setTaskType(dto.getTaskType());
         existing.setTriggerMessage(dto.getTriggerMessage());
         existing.setRequestBody(dto.getRequestBody());
+        existing.setWorkingDirectory(normalizeWorkingDirectory(dto.getWorkingDirectory(), workspaceContext.workspaceBasePath()));
         if (dto.getEnabled() != null) {
             existing.setEnabled(dto.getEnabled());
         }
         existing.setNextRunTime(calcNextRunTime(springCron, existing.getTimezone()));
 
-        try {
-            cronJobMapper.updateById(existing);
-        } catch (DuplicateKeyException e) {
-            // Race: another concurrent rename grabbed the natural key
-            // between our app-level check and the UPDATE. Translate to
-            // a clean validation error so the controller can 4xx instead
-            // of a 500 leaking the unique-key constraint name.
-            throw new MateClawException("err.cron.duplicate_name",
-                    "已存在同名定时任务: name=" + dto.getName() + ", agentId=" + dto.getAgentId());
-        }
+        cronJobMapper.updateById(existing);
 
         // 加锁保证 cancel + register 的原子性（ReentrantLock 支持同线程重入）
         schedulerLock.lock();
@@ -361,11 +240,11 @@ public class CronJobService implements ApplicationRunner {
             schedulerLock.unlock();
         }
 
-        return getById(id, workspaceId);
+        return getById(id);
     }
 
-    public void delete(Long id, Long workspaceId) {
-        CronJobEntity entity = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
+    public void delete(Long id) {
+        CronJobEntity entity = cronJobMapper.selectById(id);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -378,8 +257,8 @@ public class CronJobService implements ApplicationRunner {
         cronJobMapper.deleteById(id);
     }
 
-    public void toggle(Long id, Boolean enabled, Long workspaceId) {
-        CronJobEntity entity = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
+    public void toggle(Long id, Boolean enabled) {
+        CronJobEntity entity = cronJobMapper.selectById(id);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -406,8 +285,8 @@ public class CronJobService implements ApplicationRunner {
         }
     }
 
-    public void runNow(Long id, Long workspaceId) {
-        CronJobEntity entity = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
+    public void runNow(Long id) {
+        CronJobEntity entity = cronJobMapper.selectById(id);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -416,7 +295,13 @@ public class CronJobService implements ApplicationRunner {
         // CronJobLifecycleService work as advertised. "manual" trigger type
         // distinguishes this from scheduler-driven runs in mate_cron_job_run.
         // Run on the virtual-thread cronExecutor — never block the scheduler.
-        cronExecutor.submit(() -> runWithBackpressure(entity, "manual"));
+        cronExecutor.submit(() -> {
+            try {
+                cronJobRunner.executeJob(entity, "manual");
+            } finally {
+                updateRunTimes(entity.getId(), entity.getCronExpression(), entity.getTimezone());
+            }
+        });
     }
 
     // ==================== 调度器管理 ====================
@@ -433,15 +318,16 @@ public class CronJobService implements ApplicationRunner {
             // cronExecutor — the LLM call must NOT run on a scheduler
             // worker (4 concurrent long crons would otherwise saturate the
             // pool and the 5th would miss its tick).
-            //
-            // RFC-03 Lane G2: tickWithDistributedLock wraps the offload in
-            // a ShedLock acquire/release so a multi-instance deployment
-            // fires each tick exactly once. See javadoc on that method.
-            ScheduledFuture<?> future = scheduler.schedule(
-                    () -> tickWithDistributedLock(job), trigger);
+            ScheduledFuture<?> future = scheduler.schedule(() ->
+                    cronExecutor.submit(() -> {
+                        try {
+                            cronJobRunner.executeJob(job, "scheduled");
+                        } finally {
+                            updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
+                        }
+                    }), trigger);
             scheduledTasks.put(job.getId(), future);
-            log.info("[CronJob] Registered job {} ({}) ws={}, cron={}, tz={}",
-                    job.getId(), job.getName(), job.getWorkspaceId(),
+            log.info("[CronJob] Registered job {} ({}), cron={}, tz={}", job.getId(), job.getName(),
                     job.getCronExpression(), job.getTimezone());
         } finally {
             schedulerLock.unlock();
@@ -453,48 +339,6 @@ public class CronJobService implements ApplicationRunner {
         if (f != null) {
             f.cancel(false);
         }
-    }
-
-    /**
-     * RFC-03 Lane G2 — distributed-lock-guarded tick fire.
-     *
-     * <p>Called on the scheduler thread when {@link CronTrigger} fires.
-     * Tries to acquire a ShedLock entry keyed by {@code "cron-job-{jobId}"};
-     * if another node holds it, returns immediately (silent skip — siblings
-     * always see this for every tick, which is by design). On success,
-     * passes lock ownership into the virtual-thread executor so the work
-     * proceeds on {@link #cronExecutor} and the lock releases only after
-     * {@code runWithBackpressure} completes. {@link #LOCK_AT_MOST_FOR} is
-     * the safety net for a node that crashes mid-execution.
-     *
-     * <p>Package-private so unit tests can drive lock-acquisition outcomes
-     * without booting the full Spring context.
-     */
-    void tickWithDistributedLock(CronJobEntity job) {
-        Long jobId = job.getId();
-        Optional<SimpleLock> maybeLock = lockProvider.lock(new LockConfiguration(
-                Instant.now(),
-                "cron-job-" + jobId,
-                LOCK_AT_MOST_FOR,
-                LOCK_AT_LEAST_FOR));
-        if (maybeLock.isEmpty()) {
-            log.debug("[CronJob] {} skipped — another node holds the tick lock", jobId);
-            return;
-        }
-        SimpleLock lock = maybeLock.get();
-        cronExecutor.submit(() -> {
-            try {
-                runWithBackpressure(job, "scheduled");
-            } finally {
-                try {
-                    lock.unlock();
-                } catch (Exception unlockEx) {
-                    // Lock will expire after LOCK_AT_MOST_FOR anyway; log + continue
-                    // so a transient unlock failure doesn't taint the cron worker.
-                    log.warn("[CronJob] {} lock release failed: {}", jobId, unlockEx.getMessage());
-                }
-            }
-        });
     }
 
     // ==================== 任务执行 ====================
@@ -510,37 +354,6 @@ public class CronJobService implements ApplicationRunner {
     // Both register() and runNow() now delegate to cronJobRunner.executeJob;
     // see those methods above. The wrap below ensures next-run rolls forward
     // regardless of run outcome.
-
-    /**
-     * Issue #50: gate every run on {@link #cronConcurrencyLimiter} so that a
-     * minute-boundary stampede of N enabled jobs cannot fan out into N
-     * simultaneous JDBC connection acquisitions. Excess runs queue on the
-     * virtual thread (cheap) instead of competing for the pool.
-     *
-     * <p>The {@code updateRunTimes} write is intentionally inside the
-     * permit's hold so the next-run pointer advances under the same
-     * backpressure budget — otherwise a tail of bookkeeping writes could
-     * still pile up after the executor "finishes".
-     */
-    private void runWithBackpressure(CronJobEntity job, String triggerType) {
-        try {
-            cronConcurrencyLimiter.acquire();
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            log.warn("[CronJob] Interrupted while waiting to run job {} ({})",
-                    job.getId(), triggerType);
-            return;
-        }
-        try {
-            cronJobRunner.executeJob(job, triggerType);
-        } finally {
-            try {
-                updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
-            } finally {
-                cronConcurrencyLimiter.release();
-            }
-        }
-    }
 
     /**
      * 合并更新 lastRunTime 和 nextRunTime，单次 DB 写入替代原来的 4 次 selectById + updateById
@@ -658,13 +471,154 @@ public class CronJobService implements ApplicationRunner {
             throw new MateClawException("err.cron.expression_required", "Cron 表达式不能为空");
         }
         String taskType = dto.getTaskType() != null ? dto.getTaskType() : "text";
-        // 'text' (LLM chat) and 'reminder' (direct push) both rely on triggerMessage.
-        if (("text".equals(taskType) || "reminder".equals(taskType))
-                && (dto.getTriggerMessage() == null || dto.getTriggerMessage().isBlank())) {
+        if ("text".equals(taskType) && (dto.getTriggerMessage() == null || dto.getTriggerMessage().isBlank())) {
             throw new MateClawException("err.cron.trigger_required", "触发消息不能为空");
         }
         if ("agent".equals(taskType) && (dto.getRequestBody() == null || dto.getRequestBody().isBlank())) {
             throw new MateClawException("err.cron.target_required", "执行目标不能为空");
         }
+    }
+
+    private Map<Long, AgentWorkspaceContext> buildAgentWorkspaceContextMap(List<Long> agentIds) {
+        if (agentIds == null || agentIds.isEmpty()) {
+            return Map.of();
+        }
+        return agentIds.stream()
+                .distinct()
+                .map(this::safeResolveAgentWorkspaceContext)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(AgentWorkspaceContext::agentId, ctx -> ctx));
+    }
+
+    private AgentWorkspaceContext requireAgentWorkspaceContext(Long agentId) {
+        AgentEntity agent = agentId != null ? agentMapper.selectById(agentId) : null;
+        if (agent == null) {
+            throw new MateClawException("err.cron.agent_required", "关联 Agent 不存在: " + agentId);
+        }
+        Long workspaceId = agent.getWorkspaceId() != null ? agent.getWorkspaceId() : 1L;
+        WorkspaceEntity workspace = workspaceService.getById(workspaceId);
+        return buildAgentWorkspaceContext(agent, workspace);
+    }
+
+    private AgentWorkspaceContext safeResolveAgentWorkspaceContext(Long agentId) {
+        if (agentId == null) {
+            return null;
+        }
+        try {
+            return requireAgentWorkspaceContext(agentId);
+        } catch (Exception e) {
+            log.warn("[CronJob] Failed to resolve workspace context for agent {}: {}", agentId, e.getMessage());
+            return null;
+        }
+    }
+
+    private AgentWorkspaceContext buildAgentWorkspaceContext(AgentEntity agent, WorkspaceEntity workspace) {
+        Long workspaceId = agent.getWorkspaceId() != null ? agent.getWorkspaceId() : 1L;
+        String workspaceBasePath = workspace != null ? blankToNull(workspace.getBasePath()) : null;
+        String permissionMode = workspace != null
+                ? workspace.getProjectPermissionMode()
+                : WorkspaceService.PROJECT_PERMISSION_MODE_LIMITED;
+        return new AgentWorkspaceContext(
+                agent.getId(),
+                workspaceId,
+                workspace != null ? workspace.getName() : null,
+                workspaceBasePath,
+                permissionMode);
+    }
+
+    private void enrichExecutionSummary(CronJobDTO dto, CronJobEntity entity) {
+        if (dto == null || entity == null) {
+            return;
+        }
+        CronExecutionSummaryResolver.Summary summary = CronExecutionSummaryResolver.fromPersistedOrFallback(
+                entity.getLastRunStatus(),
+                entity.getLastExecutionSummaryStatus(),
+                entity.getLastExecutionSummaryText(),
+                entity.getLastRunErrorMessage());
+        dto.setLastExecutionSummaryStatus(summary.status());
+        dto.setLastExecutionSummaryText(summary.text());
+    }
+
+    private void enrichProjectContext(CronJobDTO dto, CronJobEntity entity, AgentWorkspaceContext workspaceContext) {
+        if (dto == null || entity == null || workspaceContext == null) {
+            return;
+        }
+        dto.setWorkspaceName(workspaceContext.workspaceName());
+        dto.setWorkspaceBasePath(workspaceContext.workspaceBasePath());
+        String effectiveProjectPath = StringUtils.hasText(entity.getWorkingDirectory())
+                ? entity.getWorkingDirectory()
+                : workspaceContext.workspaceBasePath();
+        dto.setEffectiveProjectPath(effectiveProjectPath);
+        String projectRelativePath = resolveProjectRelativePath(workspaceContext.workspaceBasePath(), effectiveProjectPath);
+        dto.setProjectRelativePath(projectRelativePath);
+        dto.setUsingWorkspaceRoot(!StringUtils.hasText(projectRelativePath));
+        dto.setProjectPermissionMode(workspaceContext.projectPermissionMode());
+    }
+
+    private String normalizeWorkingDirectory(String rawWorkingDirectory, String workspaceBasePath) {
+        String trimmed = rawWorkingDirectory != null ? rawWorkingDirectory.trim() : "";
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (!StringUtils.hasText(workspaceBasePath)) {
+            throw new MateClawException("当前工作区未配置活动目录");
+        }
+
+        Path root = Paths.get(workspaceBasePath).toAbsolutePath().normalize();
+        Path candidate = Paths.get(trimmed);
+        Path normalized = candidate.isAbsolute()
+                ? candidate.toAbsolutePath().normalize()
+                : root.resolve(candidate).normalize().toAbsolutePath();
+
+        if (!normalized.startsWith(root)) {
+            throw new MateClawException("目录必须位于当前工作区活动目录内");
+        }
+        if (!Files.exists(normalized)) {
+            throw new MateClawException("目录不存在: " + normalized);
+        }
+        if (!Files.isDirectory(normalized)) {
+            throw new MateClawException("目标不是目录: " + normalized);
+        }
+
+        try {
+            Path realRoot = Files.exists(root) ? root.toRealPath() : root;
+            Path realPath = normalized.toRealPath();
+            if (!realPath.startsWith(realRoot)) {
+                throw new MateClawException("目录通过符号链接越过了工作区边界");
+            }
+            return realPath.toString();
+        } catch (IOException e) {
+            log.debug("[CronJob] Failed to resolve working directory real path: {}", normalized, e);
+            return normalized.toString();
+        }
+    }
+
+    private String resolveProjectRelativePath(String workspaceBasePath, String effectiveProjectPath) {
+        if (!StringUtils.hasText(workspaceBasePath) || !StringUtils.hasText(effectiveProjectPath)) {
+            return null;
+        }
+        try {
+            Path root = Paths.get(workspaceBasePath).toAbsolutePath().normalize();
+            Path effective = Paths.get(effectiveProjectPath).toAbsolutePath().normalize();
+            if (root.equals(effective)) {
+                return null;
+            }
+            if (effective.startsWith(root)) {
+                return root.relativize(effective).toString();
+            }
+        } catch (Exception ignored) {
+        }
+        return effectiveProjectPath;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private record AgentWorkspaceContext(Long agentId,
+                                         Long workspaceId,
+                                         String workspaceName,
+                                         String workspaceBasePath,
+                                         String projectPermissionMode) {
     }
 }

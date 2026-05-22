@@ -3,6 +3,7 @@ package vip.mate.config;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -62,6 +63,48 @@ public class SecurityConfig {
                     // RFC-045: tool-generated files served via unguessable UUID + 10-min TTL
                     "/api/v1/files/generated/**"
                 ).permitAll()
+                // Global account administration.
+                .requestMatchers(HttpMethod.GET, "/api/v1/auth/users").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/users").hasRole("ADMIN")
+
+                // System-level and security-sensitive administration surfaces.
+                .requestMatchers(
+                    "/api/v1/admin/**",
+                    "/api/v1/security/**",
+                    "/api/v1/audit/**",
+                    "/api/v1/plugins/**",
+                    "/api/v1/mcp/**",
+                    "/api/v1/acp/**",
+                    "/api/v1/llm/provider-pool/**",
+                    "/api/v1/oauth/**",
+                    "/api/v1/feature-flags/**"
+                ).hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/v1/settings").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/settings").hasRole("ADMIN")
+
+                // Model/provider administration. Read-only model summaries remain available
+                // to normal users because chat and agent pages need the active/default model.
+                .requestMatchers(HttpMethod.GET, "/api/v1/models/catalog").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/models/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/models/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/models/**").hasRole("ADMIN")
+
+                // Tool and skill mutation/configuration are admin-only; read-only lists stay
+                // available so normal users can use published agents and skills.
+                .requestMatchers(HttpMethod.POST, "/api/v1/tools/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/tools/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/tools/**").hasRole("ADMIN")
+                .requestMatchers(
+                    "/api/v1/skills/install/**",
+                    "/api/v1/skills/*/secrets/**"
+                ).hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/skills").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/skills/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/skills/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/skills/*/rescan").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/skills/runtime/refresh").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/skills/synthesize-from-conversation").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/skills/*/export-workspace").hasRole("ADMIN")
                 // 所有其他 API 接口需要认证
                 .requestMatchers("/api/**").authenticated()
                 // 非 API 请求（前端路由、静态资源、Swagger、H2 Console 等）全部放行

@@ -28,10 +28,6 @@
 
 ---
 
-> **Other personal AI agents are built for one person. MateClaw is the one your IT department can actually sign off on.**
->
-> Multi-user workspaces. Approval-gated sensitive actions. Full audit trail. Spring Boot Actuator health monitoring. Per-channel error isolation so one chat platform's outage doesn't take down the rest. One JAR on your own machine, zero data egress.
-
 Most AI tools die when their vendor has a bad day. Most forget you the moment the tab closes. Most give you a chatbox and call it a product.
 
 **MateClaw is the whole widget.** One deployment. Reasoning, knowledge, memory, tools, channels — built together, not bolted on. And when your primary model goes down, the next one picks up mid-sentence.
@@ -60,10 +56,10 @@ This is the difference between a warehouse and a library.
 
 | Surface | What it is |
 |---|---|
-| **Web Console** | Full admin — digital employees, models, skills, knowledge, security, cron, **runtime console** (see what every employee is doing, force-recycle in one click) |
+| **Web Console** | Full admin — agents, models, tools, skills, knowledge, security, cron |
 | **Desktop** | Electron app with a bundled JRE 21. Double-click, run. No Java install |
 | **Webchat Widget** | One `<script>` tag embed. Drop it on any site |
-| **IM Channels** | DingTalk · Feishu · WeChat Work · WeChat · Telegram · Discord · QQ · Slack |
+| **IM Channels** | DingTalk · Feishu · WeChat Work · Telegram · Discord · QQ |
 | **Plugin SDK** | Java module for third-party capability packs |
 
 Same brain. Same memory. Same tools. Different doors.
@@ -74,28 +70,22 @@ Same brain. Same memory. Same tools. Different doors.
 
 ## What's in the box
 
-### Digital employees, not chatbots
-You hire coworkers, not chat boxes. Each one has a **Role**, a **Goal**, a **Backstory**, a pixel-art avatar, and a color of their own — five career templates ship ready (Product Researcher · Customer Support · Knowledge Curator · Data Analyst · Executive Assistant). **ReAct** drives iterative reasoning, **Plan-and-Execute** decomposes complex multi-step work, employees can delegate to one another in parallel. Dynamic context pruning, smart truncation, stale-stream cleanup — the boring stuff that makes long conversations actually work.
+### Agent runtime
+**ReAct** for iterative reasoning. **Plan-and-Execute** for complex multi-step work. Dynamic context pruning, smart truncation, stale-stream cleanup — the boring stuff that makes long conversations actually work.
 
 ### Knowledge & memory
-- **LLM Wiki** — raw materials digest into linked pages with citations; the **hot cache** auto-injects into every employee's system prompt
+- **LLM Wiki** — raw materials digest into linked pages with citations
 - **Workspace memory** — `AGENTS.md`, `SOUL.md`, `PROFILE.md`, `MEMORY.md`, daily notes
-- **Memory lifecycle** — post-conversation extraction, scheduled consolidation, Dreaming workflows
+- **Memory lifecycle** — post-conversation extraction, scheduled consolidation, dreaming workflows
 
-### Skills · MCP · ACP — three ways to extend capability
-- **SKILL.md packages** — manifest + prompt + tool list + **LESSONS.md (gets smarter the more you use it)**. Eight starter templates plus a five-step creation wizard, with **Pre-flight checks** that tell you what's missing before install
-- **MCP** — stdio / SSE / Streamable HTTP, plug into any external tool server
-- **ACP** — bring top-tier coding agents like Claude Code and Codex in as employees, auto-bridged to skill cards with wrapper tools
-- **Tool Guard** — RBAC + approval flow + path protection. Capability needs boundaries
-
-### You see what every employee is doing
-**Admin Runtime Console** (`Settings → System → Runtime`) — who's running, what step they're on, how many tokens, one-click force-recycle when stuck. Streaming is staged honestly (thinking / tool / answer), per-event SSE IDs make reconnects safe, multi-employee delegation no longer fights itself, long tasks demand evidence-grounded answers.
+### Tools, skills, MCP
+Built-in tools for web search, files, memory, date/time. **MCP** over stdio / SSE / Streamable HTTP. **SKILL.md** packages from the ClawHub marketplace. A **Tool Guard** layer with RBAC, approval flows, and path protection — capability needs boundaries.
 
 ### Multimodal creation
-Text-to-speech · Speech-to-text · Image · Music · Video · 3D. First-class, not add-ons.
+Text-to-speech · Speech-to-text · Image · Music · Video. First-class, not add-ons.
 
 ### Enterprise-ready
-RBAC + JWT. **Personal Access Tokens** for headless scripts and CI. **HMAC-SHA-256 outbound webhook signing**. **Distributed Cron lock** so multi-instance deployments don't double-fire. Full audit trail. Flyway-managed schema that auto-heals on upgrade. One JAR to ship. MySQL in production, H2 for dev — nothing to change in your code.
+RBAC + JWT. Full audit trail. Flyway-managed schema that auto-heals on upgrade. One JAR to ship. MySQL in production, H2 for dev — nothing to change in your code.
 
 ---
 
@@ -115,15 +105,14 @@ This is the same shift databases went through around 2010 and cloud went through
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **Multi-vendor failover** | **Chain + health tracker + cooldown** | Swap providers via config | Orchestration w/ retry | Anthropic only | One model |
 | **Knowledge digestion** | **LLM Wiki + page-level citations** | Canvas + memory | Skills Hub + memory | — | Code index |
-| **Multi-user admin** | **RBAC + approval + audit + runtime console** | Config-file first | Single-user CLI | Enterprise tier | Teams plan |
-| **Capability extension** | **Skills (LESSONS) + MCP + ACP** | — | — | MCP | MCP |
-| **Surfaces** | Web admin + Desktop + Widget + SDK + 8 IM | 25+ chat channels | 15+ channels (CLI-led) | 3 IM preview | IDE only |
+| **Multi-user admin** | **RBAC + approval flow + audit** | Config-file first | Single-user CLI | Enterprise tier | Teams plan |
+| **Surfaces** | Web admin + Desktop + Widget + SDK + 6 IM | 25+ chat channels | 15+ channels (CLI-led) | 3 IM preview | IDE only |
 | **Stack** | **Java (Spring Boot)** | TypeScript | Python | TypeScript | Electron/TS |
 | **License / Price** | **Apache 2.0 · Free** | MIT · Free | MIT · Free | Proprietary · $20–200/mo | Proprietary · $0–200/mo |
 
 **OpenClaw and Hermes Agent are excellent personal AI platforms** — pick either if you're running one user on one laptop, building your own agent from CLI, and treating everything as config files to hand-tune. Both have bigger communities than MateClaw today.
 
-**MateClaw is the version built for teams.** RBAC per digital employee, per model, per tool. An approval flow that pauses risky actions for review. Full audit trail. The Admin Runtime Console gives one operator real-time visibility into 50 employees running across 14 vendors — stuck? force-recycle in one click. Spring Boot inside — drop-in for any Java shop already running production services.
+**MateClaw is the version built for teams.** RBAC per agent, per model, per tool. An approval flow that pauses risky actions for review. Full audit trail. A web admin dashboard where one operator manages 50 agents across 14 vendors. Spring Boot inside — drop-in for any Java shop already running production services.
 
 Same "whole widget" philosophy. Different center of gravity.
 
@@ -152,11 +141,97 @@ docker compose up -d          # http://localhost:18080
 
 ### Desktop
 
-Download from [GitHub Releases](https://github.com/matevip/mateclaw/releases). Bundles JRE 21. No Java install needed.
+Download from [GitHub Releases](https://github.com/matevip/mateclaw/releases). The default desktop package is now client-only: no bundled JRE, no bundled local backend. Packaged builds default to the hosted MateClaw service and can be pointed at local / custom nodes from the desktop settings page.
+
+### Local desktop packaging test
+
+This repository now includes an Electron test shell under `mateclaw-desktop/` for local desktop validation and packaging.
+
+```bash
+# 1) Start the backend first (local dev mode connects to http://127.0.0.1:18088 by default)
+cd mateclaw-server
+mvn spring-boot:run
+
+# 2) In a new terminal, install and run the desktop shell
+cd ../mateclaw-desktop
+pnpm install
+pnpm dev
+```
+
+To target the Vite dev server instead:
+
+```bash
+cd mateclaw-ui
+pnpm install && pnpm dev
+
+cd ../mateclaw-desktop
+pnpm dev:ui
+```
+
+To package a Windows desktop test build:
+
+```bash
+cd mateclaw-desktop
+pnpm dist
+```
+
+Output folder: `mateclaw-desktop/release/`
+
+### Upstream sync
+
+The official upstream remote has been configured as `https://github.com/matevip/mateclaw`.
+
+```bash
+git remote -v
+git fetch upstream main --depth=1
+git branch upstream-main upstream/main
+```
+
+To avoid upstream sync breaking local development, use the following local branch convention:
+
+- `dev-local`: day-to-day development branch, based on `upstream/main` with local features reapplied
+- `local-snapshot-20260513`: local safety snapshot for rollback
+- `upstream-main`: local reference branch for the upstream mainline
+
+Recommended daily workflow:
+
+```bash
+git checkout dev-local
+```
+
+When new bugfixes or features arrive from upstream, sync locally with:
+
+```bash
+git checkout dev-local
+git fetch upstream
+git merge upstream/main
+```
+
+If you prefer a linear history, you can use:
+
+```bash
+git checkout dev-local
+git fetch upstream
+git rebase upstream/main
+```
+
+Notes:
+
+- `dev-local` is already the safe branch that combines upstream latest code with local feature changes
+- this workflow does not push anything to GitHub automatically
+- if anything goes wrong, you can always switch back to the local snapshot:
+
+```bash
+git checkout local-snapshot-20260513
+```
+
+For the full local sync and branch workflow, see [docs/git-workflow.md](docs/git-workflow.md).
 
 ---
 
 ## Architecture
+
+- Desktop local coding boundary and bridge contract: [docs/local-agent-architecture.md](docs/local-agent-architecture.md)
 
 <p align="center">
   <img src="assets/architecture-biz-en.svg" alt="Business Architecture" width="800">
@@ -184,15 +259,14 @@ mateclaw/
 └── .env.example
 ```
 
-Desktop binaries ship via [GitHub Releases](https://github.com/matevip/mateclaw/releases) with a bundled JRE 21 — no Java install needed.
+Desktop binaries ship via [GitHub Releases](https://github.com/matevip/mateclaw/releases) as a client shell. They default to the hosted MateClaw service, and can be reconfigured to use local or self-hosted backends when needed.
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
 | Backend | Spring Boot 3.5 · Spring AI Alibaba 1.1 · MyBatis Plus · Flyway |
-| Digital Employee Runtime | StateGraph · ReAct + Plan-Execute · Role / Goal / Backstory · LESSONS self-evolution |
-| Capability Extension | SKILL.md packages · MCP (stdio / SSE / HTTP) · ACP bridge (Claude Code / Codex) |
+| Agent | StateGraph runtime · ReAct + Plan-Execute |
 | Database | H2 (dev) · MySQL 8.0+ (prod) |
 | Auth | Spring Security + JWT |
 | Frontend | Vue 3 · TypeScript · Vite · Element Plus · TailwindCSS 4 |
@@ -207,7 +281,7 @@ Full docs at **[claw.mate.vip/docs](https://claw.mate.vip/docs)** — setup, arc
 
 ## Roadmap
 
-Sharper multi-employee collaboration · Smarter model routing · Deeper multimodal understanding · Longer-lived memory · A richer ClawHub · More ACP upstream integrations.
+Sharper multi-agent collaboration · Smarter model routing · Deeper multimodal understanding · Longer-lived memory · A richer ClawHub.
 
 ## Contributing
 

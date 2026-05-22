@@ -13,13 +13,14 @@ import lombok.Data;
  * - file: 文件附件
  * - audio: 音频
  * - video: 视频
+ * - model3d: 3D 模型文件
  */
 @Data
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class MessageContentPart {
 
     /**
-     * text / thinking / image / file / audio / video
+     * text / thinking / image / file / audio / video / model3d
      */
     private String type;
 
@@ -48,6 +49,12 @@ public class MessageContentPart {
      * 发送侧据此调用平台富媒体 API。
      */
     private String mediaId;
+
+    /** Attachment context handling strategy. */
+    private String contextStrategy;
+
+    /** User- and model-visible guidance explaining how this attachment enters context. */
+    private String contextHint;
 
     // ==================== 工厂方法 ====================
 
@@ -94,17 +101,12 @@ public class MessageContentPart {
         return part;
     }
 
-    /**
-     * 3D model asset (.glb / .obj / .fbx). The frontend renders this with a
-     * &lt;model-viewer&gt; Web Component when contentType starts with
-     * {@code model/} (e.g. {@code model/gltf-binary} for glb).
-     */
     public static MessageContentPart model3d(String mediaId, String fileName) {
         MessageContentPart part = new MessageContentPart();
         part.setType("model3d");
         part.setMediaId(mediaId);
         part.setFileName(fileName);
-        part.setContentType("model/gltf-binary");
+        part.setContentType("model/*");
         return part;
     }
 

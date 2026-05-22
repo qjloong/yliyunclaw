@@ -11,7 +11,7 @@ public class CronJobRunEntity {
     private Long id;
     private Long cronJobId;
     private String conversationId;
-    /** running / completed / failed */
+    /** running / succeeded / failed */
     private String status;
     /** scheduled / manual */
     private String triggerType;
@@ -36,6 +36,12 @@ public class CronJobRunEntity {
 
     /** Delivery error reason — Hutool-truncated to 500 chars max. */
     private String deliveryError;
+
+    /** Derived execution summary for list/detail/dashboard badges. */
+    private String executionSummaryStatus;
+
+    /** Human-readable explanation of the latest execution outcome. */
+    private String executionSummaryText;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

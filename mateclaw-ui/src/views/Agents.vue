@@ -4,35 +4,16 @@
       <div class="mc-page-inner agents-page">
         <div class="mc-page-header">
           <div>
-            <div class="mc-page-kicker">{{ t('agents.kicker') }}</div>
+            <div class="mc-page-kicker">Agent Studio</div>
             <h1 class="mc-page-title">{{ t('agents.title') }}</h1>
             <p class="mc-page-desc">{{ t('agents.desc') }}</p>
           </div>
-          <div class="header-right">
-            <router-link
-              v-if="isAdminRole && backstageRunning > 0"
-              to="/backstage"
-              class="live-pill"
-              :class="{ 'live-pill--alert': backstageStuck > 0 }"
-              :title="t('backstage.attention')"
-            >
-              <span class="live-pill-dot"></span>
-              <span class="live-pill-text">
-                {{ backstageStuck > 0
-                  ? t('agents.live.needsAttention', { n: backstageStuck })
-                  : t('agents.live.atWork', { n: backstageRunning }) }}
-              </span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="9 18 15 12 9 6"/>
-              </svg>
-            </router-link>
-            <button class="btn-primary" @click="openCreateModal">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-              {{ t('agents.newAgent') }}
-            </button>
-          </div>
+          <button class="btn-primary" @click="openCreateModal">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            {{ t('agents.newAgent') }}
+          </button>
         </div>
 
         <div class="agents-toolbar mc-surface-card">
@@ -53,47 +34,41 @@
         </div>
 
         <!-- Agent card grid -->
-        <div class="agent-grid" v-if="filteredAgents.length > 0">
+        <div class="agent-grid" v-if="showActiveGrid">
           <div
             v-for="agent in filteredAgents"
             :key="agent.id"
             class="agent-card mc-surface-card"
             :class="{ 'agent-card--disabled': !agent.enabled }"
           >
-            <!--
-              Employee-card layout: avatar, name, one-line tagline, primary
-              chat action, and a hover-revealed overflow row. Anything that
-              isn't identity-or-action lives behind the overflow row to keep
-              the card readable at a glance.
-            -->
-            <div class="agent-card__top">
-              <span
-                class="agent-card__avatar"
-                :class="{ 'agent-card__avatar--off': !agent.enabled }"
-                :style="{ color: agentIconColor(agent.icon) }"
-              >
-                <SkillIcon :value="agent.icon" :size="40" :fallback="'🧑‍💼'" />
-              </span>
-              <div class="agent-card__identity">
-                <h3 class="agent-card__name">{{ agent.name }}</h3>
-                <p class="agent-card__tagline">
-                  {{ agentTagline(agent) || t('agents.messages.noTagline') }}
-                </p>
+            <div class="agent-card__header">
+              <AgentIcon class="agent-card__icon" :value="agent.icon" :size="34" fallback="🤖" :title="agent.name" />
+              <label class="toggle-switch toggle-switch--sm">
+                <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="agent-card__body">
+              <h3 class="agent-card__name">{{ agent.name }}</h3>
+              <p class="agent-card__desc">{{ agent.description || t('agents.messages.noDescription') }}</p>
+            </div>
+            <div class="agent-card__meta">
+              <span class="tag type-tag">{{ agent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
+              <span v-if="isCurrentDefault(agent)" class="tag agent-default-tag">{{ t('agents.status.currentDefault') }}</span>
+              <div class="tags-cell" v-if="agent.tags">
+                <span v-for="tag in parseTags(agent.tags)" :key="tag" class="tag tag-item">{{ tag }}</span>
               </div>
             </div>
-
-            <div class="agent-card__action-row">
-              <button class="agent-card__primary" @click="goToChat(agent)">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                </svg>
-                {{ t('agents.actions.chat') }}
+            <div class="agent-card__footer">
+              <button
+                class="agent-card__primary-action"
+                type="button"
+                :disabled="isCurrentDefault(agent)"
+                @click="setDefaultAgent(agent)"
+              >
+                {{ t('agents.actions.setDefault') }}
               </button>
-              <div class="agent-card__overflow">
-                <label class="toggle-switch toggle-switch--sm" :title="t('agents.fields.enabled')">
-                  <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
-                  <span class="toggle-slider"></span>
-                </label>
+              <div class="agent-card__actions">
                 <button class="action-btn" :title="t('agents.tabs.context')" @click="goToAgentContextFor(agent)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
@@ -117,11 +92,28 @@
         </div>
 
         <!-- Empty state -->
-        <div v-else class="empty-state mc-surface-card">
+        <div v-else-if="showEmptyState" class="empty-state mc-surface-card">
           <div class="empty-icon">🤖</div>
           <h3>{{ t('agents.emptyTitle') }}</h3>
           <p>{{ t('agents.emptyDesc') }}</p>
           <button class="btn-primary" @click="openCreateModal">{{ t('agents.newAgent') }}</button>
+        </div>
+
+        <div v-if="showDeletedSection" class="deleted-agents mc-surface-card">
+          <div class="deleted-agents__header">
+            <h3>{{ t('agents.deletedTitle') }}</h3>
+          </div>
+          <div class="deleted-agents__list">
+            <div v-for="agent in filteredDeletedAgents" :key="agent.id" class="deleted-agents__item">
+              <div class="deleted-agents__meta">
+                <AgentIcon :value="agent.icon" :size="20" fallback="🤖" :title="agent.name" />
+                <span class="deleted-agents__name">{{ agent.name }}</span>
+              </div>
+              <button class="btn-secondary" type="button" @click="restoreAgent(agent)">
+                {{ t('agents.actions.restore') }}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -148,15 +140,65 @@
               :class="{ applying: applyingTemplate }"
               @click="!applyingTemplate && applyTemplate(tpl.id)"
             >
-              <div class="template-icon" :style="{ color: agentIconColor(tpl.icon) }">
-                <SkillIcon :value="tpl.icon" :size="28" :fallback="'🧑‍💼'" />
+              <div class="template-icon">
+                <AgentIcon :value="tpl.icon" :size="28" fallback="🤖" :title="templateTitle(tpl)" />
               </div>
-              <div class="template-info">
-                <h4 class="template-name">{{ $i18n.locale === 'zh-CN' && tpl.nameZh ? tpl.nameZh : tpl.name }}</h4>
-                <p class="template-detail">{{ $i18n.locale === 'zh-CN' && tpl.descriptionZh ? tpl.descriptionZh : tpl.description }}</p>
-              </div>
-              <div class="template-tags">
-                <span v-for="tag in (tpl.tags || '').split(',').filter(Boolean)" :key="tag" class="tag-chip">{{ tag.trim() }}</span>
+              <div class="template-content">
+                <div class="template-header-row">
+                  <div class="template-info">
+                    <div class="template-name-row">
+                      <h4 class="template-name">{{ templateTitle(tpl) }}</h4>
+                      <span v-if="tpl.featured" class="template-badge">{{ t('agents.templates.featured') }}</span>
+                    </div>
+                    <p class="template-detail">{{ templateDescription(tpl) }}</p>
+                  </div>
+                </div>
+                <div class="template-tags">
+                  <span v-for="tag in templateTags(tpl)" :key="tag" class="tag-chip">{{ tag }}</span>
+                </div>
+                <div v-if="templateKnowledgeHealthLabel(tpl.id)" class="template-health" :class="{ ready: templateHealth(tpl.id)?.ready }">
+                  <span class="template-health-dot"></span>
+                  <span>{{ templateKnowledgeHealthLabel(tpl.id) }}</span>
+                </div>
+                <div v-if="templateHealth(tpl.id)" class="template-checks">
+                  {{ templateCaseCheckLabel(tpl.id) }}
+                </div>
+                <div v-if="templateHealth(tpl.id)" class="template-checks">
+                  {{ templateApplicationLabel(tpl.id) }}
+                </div>
+                <div v-if="templateNeedsDefaultFileSync(tpl.id) || templateCanStartMockTask(tpl)" class="template-actions-row">
+                  <button
+                    v-if="templateNeedsDefaultFileSync(tpl.id)"
+                    class="template-sync-btn"
+                    type="button"
+                    :disabled="applyingTemplate || syncingTemplateId === tpl.id"
+                    @click.stop="syncTemplateDefaultFiles(tpl.id)"
+                  >
+                    {{ syncingTemplateId === tpl.id ? t('common.loading') : t('agents.templates.syncDefaultFiles') }}
+                  </button>
+                  <button
+                    v-if="templateCanStartMockTask(tpl)"
+                    class="template-sync-btn"
+                    type="button"
+                    :disabled="applyingTemplate || syncingTemplateId === tpl.id"
+                    @click.stop="startTemplateMockTask(tpl)"
+                  >
+                    {{ t('agents.templates.startMockTask') }}
+                  </button>
+                </div>
+                <div v-if="templateCanStartMockTask(tpl)" class="template-mock-task-list" @click.stop>
+                  <button
+                    v-for="(task, taskIndex) in tpl.mockAcceptanceTasks"
+                    :key="String(task.id || taskIndex)"
+                    class="template-mock-task-btn"
+                    type="button"
+                    :disabled="applyingTemplate || syncingTemplateId === tpl.id"
+                    @click.stop="startTemplateMockTask(tpl, task, taskIndex)"
+                  >
+                    <span class="template-mock-task-index">{{ taskIndex + 1 }}</span>
+                    <span class="template-mock-task-title">{{ task.title || t('agents.templates.startMockTask') }}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -172,16 +214,9 @@
       </div>
     </div>
 
-    <!-- Shared icon picker — opened from the Basic tab's [Pick icon] button. -->
-    <SkillIconPicker
-      v-model:visible="iconPickerVisible"
-      :model-value="form.icon"
-      @apply="(v: string) => (form.icon = v)"
-    />
-
     <!-- Create/Edit Modal -->
     <div v-if="showModal" class="modal-overlay">
-      <div class="modal">
+      <div class="modal" :class="{ 'modal--wide': modalTab === 'home' || modalTab === 'skills' || modalTab === 'tools' || modalTab === 'providers' }">
         <div class="modal-header">
           <h2>{{ editingAgent ? t('agents.modal.editTitle') : t('agents.modal.newTitle') }}</h2>
           <button class="modal-close" @click="closeModal">
@@ -196,15 +231,18 @@
             <button class="modal-tab" :class="{ active: modalTab === 'basic' }" @click="modalTab = 'basic'">
               {{ t('agents.tabs.basic', 'Basic') }}
             </button>
-            <button v-if="editingAgent" class="modal-tab" :class="{ active: modalTab === 'skills' }" @click="modalTab = 'skills'">
+            <button class="modal-tab" :class="{ active: modalTab === 'home' }" @click="modalTab = 'home'">
+              {{ t('agents.tabs.home', 'Chat Home') }}
+            </button>
+            <button v-if="editingAgent && isAdmin" class="modal-tab" :class="{ active: modalTab === 'skills' }" @click="modalTab = 'skills'">
               {{ t('agents.tabs.skills', 'Skills') }}
               <span v-if="selectedSkillIds.length" class="tab-badge">{{ selectedSkillIds.length }}</span>
             </button>
-            <button v-if="editingAgent" class="modal-tab" :class="{ active: modalTab === 'tools' }" @click="modalTab = 'tools'">
+            <button v-if="editingAgent && isAdmin" class="modal-tab" :class="{ active: modalTab === 'tools' }" @click="modalTab = 'tools'">
               {{ t('agents.tabs.tools', 'Tools') }}
               <span v-if="selectedToolNames.length" class="tab-badge">{{ selectedToolNames.length }}</span>
             </button>
-            <button v-if="editingAgent" class="modal-tab" :class="{ active: modalTab === 'providers' }" @click="modalTab = 'providers'">
+            <button v-if="editingAgent && isAdmin" class="modal-tab" :class="{ active: modalTab === 'providers' }" @click="modalTab = 'providers'">
               {{ t('agents.tabs.providers', 'Providers') }}
               <span v-if="selectedProviderIds.length" class="tab-badge">{{ selectedProviderIds.length }}</span>
             </button>
@@ -218,13 +256,7 @@
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.icon') }}</label>
-              <button type="button" class="icon-picker-trigger" @click="iconPickerVisible = true">
-                <SkillIcon :value="form.icon" :size="24" :fallback="'🤖'" />
-                <span class="icon-picker-trigger__label">
-                  {{ form.icon || t('common.iconPicker.none') }}
-                </span>
-                <span class="icon-picker-trigger__action">{{ t('common.iconPicker.pickerOpen') }}</span>
-              </button>
+              <input v-model="form.icon" class="form-input" :placeholder="t('agents.placeholders.icon')" />
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.type') }}</label>
@@ -237,18 +269,6 @@
               <label class="form-label">{{ t('agents.fields.maxIterations') }}</label>
               <input v-model.number="form.maxIterations" type="number" min="1" max="50" class="form-input" />
             </div>
-            <!-- RFC-03 Lane G1: per-Agent model override. Empty value falls
-                 back to the global default in ModelConfigService.resolveModel. -->
-            <div class="form-group">
-              <label class="form-label">{{ t('agents.fields.modelName') }}</label>
-              <select v-model="form.modelName" class="form-input">
-                <option value="">{{ t('agents.fields.modelGlobalDefault') }}</option>
-                <option v-for="m in availableModels" :key="m.id" :value="m.modelName">
-                  {{ m.name }} ({{ m.provider }}/{{ m.modelName }})
-                </option>
-              </select>
-              <p class="form-hint">{{ t('agents.fields.modelHint') }}</p>
-            </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.defaultThinkingLevel') }}</label>
               <select v-model="form.defaultThinkingLevel" class="form-input">
@@ -260,43 +280,13 @@
                 <option value="max">{{ t('agents.thinkingLevels.max') }}</option>
               </select>
             </div>
-            <!--
-              Identity triad: role + goal + backstory map to H2 sections in
-              the stored systemPrompt. The card tagline is derived from
-              role + goal, so the Goal field shows a live preview to make
-              the constraint visible while typing.
-            -->
-            <div class="form-group full-width">
-              <label class="form-label">{{ t('agents.fields.role') }}</label>
-              <input v-model="profileForm.role" class="form-input" :placeholder="t('agents.placeholders.role')" />
-              <p class="form-hint">{{ t('agents.fields.roleHint') }}</p>
-            </div>
-            <div class="form-group full-width">
-              <label class="form-label">{{ t('agents.fields.goal') }}</label>
-              <input v-model="profileForm.goal" class="form-input" :placeholder="t('agents.placeholders.goal')" />
-              <p class="form-hint" :class="{ 'form-hint--warn': taglinePreviewWidth > taglineSoftLimit }">
-                <span class="form-hint__label">{{ t('agents.fields.taglinePreview') }}</span>
-                <span class="form-hint__value">{{ taglinePreview || t('agents.messages.noTagline') }}</span>
-                <span class="form-hint__counter">{{ taglinePreviewWidth }}/{{ taglineSoftLimit }}</span>
-              </p>
-            </div>
-            <div class="form-group full-width">
-              <label class="form-label">{{ t('agents.fields.backstory') }}</label>
-              <textarea v-model="profileForm.backstory" class="form-textarea" rows="3" :placeholder="t('agents.placeholders.backstory')"></textarea>
-              <p class="form-hint">{{ t('agents.fields.backstoryHint') }}</p>
-            </div>
             <div class="form-group full-width">
               <label class="form-label">{{ t('agents.fields.description') }}</label>
               <input v-model="form.description" class="form-input" :placeholder="t('agents.placeholders.description')" />
             </div>
             <div class="form-group full-width">
-              <details class="advanced-prompt">
-                <summary class="advanced-prompt__summary">
-                  {{ t('agents.fields.extraInstructions') }}
-                </summary>
-                <textarea v-model="profileForm.extra" class="form-textarea" rows="4" :placeholder="t('agents.placeholders.extraInstructions')"></textarea>
-                <p class="form-hint">{{ t('agents.fields.extraInstructionsHint') }}</p>
-              </details>
+              <label class="form-label">{{ t('agents.fields.systemPrompt') }}</label>
+              <textarea v-model="form.systemPrompt" class="form-textarea" rows="5" :placeholder="t('agents.placeholders.systemPrompt')"></textarea>
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.tags') }}</label>
@@ -309,136 +299,141 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+            <div class="form-group full-width">
+              <label class="form-label">{{ t('agents.fields.knowledgeBases') }}</label>
+              <p class="binding-hint">{{ t('agents.binding.knowledgeHint') }}</p>
+              <div v-if="availableKnowledgeBases.length === 0" class="binding-empty">{{ t('agents.binding.noKnowledgeBases') }}</div>
+              <el-select
+                v-else
+                v-model="selectedKnowledgeBaseIds"
+                class="knowledge-select"
+                multiple
+                filterable
+                clearable
+                popper-class="knowledge-select-popper"
+                :placeholder="t('agents.binding.knowledgePlaceholder')"
+                :no-match-text="t('agents.binding.noKnowledgeBaseMatch')"
+                :no-data-text="t('agents.binding.noKnowledgeBases')"
+              >
+                <template #label="{ label }">
+                  <span class="knowledge-selected-tag">{{ label }}</span>
+                </template>
+                <el-option
+                  v-for="kb in availableKnowledgeBases"
+                  :key="knowledgeBaseOptionId(kb)"
+                  :label="kb.name"
+                  :value="knowledgeBaseOptionId(kb)"
+                  class="knowledge-select-option"
+                >
+                  <div class="knowledge-option-row">
+                    <svg class="binding-icon knowledge-base-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                      <path d="M7 19V3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                      <path d="M10 7h6M10 11h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                    <div class="knowledge-option-info">
+                      <span class="binding-name">{{ kb.name }}</span>
+                      <span v-if="kb.description" class="binding-desc">{{ kb.description?.slice(0, 80) }}</span>
+                    </div>
+                  </div>
+                </el-option>
+              </el-select>
+            </div>
+          </div>
+
+          <div v-if="modalTab === 'home'" class="binding-tab binding-tab--home">
+            <div class="home-settings">
+              <div class="home-config-panel">
+                <p class="binding-hint home-config-panel__hint">{{ t('agents.home.hint') }}</p>
+                <div class="form-group full-width">
+                  <label class="form-label">{{ t('agents.home.subtitle') }}</label>
+                  <input v-model="form.homeSubtitle" class="form-input" :placeholder="t('agents.home.subtitlePlaceholder')" />
+                  <span class="form-hint">{{ t('agents.home.subtitleHint') }}</span>
+                </div>
+              </div>
+              <div class="home-quick-starts">
+                <div v-for="(item, idx) in homeQuickStarts" :key="idx" class="home-quick-start-item">
+                  <div class="home-quick-start-item__header">
+                    <div class="home-quick-start-item__title-block">
+                      <span class="home-quick-start-item__index">{{ t('agents.home.quickStartIndex', { index: idx + 1 }) }}</span>
+                      <span class="home-quick-start-item__desc">{{ t('agents.home.quickStartPrompt') }}</span>
+                    </div>
+                    <button class="provider-pref-btn danger" type="button" @click="clearHomeQuickStart(idx)">
+                      {{ t('agents.home.clear') }}
+                    </button>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">{{ t('agents.home.quickStartTitle') }}</label>
+                    <input v-model="item.title" class="form-input" :placeholder="t('agents.home.quickStartTitlePlaceholder')" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">{{ t('agents.home.quickStartPrompt') }}</label>
+                    <textarea v-model="item.prompt" class="form-textarea home-quick-start-item__textarea" rows="4" :placeholder="t('agents.home.quickStartPromptPlaceholder')"></textarea>
+                  </div>
+                </div>
+              </div>
+              <div class="home-actions">
+                <button class="btn-secondary" type="button" @click="clearHomeConfig">
+                  {{ t('agents.home.clearAll') }}
+                </button>
+              </div>
+            </div>
           </div>
 
           <!-- Skills Tab -->
           <div v-if="modalTab === 'skills'" class="binding-tab">
-            <div class="binding-intro">
-              <span class="binding-intro__kicker">{{ t('agents.binding.skillsKicker') }}</span>
-              <p class="binding-intro__tagline">{{ t('agents.binding.skillsTagline') }}</p>
-            </div>
             <p class="binding-hint">{{ t('agents.binding.skillsHint') }}</p>
             <div v-if="availableSkills.length === 0" class="binding-empty">{{ t('agents.binding.noSkills') }}</div>
-            <template v-else>
-              <div class="binding-search">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                </svg>
-                <input v-model="skillBindingSearch" :placeholder="t('agents.binding.searchSkills')" />
-              </div>
-              <div v-if="filteredAvailableSkills.length === 0" class="binding-empty binding-empty--compact">{{ t('agents.binding.noMatchingSkills') }}</div>
-              <div v-else class="binding-list">
-                <label
-                  v-for="skill in filteredAvailableSkills"
-                  :key="skill.id"
-                  class="binding-item"
-                  :class="{ selected: selectedSkillIds.includes(skill.id) }"
-                >
-                  <input type="checkbox" :value="skill.id" v-model="selectedSkillIds" class="binding-checkbox" />
-                  <span class="binding-icon"><SkillIcon :value="skill.icon" :size="20" :fallback="'🧩'" /></span>
-                  <div class="binding-info">
-                    <span class="binding-name">{{ skill.name }}</span>
-                    <span v-if="skill.description" class="binding-desc">{{ skill.description?.slice(0, 80) }}</span>
-                  </div>
-                  <span v-if="skill.version" class="binding-version">v{{ skill.version }}</span>
-                </label>
-              </div>
-            </template>
+            <div v-else class="binding-list">
+              <label
+                v-for="skill in availableSkills"
+                :key="skill.id"
+                class="binding-item"
+                :class="{ selected: selectedSkillIds.includes(skill.id) }"
+              >
+                <input type="checkbox" :value="skill.id" v-model="selectedSkillIds" class="binding-checkbox" />
+                <AgentIcon
+                  class="binding-icon"
+                  :value="skill.icon"
+                  :size="20"
+                  fallback="🧩"
+                  :title="skill.name"
+                />
+                <div class="binding-info">
+                  <span class="binding-name">{{ skill.name }}</span>
+                  <span v-if="skill.description" class="binding-desc">{{ skill.description?.slice(0, 80) }}</span>
+                </div>
+                <span v-if="skill.version" class="binding-version">v{{ skill.version }}</span>
+              </label>
+            </div>
           </div>
 
-          <!-- Tools Tab — RFC-090 §9.2 调整 B: Advanced bypass for atomic
-               tools not packaged as skills (e.g. datetime, delegate_agent).
-               Skill bindings already auto-expand allowed-tools (§14.2), so
-               the picker is collapsed by default to reduce noise. -->
+          <!-- Tools Tab -->
           <div v-if="modalTab === 'tools'" class="binding-tab">
-            <div class="binding-intro">
-              <span class="binding-intro__kicker">{{ t('agents.binding.toolsKicker') }}</span>
-              <p class="binding-intro__tagline">{{ t('agents.binding.toolsTagline') }}</p>
+            <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
+            <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
+            <div v-else class="binding-list">
+              <label
+                v-for="tool in availableTools"
+                :key="tool.name"
+                class="binding-item"
+                :class="{ selected: selectedToolNames.includes(tool.name) }"
+              >
+                <input type="checkbox" :value="tool.name" v-model="selectedToolNames" class="binding-checkbox" />
+                <AgentIcon
+                  class="binding-icon"
+                  :value="tool.icon"
+                  :size="20"
+                  fallback="🛠"
+                  :title="tool.displayName || tool.name"
+                />
+                <div class="binding-info">
+                  <span class="binding-name">{{ tool.displayName || tool.name }}</span>
+                  <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
+                </div>
+                <span class="binding-type-badge">{{ tool.toolType }}</span>
+              </label>
             </div>
-            <details class="advanced-tools" :open="selectedToolNames.length > 0 || advancedToolsOpen">
-              <summary class="advanced-tools-summary" @click.prevent="advancedToolsOpen = !advancedToolsOpen">
-                <span class="advanced-tools-title">
-                  {{ t('agents.binding.advancedToolsTitle') }}
-                  <span v-if="selectedToolNames.length > 0" class="advanced-tools-count">{{ selectedToolNames.length }}</span>
-                </span>
-                <span class="advanced-tools-chevron">{{ (advancedToolsOpen || selectedToolNames.length > 0) ? '▾' : '▸' }}</span>
-              </summary>
-              <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
-              <p class="binding-hint advanced-tools-note">{{ t('agents.binding.advancedToolsHint') }}</p>
-              <p class="binding-hint advanced-tools-note">{{ t('agents.binding.toolUnionHint') }}</p>
-              <div v-if="availableToolGroups.length > 0" class="binding-search">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                </svg>
-                <input v-model="toolBindingSearch" :placeholder="t('agents.binding.searchTools')" />
-              </div>
-              <!-- Render the empty state only when there is genuinely
-                   nothing to show. availableTools can be empty while
-                   availableToolGroups still contains a synthesized
-                   orphan group (saved bindings whose tools dropped out
-                   of the catalog) — that case must reach the list so
-                   the user can clean those orphans up. -->
-              <div v-if="availableToolGroups.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
-              <div v-else-if="filteredAvailableToolGroups.length === 0" class="binding-empty binding-empty--compact">{{ t('agents.binding.noMatchingTools') }}</div>
-              <div v-else class="binding-list">
-                <template v-for="group in filteredAvailableToolGroups" :key="group.groupId">
-                  <div class="binding-group-header">
-                    <span>{{ group.label }}</span>
-                    <!-- MCP groups: ticking is now record-only — enabled MCP
-                         tools auto-join the agent's effective allowlist
-                         (server is admin-enabled at the system level). Tell
-                         the user that here so they don't think unchecked
-                         MCP rows are disabled. To deny a specific MCP tool,
-                         users still have Security → Tool Guard. -->
-                    <span
-                      v-if="group.groupId && group.groupId.startsWith('mcp:')"
-                      class="binding-group-note"
-                      :title="t('agents.binding.mcpAutoIncludedTooltip')"
-                    >
-                      {{ t('agents.binding.mcpAutoIncludedBadge') }}
-                    </span>
-                  </div>
-                  <label
-                    v-for="tool in group.tools"
-                    :key="tool.rowId || `${group.groupId}#${tool.rawName}#${tool.name}`"
-                    class="binding-item"
-                    :class="{
-                      selected: tool._isSelected,
-                      'binding-item--stale': tool.stale,
-                      'binding-item--unavailable': !tool.available,
-                    }"
-                    :title="!tool.available
-                      ? t('agents.binding.toolUnavailableTooltip', { reason: tool.unavailableReason || '' })
-                      : (tool.stale ? t('agents.binding.toolStaleTooltip') : tool.name)"
-                  >
-                    <!-- Manual checkbox state. Two rows can share the
-                         same tool.name (hash-collision twin or
-                         duplicate-raw twin); v-model would auto-sync
-                         both, so we drive each row's checked flag from
-                         the pre-computed _isSelected derived in
-                         availableToolGroups, which considers whether
-                         this row's name is owned by a bindable twin. -->
-                    <input
-                      type="checkbox"
-                      class="binding-checkbox"
-                      :checked="tool._isSelected"
-                      :disabled="tool._isDisabled"
-                      @change="onToolToggle(tool.name, $event)"
-                    />
-                    <span class="binding-icon">
-                      <SkillIcon :value="tool.source === 'mcp' ? '🔌' : '🔧'" :size="20" :fallback="'🔧'" />
-                    </span>
-                    <div class="binding-info">
-                      <span class="binding-name">{{ tool.rawName || tool.name }}</span>
-                      <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
-                    </div>
-                    <span v-if="tool.stale" class="binding-stale-badge">{{ t('agents.binding.toolStaleBadge') }}</span>
-                    <span v-if="!tool.available" class="binding-unavailable-badge">{{ t('agents.binding.toolUnavailableBadge') }}</span>
-                    <span v-else class="binding-type-badge">{{ tool.source }}</span>
-                  </label>
-                </template>
-              </div>
-            </details>
           </div>
 
           <!-- Providers Tab (RFC-009 PR-3) -->
@@ -456,7 +451,7 @@
                 <span class="provider-pref-id">{{ pid }}</span>
                 <button class="provider-pref-btn" :disabled="idx === 0" @click="moveProvider(idx, -1)">↑</button>
                 <button class="provider-pref-btn" :disabled="idx === selectedProviderIds.length - 1" @click="moveProvider(idx, 1)">↓</button>
-                <button class="provider-pref-btn danger" @click="removeProvider(idx)">✕</button>
+                <button class="provider-pref-btn danger" @click="removeProvider(idx)">×</button>
               </div>
             </div>
             <div v-else class="binding-empty">{{ t('agents.binding.noProviderPreferences') }}</div>
@@ -485,218 +480,82 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
-import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, backstageApi } from '@/api/index'
-import type { Agent } from '@/types/index'
-import SkillIcon from '@/components/common/SkillIcon.vue'
-import SkillIconPicker from '@/components/common/SkillIconPicker.vue'
-import {
-  emptyProfile,
-  parsePrompt,
-  serializePrompt,
-  deriveTagline,
-  taglineVisualWidth,
-  TAGLINE_CJK_BUDGET,
-  type AgentPromptProfile,
-} from '@/utils/agentPromptProfile'
-import { agentIconColor } from '@/utils/agentIconColor'
-import { filterAgentBindingItems, filterAgentToolGroups } from '@/utils/agentBindingSearch'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, wikiApi } from '@/api/index'
+import AgentIcon from '@/components/common/AgentIcon.vue'
+import { isGlobalAdmin } from '@/utils/access'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+import type { Agent, AgentTemplate, TemplateAppliedAgentHealth, TemplateHealth } from '@/types/index'
 
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const workspaceStore = useWorkspaceStore()
 const agents = ref<Agent[]>([])
+const deletedAgents = ref<Agent[]>([])
 const searchText = ref('')
 const activeFilter = ref('all')
+const isAdmin = computed(() => isGlobalAdmin())
 const showModal = ref(false)
 const editingAgent = ref<Agent | null>(null)
-const modalTab = ref<'basic' | 'skills' | 'tools' | 'providers'>('basic')
-/** RFC-090 §9.2 调整 B — Tool picker is an Advanced bypass; collapsed by
- *  default but stays open as soon as the agent has any direct tool
- *  bindings, so existing users don't lose visibility on their picks. */
-const advancedToolsOpen = ref(false)
+const modalTab = ref<'basic' | 'home' | 'skills' | 'tools' | 'providers'>('basic')
 
 // Binding state
 const availableSkills = ref<any[]>([])
 const availableTools = ref<any[]>([])
-const skillBindingSearch = ref('')
-const toolBindingSearch = ref('')
-
-const filteredAvailableSkills = computed(() => filterAgentBindingItems(availableSkills.value, skillBindingSearch.value))
-
-/**
- * Group the flat /tools/available payload by source so the picker
- * renders one section per origin (built-in, MCP per server). Groups
- * are stable in insertion order — built-in first because the API
- * returns them first, then MCP groups in server discovery order.
- *
- * <p>For each row we also pre-compute {@code _isSelected} /
- * {@code _isDisabled} so the template doesn't have to derive them from
- * {@code tool.name} alone. With hash-collision and duplicate-raw rows
- * sharing the same {@code name} as the bindable twin, naively using
- * {@code selectedToolNames.includes(tool.name)} would mark both checked
- * and let the user uncheck the unavailable one — the unchecked twin
- * would silently mutate the bound name. The pre-computed flags decouple
- * each row's UI state from any sibling row that shares its prefixed
- * name.
- */
-const availableToolGroups = computed(() => {
-  const groups: Record<string, { groupId: string; label: string; tools: any[] }> = {}
-  const order: string[] = []
-
-  // Names that any available row claims. Unavailable rows whose name is
-  // also held by an available row are "shadowed" — they must never look
-  // selected and must never accept a click. Unavailable rows whose name
-  // ISN'T in this set are orphans (e.g. a saved binding whose tool got
-  // removed upstream); the user must still be able to uncheck them.
-  const bindableNames = new Set<string>()
-  // Names that appear anywhere in availableTools (with either flag). Any
-  // entry in selectedToolNames whose name is not in this set is a
-  // "catalog-orphan" — saved before the upstream catalog dropped it —
-  // and needs a synthesized row so the user can uncheck it.
-  const knownNames = new Set<string>()
-  for (const t of availableTools.value) {
-    knownNames.add(t.name)
-    if (t.available) bindableNames.add(t.name)
-  }
-
-  for (const t of availableTools.value) {
-    const key = t.groupId || (t.source === 'mcp' ? `mcp:${t.providerId}` : 'builtin')
-    if (!groups[key]) {
-      const label = t.group || (t.source === 'mcp' ? `MCP · ${t.providerName ?? ''}` : t.source || 'tools')
-      groups[key] = { groupId: key, label, tools: [] }
-      order.push(key)
-    }
-
-    const inSelection = selectedToolNames.value.includes(t.name)
-    const isOrphanUnavailable = !t.available && !bindableNames.has(t.name)
-    // selected: only the bindable row owns the name; orphan unavailable
-    // rows reflect their own selection state so the user can clean them up.
-    const _isSelected = (t.available || isOrphanUnavailable) && inSelection
-    // disabled: shadowed rows are hard-disabled (let the bindable twin
-    // own the click); orphan unavailable rows allow only "uncheck"
-    // (currently-selected → enabled; not selected → disabled).
-    const _isDisabled = !t.available && !(isOrphanUnavailable && inSelection)
-    groups[key].tools.push({ ...t, _isSelected, _isDisabled, _isOrphanUnavailable: isOrphanUnavailable })
-  }
-
-  // Catalog-orphan synthesis: any name in the existing binding that
-  // /tools/available no longer returns at all. The backend save path
-  // permits removing such names ("keeps" don't validate), but without a
-  // visible row the user has no way to trigger the removal. Render them
-  // in their own group; uncheck removes them from selectedToolNames and
-  // the synthesized row vanishes on the next computed pass (the name is
-  // no longer in selectedToolNames).
-  const orphanNames = selectedToolNames.value.filter((n) => !knownNames.has(n))
-  if (orphanNames.length > 0) {
-    const orphanGroupId = 'orphan'
-    groups[orphanGroupId] = {
-      groupId: orphanGroupId,
-      label: t('agents.binding.toolOrphanGroup'),
-      tools: orphanNames.map((n) => ({
-        rowId: `orphan#${n}`,
-        source: 'orphan',
-        providerId: null,
-        providerName: null,
-        name: n,
-        rawName: n,
-        description: t('agents.binding.toolOrphanDescription'),
-        group: t('agents.binding.toolOrphanGroup'),
-        groupId: orphanGroupId,
-        stale: false,
-        available: false,
-        unavailableReason: 'NOT_IN_CATALOG',
-        // Always selected (it is, by definition, in selectedToolNames)
-        // and always uncheckable so the user can remove it.
-        _isSelected: true,
-        _isDisabled: false,
-        _isOrphanUnavailable: true,
-      })),
-    }
-    order.push(orphanGroupId)
-  }
-  return order.map((k) => groups[k])
-})
-
-const filteredAvailableToolGroups = computed(() => filterAgentToolGroups(availableToolGroups.value, toolBindingSearch.value))
-
-/**
- * Manual checkbox handler — replaces v-model on the picker row so that
- * two rows sharing a tool name (collision/duplicate twins) don't drag
- * each other's selection state via Vue's v-model auto-sync.
- */
-function onToolToggle(toolName: string, event: Event) {
-  const target = event.target as HTMLInputElement
-  if (target.checked) {
-    if (!selectedToolNames.value.includes(toolName)) {
-      selectedToolNames.value.push(toolName)
-    }
-  } else {
-    selectedToolNames.value = selectedToolNames.value.filter((n) => n !== toolName)
-  }
-}
 const selectedSkillIds = ref<number[]>([])
 const selectedToolNames = ref<string[]>([])
+const availableKnowledgeBases = ref<any[]>([])
+const selectedKnowledgeBaseIds = ref<string[]>([])
+const homeQuickStarts = ref<Array<{ title: string; prompt: string }>>(createEmptyHomeQuickStarts())
 // RFC-009 PR-3: per-agent provider preference order
 const availableProviders = ref<{ id: string; name: string }[]>([])
 const selectedProviderIds = ref<string[]>([])
-// RFC-03 Lane G1: per-Agent model override picker — populated from the
-// global enabled-models list, blank value means "fall back to default".
-const availableModels = ref<Array<{ id: number; name: string; provider: string; modelName: string }>>([])
 
 // Template selector state
 const showTemplateSelector = ref(false)
-const templates = ref<any[]>([])
+const templates = ref<AgentTemplate[]>([])
+const templateHealthMap = ref<Record<string, TemplateHealth>>({})
 const applyingTemplate = ref(false)
+const syncingTemplateId = ref<string | null>(null)
 
-const filterTabs = [
-  { key: 'agents.tabs.all', value: 'all' },
-  { key: 'agents.tabs.react', value: 'react' },
-  { key: 'agents.tabs.planExecute', value: 'plan_execute' },
-  { key: 'agents.tabs.enabled', value: 'enabled' },
-  { key: 'agents.tabs.disabled', value: 'disabled' },
-]
+const filterTabs = computed(() => {
+  const tabs = [
+    { key: 'agents.tabs.all', value: 'all' },
+    { key: 'agents.tabs.react', value: 'react' },
+    { key: 'agents.tabs.planExecute', value: 'plan_execute' },
+    { key: 'agents.tabs.enabled', value: 'enabled' },
+    { key: 'agents.tabs.disabled', value: 'disabled' },
+  ]
+  if (isAdmin.value) {
+    tabs.push({ key: 'agents.tabs.deleted', value: 'deleted' })
+  }
+  return tabs
+})
 
 const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: string | null } => ({
   name: '',
   description: '',
   agentType: 'react',
   systemPrompt: '',
-  modelName: '', // RFC-03 G1 — empty means "use global default"
   maxIterations: 10,
-  // Empty so SkillIcon's fallback (🤖) shows instead of pinning a literal
-  // emoji into form.icon — otherwise the picker thinks the user picked
-  // the robot emoji explicitly and reopens on the Emoji tab.
-  icon: '',
+  icon: '🤖',
   tags: '',
   enabled: true,
   defaultThinkingLevel: null,
+  homeSubtitle: '',
+  homeQuickStartsJson: '',
 })
 
 const form = ref(defaultForm())
-const iconPickerVisible = ref(false)
-
-// Identity-triad fields displayed in the basic tab. Kept separate from
-// `form.systemPrompt` so the textarea state stays predictable while the
-// user types — we only flatten back to a single prompt at save time.
-const profileForm = ref<AgentPromptProfile>(emptyProfile())
-const taglineSoftLimit = TAGLINE_CJK_BUDGET
-
-const taglinePreview = computed(() => deriveTagline(profileForm.value, form.value.description))
-const taglinePreviewWidth = computed(() => taglineVisualWidth(taglinePreview.value))
-
-/** Tagline shown on each agent card — derived from the stored systemPrompt
- *  and (as a fallback) the agent's description. Pure function, safe to call
- *  in the template. */
-function agentTagline(agent: Agent): string {
-  const profile = parsePrompt(agent.systemPrompt)
-  return deriveTagline(profile, agent.description)
-}
+const currentDefaultAgentId = computed(() => workspaceStore.getDefaultAgentId())
 
 const filteredAgents = computed(() => {
+  if (activeFilter.value === 'deleted') {
+    return []
+  }
   let list = agents.value
   if (searchText.value) {
     const q = searchText.value.toLowerCase()
@@ -713,60 +572,120 @@ const filteredAgents = computed(() => {
   return list
 })
 
-// Live signal for the "see what's running" header pill — admin only.
-const isAdminRole = computed(() => (localStorage.getItem('role') || 'user') === 'admin')
-const backstageRunning = ref(0)
-const backstageStuck = ref(0)
-let backstagePollTimer: ReturnType<typeof setInterval> | null = null
-
-async function refreshBackstagePill() {
-  if (!isAdminRole.value) return
-  try {
-    const res: any = await backstageApi.snapshot()
-    const data = res?.data ?? res
-    backstageRunning.value = data?.summary?.running ?? 0
-    backstageStuck.value = data?.summary?.stuck ?? 0
-  } catch {
-    // Silent — stale value is preferable to a flapping number.
+const filteredDeletedAgents = computed(() => {
+  if (!isAdmin.value) return []
+  let list = deletedAgents.value
+  if (searchText.value) {
+    const q = searchText.value.toLowerCase()
+    list = list.filter(a =>
+      a.name.toLowerCase().includes(q) ||
+      a.description?.toLowerCase().includes(q) ||
+      a.tags?.toLowerCase().includes(q)
+    )
   }
-}
+  return list
+})
+
+const showDeletedOnly = computed(() => activeFilter.value === 'deleted')
+const showActiveGrid = computed(() => !showDeletedOnly.value && filteredAgents.value.length > 0)
+const showDeletedSection = computed(() => {
+  if (!filteredDeletedAgents.value.length) return false
+  return showDeletedOnly.value || activeFilter.value === 'all'
+})
+const showEmptyState = computed(() => !showActiveGrid.value && !showDeletedSection.value)
 
 onMounted(() => {
   loadAgents()
-  // RFC-03 G1: load models once for the per-Agent override dropdown.
-  // Failure is non-fatal — the dropdown just shows only "global default".
-  loadAvailableModels()
-  if (isAdminRole.value) {
-    refreshBackstagePill()
-    backstagePollTimer = setInterval(refreshBackstagePill, 10_000)
-  }
-})
-
-onBeforeUnmount(() => {
-  if (backstagePollTimer) clearInterval(backstagePollTimer)
 })
 
 async function loadAgents() {
   try {
     const res: any = await agentApi.list()
     agents.value = res.data || []
+    if (isAdmin.value) {
+      await loadDeletedAgents()
+    } else {
+      deletedAgents.value = []
+    }
+    const defaultAgentId = workspaceStore.getDefaultAgentId()
+    if (defaultAgentId && !agents.value.some(agent => String(agent.id) === defaultAgentId)) {
+      workspaceStore.setDefaultAgentId(workspaceStore.currentWorkspaceId, null)
+    }
   } catch {
+    deletedAgents.value = []
     ElMessage.error(t('agents.messages.loadFailed'))
   }
 }
 
-async function loadAvailableModels() {
+async function loadDeletedAgents() {
   try {
-    const res: any = await modelApi.listEnabled()
-    availableModels.value = (res.data || []).map((m: any) => ({
-      id: m.id,
-      name: m.name,
-      provider: m.provider,
-      modelName: m.modelName,
-    }))
+    const res: any = await agentApi.listDeleted()
+    deletedAgents.value = res.data || []
   } catch {
-    // Silent — the picker still works (empty list = only "default" option).
+    deletedAgents.value = []
   }
+}
+
+function isCurrentDefault(agent: Agent) {
+  return String(agent.id) === currentDefaultAgentId.value
+}
+
+function parseTags(tags: string): string[] {
+  return tags.split(',').map(s => s.trim()).filter(Boolean)
+}
+
+function createEmptyHomeQuickStarts() {
+  return Array.from({ length: 4 }, () => ({ title: '', prompt: '' }))
+}
+
+function parseHomeQuickStarts(raw?: string | null) {
+  if (!raw?.trim()) {
+    return createEmptyHomeQuickStarts()
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return createEmptyHomeQuickStarts()
+    }
+    const normalized = parsed.slice(0, 4).map((item: any) => ({
+      title: String(item?.title || '').trim(),
+      prompt: String(item?.prompt || item?.title || '').trim(),
+    }))
+    while (normalized.length < 4) {
+      normalized.push({ title: '', prompt: '' })
+    }
+    return normalized
+  } catch {
+    return createEmptyHomeQuickStarts()
+  }
+}
+
+function serializeHomeQuickStarts() {
+  const normalized = homeQuickStarts.value
+    .map(item => ({
+      title: item.title.trim(),
+      prompt: item.prompt.trim(),
+    }))
+    .filter(item => item.title || item.prompt)
+    .slice(0, 4)
+  return normalized.length ? JSON.stringify(normalized) : ''
+}
+
+function clearHomeQuickStart(index: number) {
+  homeQuickStarts.value[index] = { title: '', prompt: '' }
+}
+
+function clearHomeConfig() {
+  form.value.homeSubtitle = ''
+  form.value.homeQuickStartsJson = ''
+  homeQuickStarts.value = createEmptyHomeQuickStarts()
+}
+
+function formatTime(time?: string): string {
+  if (!time) return '-'
+  const d = new Date(time)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function openCreateModal() {
@@ -779,13 +698,13 @@ function openBlankCreateModal() {
   showTemplateSelector.value = false
   editingAgent.value = null
   form.value = defaultForm()
-  profileForm.value = emptyProfile()
   modalTab.value = 'basic'
-  skillBindingSearch.value = ''
-  toolBindingSearch.value = ''
   selectedSkillIds.value = []
   selectedToolNames.value = []
+  selectedKnowledgeBaseIds.value = []
+  homeQuickStarts.value = createEmptyHomeQuickStarts()
   selectedProviderIds.value = []
+  loadKnowledgeBases()
   showModal.value = true
 }
 
@@ -817,12 +736,106 @@ function moveProvider(idx: number, dir: -1 | 1) {
 
 async function loadTemplates() {
   try {
-    const res: any = await templateApi.list()
-    templates.value = res.data || []
+    const [templateRes, healthRes]: any[] = await Promise.all([
+      templateApi.list(),
+      templateApi.health(),
+    ])
+    templates.value = templateRes.data || []
+    const healthList = (healthRes.data || []) as TemplateHealth[]
+    templateHealthMap.value = healthList.reduce<Record<string, TemplateHealth>>((acc, item) => {
+      acc[item.templateId] = item
+      return acc
+    }, {})
   } catch {
     // Fallback: skip templates, open blank form
     openBlankCreateModal()
   }
+}
+
+function templateTitle(tpl: AgentTemplate): string {
+  return (locale.value === 'zh-CN' && tpl.nameZh ? tpl.nameZh : tpl.name) || tpl.name
+}
+
+function templateDescription(tpl: AgentTemplate): string {
+  return (locale.value === 'zh-CN' && tpl.descriptionZh ? tpl.descriptionZh : tpl.description) || ''
+}
+
+function templateTags(tpl: AgentTemplate): string[] {
+  return (tpl.tags || '')
+    .split(',')
+    .map(tag => tag.trim())
+    .filter(Boolean)
+}
+
+function templateHealth(templateId: string): TemplateHealth | undefined {
+  return templateHealthMap.value[templateId]
+}
+
+function templateKnowledgeHealthLabel(templateId: string): string {
+  const health = templateHealth(templateId)
+  if (!health) return t('agents.templates.healthUnknown')
+  if ((health.seededKnowledgeBaseCount || 0) === 0 && (health.requiredCount || 0) === 0) return ''
+  if ((health.seededKnowledgeBaseCount || 0) > 0) {
+    return t('agents.templates.defaultKnowledge', {
+      matched: health.matchedSeededKnowledgeBaseCount,
+      total: health.seededKnowledgeBaseCount,
+    })
+  }
+  if (health.ready) {
+    return t('agents.templates.healthReady', {
+      matched: health.matchedSeededKnowledgeBaseCount,
+      total: health.seededKnowledgeBaseCount,
+    })
+  }
+  return t('agents.templates.healthNeedsSetup', {
+    matched: health.matchedRequiredCount,
+    total: health.requiredCount,
+  })
+}
+
+function templateCaseCheckLabel(templateId: string): string {
+  const health = templateHealth(templateId)
+  if (!health) return ''
+  return t('agents.templates.caseChecks', {
+    matched: health.passedCheckCount || 0,
+    total: health.checkCount || 0,
+  })
+}
+
+function templateAppliedAgentEvidence(health: TemplateHealth): TemplateAppliedAgentHealth | undefined {
+  return health.appliedAgents?.find(item =>
+    item.expectedWorkspaceFileCount !== item.matchedWorkspaceFileCount || !item.promptFilesConfigured
+  ) || health.appliedAgents?.[0]
+}
+
+function templateApplicationLabel(templateId: string): string {
+  const health = templateHealth(templateId)
+  if (!health) return ''
+  if ((health.appliedAgentCount || 0) <= 0) {
+    return t('agents.templates.applicationMissing')
+  }
+  const sample = templateAppliedAgentEvidence(health)
+  const payload = {
+    matched: sample?.matchedWorkspaceFileCount || 0,
+    total: sample?.expectedWorkspaceFileCount || 0,
+    count: health.appliedAgentCount || 0,
+  }
+  if (health.applicationEvidenceReady) {
+    return t('agents.templates.applicationReady', {
+      ...payload,
+    })
+  }
+  return t('agents.templates.applicationNeedsSetup', payload)
+}
+
+function templateNeedsDefaultFileSync(templateId: string): boolean {
+  const health = templateHealth(templateId)
+  return Boolean(health && (health.appliedAgentCount || 0) > 0 && !health.applicationEvidenceReady)
+}
+
+function templateCanStartMockTask(tpl: AgentTemplate): boolean {
+  const health = templateHealth(tpl.id)
+  return Boolean(health && (health.appliedAgentCount || 0) > 0 && (tpl.mockAcceptanceTasks?.length || 0) > 0)
 }
 
 async function applyTemplate(id: string) {
@@ -831,33 +844,103 @@ async function applyTemplate(id: string) {
     await templateApi.apply(id)
     ElMessage.success(t('agents.templates.applied'))
     showTemplateSelector.value = false
-    await loadAgents()
-  } catch (e: any) {
-    ElMessage.error(e?.message || t('agents.messages.saveFailed'))
+    await Promise.all([loadAgents(), loadTemplates()])
+  } catch {
+    ElMessage.error(t('agents.messages.saveFailed'))
   } finally {
     applyingTemplate.value = false
   }
 }
 
+function buildTemplateMockDraft(tpl: AgentTemplate, task: Record<string, any>): string {
+  const expected = Array.isArray(task.expected) ? task.expected.join('\n- ') : ''
+  const title = task.title || tpl.nameZh || tpl.name
+  const input = task.input || ''
+  return [
+    `请按内置样例任务执行：${title}`,
+    '',
+    `任务输入：${input}`,
+    expected ? `\n验收要点：\n- ${expected}` : '',
+  ].join('\n')
+}
+
+function startTemplateMockTask(tpl: AgentTemplate, selectedTask?: Record<string, any>, selectedTaskIndex?: number) {
+  const health = templateHealth(tpl.id)
+  const agentId = health?.appliedAgents?.[0]?.agentId
+  const task = selectedTask || tpl.mockAcceptanceTasks?.[0]
+  if (!agentId || !task) {
+    return
+  }
+  const mockExpected = Array.isArray(task.expected) ? task.expected.join('\n- ') : ''
+  const taskIndex = String(selectedTaskIndex ?? tpl.mockAcceptanceTasks?.indexOf(task) ?? 0)
+  showTemplateSelector.value = false
+  const finalMockDraft = buildTemplateMockDraft(tpl, task)
+  router.push({
+    path: '/chat',
+    query: {
+      agentId: String(agentId),
+      draftMessage: finalMockDraft,
+      templateMock: '1',
+      templateId: tpl.id,
+      templateName: String(tpl.nameZh || tpl.name || ''),
+      mockTaskId: String(task.id || ''),
+      mockTaskIndex: taskIndex,
+      mockTaskTitle: String(task.title || tpl.nameZh || tpl.name || ''),
+      mockExpected,
+    },
+  })
+}
+
+async function syncTemplateDefaultFiles(id: string) {
+  syncingTemplateId.value = id
+  try {
+    const res: any = await templateApi.syncDefaultFiles(id)
+    const createdFileCount = Number(res?.data?.createdFileCount || 0)
+    if (createdFileCount > 0) {
+      ElMessage.success(t('agents.templates.syncSuccess', { count: createdFileCount }))
+    } else {
+      ElMessage.success(t('agents.templates.syncNoop'))
+    }
+    await loadTemplates()
+  } catch {
+    ElMessage.error(t('agents.templates.syncFailed'))
+  } finally {
+    syncingTemplateId.value = null
+  }
+}
+
+function setDefaultAgent(agent: Agent) {
+  if (!workspaceStore.currentWorkspaceId || isCurrentDefault(agent)) return
+  workspaceStore.setDefaultAgentId(workspaceStore.currentWorkspaceId, agent.id)
+  ElMessage.success(t('agents.messages.defaultSet', { name: agent.name }))
+}
+
 async function openEditModal(agent: Agent) {
   editingAgent.value = agent
+  const knowledgeBaseIds = parseKnowledgeBaseIds(agent.knowledgeBaseIdsJson)
   form.value = {
     name: agent.name,
     description: agent.description || '',
     agentType: agent.agentType,
     systemPrompt: agent.systemPrompt || '',
-    modelName: agent.modelName || '',
     maxIterations: agent.maxIterations,
-    icon: agent.icon || '',
+    icon: agent.icon || '🤖',
     tags: agent.tags || '',
     enabled: agent.enabled,
     defaultThinkingLevel: (agent as any).defaultThinkingLevel || null,
+    knowledgeBaseIdsJson: agent.knowledgeBaseIdsJson || '[]',
+    homeSubtitle: agent.homeSubtitle || '',
+    homeQuickStartsJson: agent.homeQuickStartsJson || '',
   }
-  profileForm.value = parsePrompt(agent.systemPrompt)
+  homeQuickStarts.value = parseHomeQuickStarts(agent.homeQuickStartsJson)
   modalTab.value = 'basic'
-  skillBindingSearch.value = ''
-  toolBindingSearch.value = ''
+  await loadKnowledgeBases()
+  selectedKnowledgeBaseIds.value = normalizeKnowledgeBaseIds(knowledgeBaseIds)
   showModal.value = true
+
+  if (!isAdmin.value) {
+    return
+  }
 
   // Load available skills/tools/providers and current bindings in parallel
   try {
@@ -865,10 +948,7 @@ async function openEditModal(agent: Agent) {
       // RFC-042: /skills is now paginated; binding dropdown only needs enabled skills,
       // so listEnabled() is both semantically correct and shape-stable (returns array).
       skillApi.listEnabled(),
-      // /tools/available aggregates built-in tools + every MCP-discovered
-      // tool grouped by server, with stale/available flags so the picker
-      // matches the runtime callback set exactly.
-      toolApi.listAvailable(),
+      toolApi.list(),
       modelApi.listProviders(),
       agentBindingApi.listSkills(agent.id),
       agentBindingApi.listTools(agent.id),
@@ -898,19 +978,17 @@ async function openEditModal(agent: Agent) {
 function closeModal() {
   showModal.value = false
   editingAgent.value = null
-  skillBindingSearch.value = ''
-  toolBindingSearch.value = ''
 }
 
 async function saveAgent() {
   try {
-    // Flatten the structured profile back to a single systemPrompt before
-    // sending to the backend — the schema is unchanged, only the editor
-    // exposes the H2 sections to the user.
-    const serialized = serializePrompt(profileForm.value)
-    const payload = { ...form.value, systemPrompt: serialized }
-
     let agentId: string | number
+    const payload = {
+      ...form.value,
+      knowledgeBaseIdsJson: JSON.stringify(selectedKnowledgeBaseIds.value.map(id => String(id)).filter(Boolean)),
+      homeSubtitle: form.value.homeSubtitle?.trim() || null,
+      homeQuickStartsJson: serializeHomeQuickStarts() || null,
+    }
     if (editingAgent.value) {
       await agentApi.update(editingAgent.value.id, payload)
       agentId = editingAgent.value.id
@@ -920,7 +998,7 @@ async function saveAgent() {
     }
 
     // Save bindings (only for existing agents or after create returns id)
-    if (agentId && editingAgent.value) {
+    if (agentId && editingAgent.value && isAdmin.value) {
       await Promise.all([
         agentBindingApi.setSkills(agentId, selectedSkillIds.value),
         agentBindingApi.setTools(agentId, selectedToolNames.value),
@@ -931,18 +1009,118 @@ async function saveAgent() {
     ElMessage.success(t('agents.messages.saveSuccess'))
     closeModal()
     await loadAgents()
-  } catch (e: any) {
-    ElMessage.error(e?.message || t('agents.messages.saveFailed'))
+  } catch {
+    ElMessage.error(t('agents.messages.saveFailed'))
   }
 }
 
+async function loadKnowledgeBases() {
+  try {
+    const res: any = await wikiApi.listKBs()
+    availableKnowledgeBases.value = res.data || []
+    if (selectedKnowledgeBaseIds.value.length > 0) {
+      selectedKnowledgeBaseIds.value = normalizeKnowledgeBaseIds(selectedKnowledgeBaseIds.value)
+    }
+  } catch {
+    availableKnowledgeBases.value = []
+  }
+}
+
+function knowledgeBaseOptionId(kb: any): string {
+  return String(kb?.id ?? '')
+}
+
+function parseKnowledgeBaseIds(raw?: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(item => String(item)).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+function normalizeKnowledgeBaseIds(ids: string[]): string[] {
+  const optionIds = availableKnowledgeBases.value
+    .map(knowledgeBaseOptionId)
+    .filter(Boolean)
+  const normalized = ids
+    .map(id => {
+      const current = String(id)
+      if (optionIds.includes(current)) return current
+      return findNearestKnowledgeBaseId(current, optionIds) || current
+    })
+    .filter(Boolean)
+  return Array.from(new Set(normalized))
+}
+
+function findNearestKnowledgeBaseId(value: string, optionIds: string[]): string {
+  if (!/^\d+$/.test(value)) return ''
+  const normalizedTarget = normalizeUnsignedIntegerString(value)
+  let best = ''
+  let bestDiff = ''
+  for (const optionId of optionIds) {
+    if (!/^\d+$/.test(optionId)) continue
+    const diff = diffUnsignedIntegerStrings(optionId, normalizedTarget)
+    if (compareUnsignedIntegerStrings(diff, '10000') > 0) continue
+    if (!best || compareUnsignedIntegerStrings(diff, bestDiff) < 0) {
+      best = optionId
+      bestDiff = diff
+    }
+  }
+  return best
+}
+
+function normalizeUnsignedIntegerString(value: string): string {
+  const normalized = String(value || '').replace(/^0+(?=\d)/, '')
+  return normalized || '0'
+}
+
+function compareUnsignedIntegerStrings(left: string, right: string): number {
+  const normalizedLeft = normalizeUnsignedIntegerString(left)
+  const normalizedRight = normalizeUnsignedIntegerString(right)
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length - normalizedRight.length
+  }
+  if (normalizedLeft === normalizedRight) return 0
+  return normalizedLeft > normalizedRight ? 1 : -1
+}
+
+function diffUnsignedIntegerStrings(left: string, right: string): string {
+  let minuend = normalizeUnsignedIntegerString(left)
+  let subtrahend = normalizeUnsignedIntegerString(right)
+  if (compareUnsignedIntegerStrings(minuend, subtrahend) < 0) {
+    ;[minuend, subtrahend] = [subtrahend, minuend]
+  }
+  const minuendDigits = minuend.split('').map(Number)
+  const subtrahendDigits = subtrahend.split('').map(Number)
+  const result: number[] = []
+  let borrow = 0
+  let i = minuendDigits.length - 1
+  let j = subtrahendDigits.length - 1
+  while (i >= 0) {
+    let current = minuendDigits[i] - borrow
+    const subtract = j >= 0 ? subtrahendDigits[j] : 0
+    if (current < subtract) {
+      current += 10
+      borrow = 1
+    } else {
+      borrow = 0
+    }
+    result.push(current - subtract)
+    i -= 1
+    j -= 1
+  }
+  return normalizeUnsignedIntegerString(result.reverse().join(''))
+}
+
 async function deleteAgent(agent: Agent) {
-  const ok = await mcConfirm({
-    title: t('agents.actions.delete'),
-    message: t('agents.messages.deleteConfirm'),
-    tone: 'danger',
-  })
-  if (!ok) return
+  try {
+    await ElMessageBox.confirm(t('agents.messages.deleteConfirm'), t('agents.actions.delete'), { type: 'warning' })
+  } catch {
+    return
+  }
   try {
     await agentApi.delete(agent.id)
     ElMessage.success(t('agents.messages.deleteSuccess'))
@@ -952,13 +1130,24 @@ async function deleteAgent(agent: Agent) {
   }
 }
 
-function goToAgentContextFor(agent: Agent) {
-  router.push({ path: '/settings/agent-context', query: { agentId: String(agent.id) } })
+async function restoreAgent(agent: Agent) {
+  try {
+    await agentApi.restore(agent.id)
+    ElMessage.success(t('agents.messages.restoreSuccess'))
+    await loadAgents()
+  } catch {
+    ElMessage.error(t('agents.messages.restoreFailed'))
+  }
 }
 
-/** Card primary action: open a chat with this agent. */
-function goToChat(agent: Agent) {
-  router.push({ path: '/chat', query: { agentId: String(agent.id) } })
+function goToAgentContext() {
+  const agentId = editingAgent.value?.id
+  closeModal()
+  router.push({ path: '/settings/agent-context', query: agentId ? { agentId: String(agentId) } : {} })
+}
+
+function goToAgentContextFor(agent: Agent) {
+  router.push({ path: '/settings/agent-context', query: { agentId: String(agent.id) } })
 }
 
 async function toggleAgent(agent: Agent) {
@@ -974,94 +1163,6 @@ async function toggleAgent(agent: Agent) {
 
 <style scoped>
 .agents-page { gap: 18px; }
-
-/* ===== Backstage live pill in page header ===== */
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.live-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px 8px 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid var(--mc-border-light);
-  color: var(--mc-text-secondary);
-  font-size: 12.5px;
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.18s ease;
-  backdrop-filter: blur(8px);
-}
-
-html.dark .live-pill {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.live-pill:hover {
-  border-color: var(--mc-border);
-  color: var(--mc-text-primary);
-  transform: translateY(-1px);
-}
-
-.live-pill-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: hsl(155, 55%, 50%);
-  position: relative;
-  animation: live-pill-pulse 2.4s ease-in-out infinite;
-}
-
-.live-pill-dot::before {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  background: hsla(155, 55%, 50%, 0.3);
-  animation: live-pill-halo 2.4s ease-in-out infinite;
-}
-
-@keyframes live-pill-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: 0.7; transform: scale(0.85); }
-}
-
-@keyframes live-pill-halo {
-  0%, 100% { opacity: 0; transform: scale(0.85); }
-  50%      { opacity: 1; transform: scale(1.6); }
-}
-
-.live-pill--alert {
-  background: linear-gradient(135deg, hsla(28, 90%, 60%, 0.12), hsla(20, 90%, 55%, 0.16));
-  border-color: hsla(20, 80%, 55%, 0.32);
-  color: hsl(20, 70%, 40%);
-}
-
-.live-pill--alert:hover {
-  background: linear-gradient(135deg, hsla(28, 90%, 60%, 0.2), hsla(20, 90%, 55%, 0.25));
-  color: hsl(20, 75%, 35%);
-}
-
-.live-pill--alert .live-pill-dot {
-  background: hsl(20, 80%, 55%);
-  animation-duration: 4s;
-}
-
-.live-pill--alert .live-pill-dot::before {
-  background: hsla(20, 80%, 55%, 0.32);
-  animation-duration: 4s;
-}
-
-.live-pill-text {
-  letter-spacing: -0.005em;
-  white-space: nowrap;
-}
 
 .btn-primary { display: flex; align-items: center; gap: 6px; padding: 10px 16px; background: linear-gradient(135deg, var(--mc-primary), var(--mc-primary-hover)); color: white; border: none; border-radius: 14px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.15s; box-shadow: var(--mc-shadow-soft); }
 .btn-primary:hover { background: var(--mc-primary-hover); }
@@ -1104,103 +1205,105 @@ html.dark .live-pill {
   opacity: 0.55;
 }
 
-/* Employee-card layout — identity row on top, primary action row below.
-   The card answers one question: "Who is this and how do I talk to them?" */
-.agent-card__top {
+.agent-card__header {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-width: 0;
+  justify-content: space-between;
 }
 
-.agent-card__avatar {
-  width: 56px;
-  height: 56px;
+.agent-card__icon {
+  font-size: 36px;
+  width: 52px;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--mc-primary-bg);
-  border-radius: 18px;
-  flex-shrink: 0;
-  font-size: 32px;
-  transition: filter 0.18s;
+  border-radius: 14px;
 }
 
-.agent-card__avatar--off {
-  filter: grayscale(0.85);
-}
-
-.agent-card__identity {
+.agent-card__body {
   flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  min-height: 0;
 }
 
 .agent-card__name {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--mc-text-primary);
-  margin: 0;
+  margin: 0 0 4px;
   letter-spacing: -0.02em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* The tagline IS the soul of the card. Keep it on one line so the eye reads
-   it as a single statement of identity — never wrap, never grow. */
-.agent-card__tagline {
-  font-size: 13.5px;
-  color: var(--mc-text-secondary);
+.agent-card__desc {
+  font-size: 13px;
+  color: var(--mc-text-tertiary);
   margin: 0;
-  line-height: 1.4;
-  white-space: nowrap;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  letter-spacing: -0.005em;
+  line-height: 1.5;
 }
 
-.agent-card__action-row {
+.agent-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.agent-card__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 12px;
+  gap: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--mc-border-light);
 }
 
-.agent-card__primary {
+.agent-card__primary-action {
+  min-width: 0;
+  flex: 1;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 8px 16px;
-  background: var(--mc-bg-sunken);
-  color: var(--mc-text-primary);
-  border: 1px solid var(--mc-border);
-  border-radius: 999px;
+  padding: 8px 12px;
+  border: 1px solid rgba(217, 119, 87, 0.28);
+  background: rgba(217, 119, 87, 0.08);
+  color: var(--mc-primary);
+  border-radius: 10px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
 }
-.agent-card__primary:hover {
+
+.agent-card__primary-action:hover {
+  background: rgba(217, 119, 87, 0.14);
   border-color: var(--mc-primary);
-  color: var(--mc-primary);
-  background: var(--mc-primary-bg);
 }
 
-.agent-card__overflow {
+.agent-card__primary-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.agent-default-tag {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.agent-card__actions {
   display: flex;
-  align-items: center;
   gap: 4px;
   opacity: 0;
-  transition: opacity 0.18s;
+  transition: opacity 0.15s;
 }
-.agent-card:hover .agent-card__overflow,
-.agent-card:focus-within .agent-card__overflow {
+
+.agent-card:hover .agent-card__actions {
   opacity: 1;
 }
 
@@ -1208,8 +1311,32 @@ html.dark .live-pill {
 .toggle-switch--sm .toggle-slider::before { width: 12px; height: 12px; }
 .toggle-switch--sm input:checked + .toggle-slider::before { transform: translateX(14px); }
 
+/* Context link card */
+.context-link-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  cursor: pointer;
+  border: 1px solid var(--mc-border);
+  border-radius: 12px;
+  transition: all 0.15s;
+}
+.context-link-card:hover {
+  border-color: var(--mc-primary);
+  background: var(--mc-primary-bg);
+}
+.context-link-card__icon { font-size: 28px; }
+.context-link-card__info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.context-link-card__title { font-size: 14px; font-weight: 600; color: var(--mc-text-primary); }
+.context-link-card__desc { font-size: 12px; color: var(--mc-text-tertiary); }
+.context-link-card__arrow { color: var(--mc-text-tertiary); flex-shrink: 0; }
+
 .tag { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.type-tag { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .tag-item { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
+.tags-cell { display: flex; gap: 4px; flex-wrap: wrap; }
+.time-label { font-size: 13px; color: var(--mc-text-tertiary); }
 .text-muted { color: var(--mc-text-tertiary); }
 
 .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer; flex-shrink: 0; }
@@ -1230,9 +1357,48 @@ html.dark .live-pill {
 .empty-state h3 { font-size: 18px; font-weight: 600; color: var(--mc-text-primary); margin: 0 0 8px; }
 .empty-state p { font-size: 14px; color: var(--mc-text-tertiary); margin: 0 0 24px; }
 
+.deleted-agents {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.deleted-agents__header h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  color: var(--mc-text-primary);
+}
+
+.deleted-agents__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.deleted-agents__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 10px;
+}
+
+.deleted-agents__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deleted-agents__name {
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+
 /* Modal */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
 .modal { background: var(--mc-bg-elevated); border: 1px solid var(--mc-border); border-radius: 16px; width: 100%; max-width: 600px; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
+.modal--wide { max-width: 760px; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--mc-border-light); }
 .modal-header h2 { font-size: 18px; font-weight: 600; color: var(--mc-text-primary); margin: 0; }
 .modal-close { width: 32px; height: 32px; border: none; background: none; cursor: pointer; color: var(--mc-text-tertiary); display: flex; align-items: center; justify-content: center; border-radius: 6px; }
@@ -1258,57 +1424,9 @@ html.dark .live-pill {
 
 /* Binding Tab */
 .binding-tab { min-height: 200px; }
+.binding-tab--home { display: flex; flex-direction: column; }
 .binding-hint { font-size: 13px; color: var(--mc-text-tertiary); margin: 0 0 16px; }
-
-/* Tools/Skills semantic intro — names what the user is about to bind so the
-   distinction between "atomic tool" and "trained workflow" is unmissable. */
-.binding-intro {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
-  margin: 0 0 14px;
-  background: var(--mc-bg-muted);
-  border-left: 3px solid var(--mc-primary);
-  border-radius: 8px;
-}
-.binding-intro__kicker {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--mc-primary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.binding-intro__tagline {
-  font-size: 13px;
-  color: var(--mc-text-secondary);
-  line-height: 1.5;
-  margin: 0;
-}
 .binding-empty { padding: 40px; text-align: center; color: var(--mc-text-tertiary); font-size: 14px; }
-.binding-empty--compact { padding: 24px 12px; }
-.binding-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--mc-border);
-  border-radius: 8px;
-  background: var(--mc-bg-sunken);
-  color: var(--mc-text-tertiary);
-}
-.binding-search svg { flex-shrink: 0; }
-.binding-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--mc-text-primary);
-  font-size: 13px;
-}
-.binding-search input::placeholder { color: var(--mc-text-tertiary); }
 .binding-list { display: flex; flex-direction: column; gap: 6px; }
 .binding-item {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
@@ -1358,76 +1476,161 @@ html.dark .live-pill {
 }
 .provider-pref-add-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); border-style: solid; }
 
-/* minmax(0, 1fr) prevents nowrap children (e.g. the tagline preview)
-   from forcing the grid track wider than the modal body. */
-.form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.form-group.full-width { grid-column: 1 / -1; }
-.form-label { font-size: 13px; font-weight: 500; color: var(--mc-text-secondary); }
-.form-input, .form-textarea { padding: 8px 12px; border: 1px solid var(--mc-border); border-radius: 8px; font-size: 14px; color: var(--mc-text-primary); outline: none; transition: border-color 0.15s; background: var(--mc-bg-sunken); }
-.form-input:focus, .form-textarea:focus { border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217,119,87,0.1); }
-.form-textarea { resize: vertical; font-family: inherit; }
+.knowledge-select {
+  width: 100%;
+}
 
-/* Inline guidance below an input. Used for the role/goal/backstory triad
-   so the constraint (one short line, etc.) is visible while typing. */
-.form-hint {
-  font-size: 12px;
-  color: var(--mc-text-tertiary);
-  line-height: 1.5;
-  margin: 2px 0 0;
+.knowledge-option-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  padding: 10px 12px;
+}
+
+.knowledge-option-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.knowledge-option-row .binding-icon {
+  margin-top: 2px;
+}
+
+:deep(.knowledge-select .el-select__wrapper) {
+  min-height: 44px;
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-radius: 12px;
+  background: var(--mc-bg-sunken);
+  box-shadow: 0 0 0 1px var(--mc-border) inset;
+  align-items: center;
+}
+
+:deep(.knowledge-select .el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--mc-primary) inset, 0 0 0 3px rgba(217,119,87,0.1);
+}
+
+:deep(.knowledge-select .el-select__selection) {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
   gap: 6px;
-  align-items: baseline;
-}
-.form-hint__label {
-  color: var(--mc-text-tertiary);
-}
-.form-hint__value {
-  color: var(--mc-text-secondary);
-  font-weight: 600;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.form-hint__counter {
-  font-variant-numeric: tabular-nums;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  color: var(--mc-text-tertiary);
-}
-.form-hint--warn .form-hint__value,
-.form-hint--warn .form-hint__counter {
-  color: hsl(20, 78%, 48%);
 }
 
-/* Collapsible advanced-instructions block — the everyday user fills the
-   triad and never opens this; power users can append free-form additions. */
-.advanced-prompt { border: 1px dashed var(--mc-border); border-radius: 10px; padding: 0; }
-.advanced-prompt[open] { padding: 12px 14px; }
-.advanced-prompt__summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 10px 14px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--mc-text-secondary);
-  user-select: none;
+:deep(.knowledge-select .el-select__tags) {
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
 }
-.advanced-prompt__summary::-webkit-details-marker { display: none; }
-.advanced-prompt__summary::before {
-  content: '▸';
-  display: inline-block;
-  margin-right: 6px;
+
+:deep(.knowledge-select .el-select__selected-item) {
+  max-width: 100%;
+}
+
+.knowledge-selected-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 87, 0.18);
+  background: rgba(217, 119, 87, 0.08);
+  color: var(--mc-primary);
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+}
+
+:deep(.knowledge-select .el-select__input-wrapper) {
+  flex: 1 0 96px;
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+}
+
+:deep(.knowledge-select .el-select__placeholder) {
   color: var(--mc-text-tertiary);
-  font-size: 11px;
-  transition: transform 0.15s;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
 }
-.advanced-prompt[open] > .advanced-prompt__summary { padding: 0 0 8px; border-bottom: 1px solid var(--mc-border-light); margin-bottom: 8px; }
-.advanced-prompt[open] > .advanced-prompt__summary::before { transform: rotate(90deg); }
+
+:deep(.knowledge-select .el-select__suffix) {
+  display: inline-flex;
+  align-items: center;
+}
+
+:deep(.knowledge-select .el-select__caret) {
+  align-self: center;
+}
+
+:deep(.knowledge-select-popper .el-select-dropdown__item) {
+  height: auto;
+  line-height: normal;
+  padding: 0;
+  white-space: normal;
+}
+
+:deep(.knowledge-select-popper .el-select-dropdown__item.is-hovering),
+:deep(.knowledge-select-popper .el-select-dropdown__item.hover) {
+  background: var(--mc-bg-elevated);
+}
+
+:deep(.knowledge-select-popper .el-select-dropdown__item.is-selected) {
+  color: inherit;
+  font-weight: inherit;
+}
+
+:deep(.knowledge-select-popper .el-select-dropdown__item .binding-name) {
+  line-height: 1.35;
+}
+
+:deep(.knowledge-select-popper .el-select-dropdown__item .binding-desc) {
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: unset;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full-width { grid-column: 1 / -1; }
+.form-label { font-size: 13px; font-weight: 500; color: var(--mc-text-secondary); }
+.form-input, .form-textarea { display: block; width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--mc-border); border-radius: 8px; font-size: 14px; line-height: 1.5; color: var(--mc-text-primary); outline: none; transition: border-color 0.15s; background: var(--mc-bg-sunken); }
+.form-input:focus, .form-textarea:focus { border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217,119,87,0.1); }
+.form-textarea { resize: vertical; min-height: 92px; font-family: inherit; }
+.form-hint { font-size: 12px; line-height: 1.5; color: var(--mc-text-tertiary); }
 .modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--mc-border-light); }
+
+.home-settings { display: flex; flex-direction: column; gap: 16px; }
+.home-config-panel { padding: 16px; border: 1px solid var(--mc-border-light); border-radius: 14px; background: linear-gradient(180deg, rgba(217,119,87,0.03), rgba(217,119,87,0.01)); }
+.home-config-panel__hint { margin-bottom: 14px; }
+.home-quick-starts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.home-quick-start-item { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--mc-border); border-radius: 14px; background: var(--mc-bg-elevated); box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04); }
+.home-quick-start-item__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-size: 13px; font-weight: 600; color: var(--mc-text-secondary); }
+.home-quick-start-item__title-block { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.home-quick-start-item__index { font-size: 14px; font-weight: 700; color: var(--mc-text-primary); }
+.home-quick-start-item__desc { font-size: 12px; font-weight: 500; line-height: 1.4; color: var(--mc-text-tertiary); }
+.home-quick-start-item__textarea { min-height: 120px; }
+.home-actions { display: flex; justify-content: flex-end; }
+
+@media (max-width: 760px) {
+  .modal--wide {
+    max-width: 100%;
+  }
+}
 
 @media (max-width: 900px) {
   .filter-bar {
@@ -1447,78 +1650,162 @@ html.dark .live-pill {
 .template-grid { display: flex; flex-direction: column; gap: 10px; }
 
 .template-card {
-  display: flex; align-items: flex-start; gap: 14px; padding: 16px; cursor: pointer;
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 14px; padding: 16px; cursor: pointer;
   border: 1px solid var(--mc-border); border-radius: 12px; transition: all 0.15s;
 }
 .template-card:hover { border-color: var(--mc-primary); background: var(--mc-primary-bg); }
 .template-card.applying { opacity: 0.5; pointer-events: none; }
 
-.template-icon { font-size: 28px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: var(--mc-bg-muted); border-radius: 10px; flex-shrink: 0; }
+.template-icon {
+  width: 52px; height: 52px; display: flex; align-items: center; justify-content: center;
+  background: var(--mc-bg-muted); border-radius: 14px; flex-shrink: 0;
+  color: var(--mc-primary);
+}
 
+.template-content { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.template-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .template-info { flex: 1; min-width: 0; }
+.template-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .template-name { font-size: 15px; font-weight: 600; color: var(--mc-text-primary); margin: 0 0 4px; }
 .template-detail { font-size: 13px; color: var(--mc-text-secondary); margin: 0; line-height: 1.5; }
+.template-badge {
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  background: rgba(217,119,87,0.12); color: var(--mc-primary); font-size: 11px; font-weight: 600;
+}
 
-.template-tags { display: flex; flex-wrap: wrap; gap: 4px; align-self: flex-start; margin-top: 2px; }
+.template-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag-chip { font-size: 11px; padding: 2px 8px; background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); border-radius: 999px; white-space: nowrap; }
-
-/* RFC-090 §9.2 调整 B — Advanced Tools picker (collapsed by default) */
-.advanced-tools { border: 1px dashed var(--mc-border); border-radius: 12px; padding: 0; }
-.advanced-tools[open] { padding: 12px 14px; }
-.advanced-tools-summary { list-style: none; cursor: pointer; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; user-select: none; color: var(--mc-text-secondary); font-size: 13px; font-weight: 600; }
-.advanced-tools-summary::-webkit-details-marker { display: none; }
-.advanced-tools[open] > .advanced-tools-summary { padding: 0 0 8px; border-bottom: 1px solid var(--mc-border-light); margin-bottom: 8px; }
-.advanced-tools-title { display: inline-flex; align-items: center; gap: 8px; }
-.advanced-tools-count { padding: 1px 8px; background: var(--mc-primary-bg); color: var(--mc-primary); border-radius: 999px; font-size: 11px; font-weight: 700; }
-.advanced-tools-chevron { color: var(--mc-text-tertiary); font-size: 12px; }
-.advanced-tools-note { font-style: italic; color: var(--mc-text-tertiary); margin-top: 4px; }
-
-/* MCP group header: inline "auto-available" tag next to the label so users
-   know enabled MCP tools work without being ticked. */
-.binding-group-header { display: flex; align-items: center; gap: 8px; }
-.binding-group-note {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--mc-primary) 12%, transparent);
-  color: var(--mc-primary);
-  cursor: help;
-}
-
-/* Icon picker trigger — replaces the old free-text icon input. Tile shape
- * mirrors SkillMarket's identity-icon-row so the create/edit affordance
- * is consistent across the app. */
-.icon-picker-trigger {
-  display: flex;
+.template-health {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--mc-border);
-  border-radius: 8px;
-  background: var(--mc-bg-sunken);
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s, background 0.15s;
-  width: 100%;
-}
-.icon-picker-trigger:hover { border-color: var(--mc-primary); background: var(--mc-bg-elevated); }
-.icon-picker-trigger:focus-visible { outline: none; border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217,119,87,0.15); }
-.icon-picker-trigger__label {
-  flex: 1; min-width: 0;
-  font-size: 13px;
-  color: var(--mc-text-primary);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.icon-picker-trigger__action {
-  flex-shrink: 0;
+  gap: 6px;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(230, 162, 60, 0.12);
+  color: #b7791f;
   font-size: 11px;
   font-weight: 600;
+}
+.template-health.ready {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+.template-health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.template-checks {
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+  line-height: 1.4;
+}
+.template-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.template-sync-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 87, 0.28);
+  background: rgba(217, 119, 87, 0.08);
   color: var(--mc-primary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.template-sync-btn:hover {
+  background: rgba(217, 119, 87, 0.14);
+  border-color: var(--mc-primary);
+}
+.template-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.template-mock-task-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px;
+  margin-top: 4px;
+}
+.template-mock-task-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--mc-border);
+  background: var(--mc-bg);
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+.template-mock-task-btn:hover {
+  color: var(--mc-primary);
+  border-color: rgba(217, 119, 87, 0.32);
+  background: rgba(217, 119, 87, 0.07);
+}
+.template-mock-task-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.template-mock-task-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  background: rgba(217, 119, 87, 0.1);
+  color: var(--mc-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.template-mock-task-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-body {
+    padding: 18px;
+  }
+
+  .modal-footer,
+  .modal-header {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .home-quick-starts {
+    grid-template-columns: 1fr;
+  }
+
+  .template-card {
+    grid-template-columns: 1fr;
+  }
+
+  .template-icon {
+    width: 44px;
+    height: 44px;
+  }
 }
 </style>

@@ -114,11 +114,7 @@
     </div>
 
     <!-- Embedding 模型（RFC Embedding UI） -->
-    <EmbeddingModelsSection />
-
-    <!-- Multimodal sidecar routing: text-only primary models can delegate
-         image/video understanding to a vision/video model configured here. -->
-    <MultimodalSidecarSection />
+    <EmbeddingModelsSection ref="embeddingModelsSectionRef" :providers="providers" />
 
     <div v-if="savedTip" class="save-tip">{{ savedTip }}</div>
 
@@ -176,29 +172,18 @@
       :enable-provider="enableProvider"
       @close="closeDrawer"
     />
-
-    <DeviceCodeDialog
-      :visible="deviceCodeDialog.visible"
-      :user-code="deviceCodeDialog.userCode"
-      :verification-url="deviceCodeDialog.verificationUrl"
-      :verification-url-complete="deviceCodeDialog.verificationUrlComplete"
-      :expires-at="deviceCodeDialog.expiresAt"
-      @close="closeDeviceCodeDialog"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import type { ProviderInfo, ProviderModelInfo } from '@/types'
 import { useProviders } from './useProviders'
 import ProviderCard from './ProviderCard.vue'
 import EmbeddingModelsSection from './EmbeddingModelsSection.vue'
-import MultimodalSidecarSection from './MultimodalSidecarSection.vue'
 // RFC-074 PR-1: defer modal JS until the user actually opens one — same
 // pattern as ChannelEditModal in commit 9300559b. Drops ~30KB from the
 // initial Settings/Models route chunk.
@@ -206,10 +191,10 @@ const ProviderConfigModal = defineAsyncComponent(() => import('./modals/Provider
 const ManageModelsModal = defineAsyncComponent(() => import('./modals/ManageModelsModal.vue'))
 // RFC-074 PR-2: drawer for browsing the catalog and opting into hidden built-ins.
 const AddProviderDrawer = defineAsyncComponent(() => import('./AddProviderDrawer.vue'))
-const DeviceCodeDialog = defineAsyncComponent(() => import('./modals/DeviceCodeDialog.vue'))
 
 const { t } = useI18n()
 const savedTip = ref('')
+const embeddingModelsSectionRef = ref<{ refresh: () => Promise<void> } | null>(null)
 // Skeleton gate. Driven by onMounted only — fine because /settings/models is
 // NOT a keepAlive route. If anyone re-adds keepAlive in router/index.ts,
 // switch to onActivated (or reset loading there) so cached re-entries don't
@@ -266,8 +251,6 @@ const {
   onIconError,
   handleOAuthLogin,
   handleOAuthRevoke,
-  deviceCodeDialog,
-  closeDeviceCodeDialog,
   // RFC-074 PR-2 — enablement / drawer
   catalog,
   drawerOpen,
@@ -317,13 +300,20 @@ onMounted(async () => {
 })
 
 async function onDisableProvider(provider: ProviderInfo) {
-  const ok = await mcConfirm({
-    title: t('common.confirm'),
-    message: t('settings.model.disableConfirm', { name: provider.name }),
-    confirmText: t('settings.model.disable'),
-    tone: 'danger',
-  })
-  if (!ok) return
+  // ElMessageBox throws on cancel — that's our cancel branch.
+  try {
+    await ElMessageBox.confirm(
+      t('settings.model.disableConfirm', { name: provider.name }),
+      t('common.confirm'),
+      {
+        type: 'warning',
+        confirmButtonText: t('settings.model.disable'),
+        cancelButtonText: t('common.cancel'),
+      },
+    )
+  } catch {
+    return
+  }
   await disableProvider(provider.id)
 }
 
@@ -347,11 +337,9 @@ function onCardOAuthLogin(provider: ProviderInfo) {
 
 async function onSaveProvider() {
   try {
-    const saved = await saveProvider()
-    // Issue #39: saveProvider() returns false when client-side validation
-    // (e.g. provider id format) blocks the request — it has already shown
-    // its own ElMessage.error, so don't follow up with a "saved" toast.
-    if (saved) showSavedTip(t('settings.model.providerSaved'))
+    await saveProvider()
+    await embeddingModelsSectionRef.value?.refresh()
+    showSavedTip(t('settings.model.providerSaved'))
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : t('settings.messages.saveFailed'))
   }
@@ -359,12 +347,14 @@ async function onSaveProvider() {
 
 async function onDeleteProvider(provider: ProviderInfo) {
   const deleted = await deleteProvider(provider)
+  if (deleted) await embeddingModelsSectionRef.value?.refresh()
   if (deleted) showSavedTip(t('settings.model.providerDeleted'))
 }
 
 async function onAddProviderModel() {
   try {
     await addProviderModel()
+    await embeddingModelsSectionRef.value?.refresh()
     showSavedTip(t('settings.model.modelAdded'))
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : t('settings.model.modelAddFailed'))

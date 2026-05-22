@@ -24,6 +24,7 @@
                 <th>{{ t('cronJobs.columns.cron') }}</th>
                 <th>{{ t('tokenUsage.date') }}</th>
                 <th>{{ t('cronJobs.columns.channel') }}</th>
+                <th>{{ t('cronJobs.columns.lastExecution') }}</th>
                 <th>{{ t('cronJobs.columns.lastDelivery') }}</th>
                 <th>{{ t('cronJobs.columns.enabled') }}</th>
                 <th>{{ t('cronJobs.columns.actions') }}</th>
@@ -38,6 +39,14 @@
                       <span class="agent-badge" :title="job.agentName || 'Unknown'">{{ job.agentName || 'Unknown' }}</span>
                       <span class="type-badge" :class="'type-' + job.taskType">
                         {{ t('cronJobs.taskTypes.' + job.taskType) }}
+                      </span>
+                    </div>
+                    <div class="job-context-row">
+                      <span class="project-badge" :title="projectTitle(job)">
+                        {{ projectLabel(job) }}
+                      </span>
+                      <span class="permission-badge" :class="job.projectPermissionMode === 'full' ? 'permission-badge--full' : 'permission-badge--limited'">
+                        {{ permissionLabel(job) }}
                       </span>
                     </div>
                   </div>
@@ -63,6 +72,12 @@
                     {{ job.channelName || ('#' + job.channelId) }}
                   </span>
                   <span v-else class="time-empty">—</span>
+                </td>
+                <td>
+                  <span class="execution-badge" :class="'execution-' + executionStatusKey(job)"
+                        :title="executionSummaryText(job)">
+                    {{ t('cronJobs.executionSummary.' + executionStatusKey(job)) }}
+                  </span>
                 </td>
                 <td>
                   <!-- RFC-063r §2.14: most-recent delivery status badge.
@@ -106,7 +121,7 @@
                 </td>
               </tr>
               <tr v-if="store.jobs.length === 0">
-                <td colspan="7" class="empty-row">
+                <td colspan="8" class="empty-row">
                   <div class="empty-state">
                     <span class="empty-icon">&#9201;</span>
                     <p>{{ t('cronJobs.noJobs') }}</p>
@@ -149,12 +164,36 @@
             <div class="detail-value">{{ detailJob.timezone || '-' }}</div>
           </div>
           <div class="detail-item">
+            <div class="detail-label">{{ t('cronJobs.columns.project') }}</div>
+            <div class="detail-value">{{ projectLabel(detailJob) }}</div>
+            <div class="detail-subvalue" v-if="detailJob.workspaceName || detailJob.effectiveProjectPath">
+              {{ detailJob.workspaceName || '-' }}<template v-if="detailJob.effectiveProjectPath"> · {{ detailJob.effectiveProjectPath }}</template>
+            </div>
+          </div>
+          <div class="detail-item">
+            <div class="detail-label">{{ t('cronJobs.columns.permission') }}</div>
+            <div class="detail-value">
+              <span class="permission-badge" :class="detailJob.projectPermissionMode === 'full' ? 'permission-badge--full' : 'permission-badge--limited'">
+                {{ permissionLabel(detailJob) }}
+              </span>
+            </div>
+          </div>
+          <div class="detail-item">
             <div class="detail-label">{{ t('cronJobs.columns.nextRun') }}</div>
             <div class="detail-value">{{ detailJob.nextRunTime ? formatTime(detailJob.nextRunTime) : '-' }}</div>
           </div>
           <div class="detail-item">
             <div class="detail-label">{{ t('cronJobs.columns.lastRun') }}</div>
             <div class="detail-value">{{ detailJob.lastRunTime ? formatTime(detailJob.lastRunTime) : '-' }}</div>
+          </div>
+          <div class="detail-item">
+            <div class="detail-label">{{ t('cronJobs.columns.lastExecution') }}</div>
+            <div class="detail-value">
+              <span class="execution-badge" :class="'execution-' + executionStatusKey(detailJob)">
+                {{ t('cronJobs.executionSummary.' + executionStatusKey(detailJob)) }}
+              </span>
+            </div>
+            <div class="detail-subvalue">{{ executionSummaryText(detailJob) }}</div>
           </div>
           <!-- RFC-063r post-deploy: channel binding visibility in detail page -->
           <div class="detail-item" v-if="detailJob.channelId">
@@ -178,10 +217,6 @@
           </div>
           <div class="detail-item detail-item-full" v-if="detailJob.taskType === 'text'">
             <div class="detail-label">{{ t('cronJobs.fields.triggerMessage') }}</div>
-            <div class="detail-value detail-block">{{ detailJob.triggerMessage || '-' }}</div>
-          </div>
-          <div class="detail-item detail-item-full" v-else-if="detailJob.taskType === 'reminder'">
-            <div class="detail-label">{{ t('cronJobs.fields.reminderText') }}</div>
             <div class="detail-value detail-block">{{ detailJob.triggerMessage || '-' }}</div>
           </div>
           <div class="detail-item detail-item-full" v-else>
@@ -218,15 +253,18 @@
           </div>
 
           <div class="form-group">
+            <label class="form-label">{{ t('cronJobs.fields.workingDirectory') }}</label>
+            <input v-model="form.workingDirectory" class="form-input mono"
+              :placeholder="t('cronJobs.fields.workingDirectoryPlaceholder')" />
+            <div class="form-hint">{{ t('cronJobs.fields.workingDirectoryHint') }}</div>
+          </div>
+
+          <div class="form-group">
             <label class="form-label">{{ t('cronJobs.fields.taskType') }}</label>
             <div class="radio-group">
               <label class="radio-option" :class="{ active: form.taskType === 'text' }">
                 <input type="radio" v-model="form.taskType" value="text" />
                 {{ t('cronJobs.taskTypes.text') }}
-              </label>
-              <label class="radio-option" :class="{ active: form.taskType === 'reminder' }">
-                <input type="radio" v-model="form.taskType" value="reminder" />
-                {{ t('cronJobs.taskTypes.reminder') }}
               </label>
               <label class="radio-option" :class="{ active: form.taskType === 'agent' }">
                 <input type="radio" v-model="form.taskType" value="agent" />
@@ -239,11 +277,6 @@
             <label class="form-label">{{ t('cronJobs.fields.triggerMessage') }} *</label>
             <textarea v-model="form.triggerMessage" class="form-textarea" rows="3"
               :placeholder="t('cronJobs.fields.triggerMessagePlaceholder')"></textarea>
-          </div>
-          <div v-else-if="form.taskType === 'reminder'" class="form-group">
-            <label class="form-label">{{ t('cronJobs.fields.reminderText') }} *</label>
-            <textarea v-model="form.triggerMessage" class="form-textarea" rows="3"
-              :placeholder="t('cronJobs.fields.reminderTextPlaceholder')"></textarea>
           </div>
           <div v-else class="form-group">
             <label class="form-label">{{ t('cronJobs.fields.requestBody') }} *</label>
@@ -315,8 +348,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCronJobStore } from '@/stores/useCronJobStore'
 import { useAgentStore } from '@/stores/useAgentStore'
 import type { CronJob } from '@/types/index'
@@ -348,6 +380,7 @@ const defaultForm = (): Partial<CronJob> => ({
   cronExpression: '',
   timezone: 'Asia/Shanghai',
   agentId: undefined,
+  workingDirectory: '',
   taskType: 'text',
   triggerMessage: '',
   requestBody: '',
@@ -358,7 +391,6 @@ const form = ref<any>(defaultForm())
 const canSave = computed(() => {
   if (!form.value.name || !form.value.agentId) return false
   if (form.value.taskType === 'text' && !form.value.triggerMessage) return false
-  if (form.value.taskType === 'reminder' && !form.value.triggerMessage) return false
   if (form.value.taskType === 'agent' && !form.value.requestBody) return false
   if (cronType.value === 'custom' && !form.value.cronExpression?.trim()) return false
   return true
@@ -402,7 +434,7 @@ function openCreateModal() {
 
 function openEditModal(job: CronJob) {
   editing.value = job
-  form.value = { ...job }
+  form.value = { ...job, workingDirectory: job.workingDirectory || '' }
   const parsed = parseCronToForm(job.cronExpression)
   cronType.value = parsed.type
   cronTime.value = parsed.time
@@ -425,11 +457,12 @@ function closeDetailModal() {
 
 async function saveJob() {
   try {
+    const payload = buildSavePayload()
     if (editing.value) {
-      await store.updateJob(editing.value.id, form.value)
+      await store.updateJob(editing.value.id, payload)
       ElMessage.success(t('cronJobs.messages.updateSuccess'))
     } else {
-      await store.createJob(form.value)
+      await store.createJob(payload)
       ElMessage.success(t('cronJobs.messages.createSuccess'))
     }
     closeModal()
@@ -439,12 +472,12 @@ async function saveJob() {
 }
 
 async function handleDelete(job: CronJob) {
-  const ok = await mcConfirm({
-    title: t('common.delete'),
-    message: t('cronJobs.messages.deleteConfirm', { name: job.name }),
-    tone: 'danger',
-  })
-  if (!ok) return
+  try {
+    await ElMessageBox.confirm(
+      t('cronJobs.messages.deleteConfirm', { name: job.name }),
+      { type: 'warning' },
+    )
+  } catch { return }
   try {
     await store.deleteJob(job.id)
     ElMessage.success(t('cronJobs.messages.deleteSuccess'))
@@ -541,6 +574,48 @@ function cronToHumanReadable(expr: string, timezone: string): string {
   }
 
   return expr + tzLabel
+}
+
+function buildSavePayload(): Partial<CronJob> {
+  return {
+    name: form.value.name,
+    cronExpression: form.value.cronExpression,
+    timezone: form.value.timezone,
+    agentId: form.value.agentId,
+    taskType: form.value.taskType,
+    triggerMessage: form.value.triggerMessage,
+    requestBody: form.value.requestBody,
+    workingDirectory: form.value.workingDirectory?.trim() || '',
+    enabled: !!form.value.enabled,
+  }
+}
+
+function projectLabel(job: Partial<CronJob> | null | undefined): string {
+  if (!job) return t('chat.workspaceRoot')
+  if (job.usingWorkspaceRoot) {
+    return job.workspaceName || t('chat.workspaceRoot')
+  }
+  return job.projectRelativePath || job.effectiveProjectPath || job.workingDirectory || job.workspaceName || t('chat.workspaceRoot')
+}
+
+function projectTitle(job: Partial<CronJob> | null | undefined): string {
+  if (!job) return t('chat.workspaceRoot')
+  return job.effectiveProjectPath || job.workingDirectory || projectLabel(job)
+}
+
+function permissionLabel(job: Partial<CronJob> | null | undefined): string {
+  return job?.projectPermissionMode === 'full'
+    ? t('chat.projectPermissionFull')
+    : t('chat.projectPermissionLimited')
+}
+
+function executionStatusKey(job: Partial<CronJob> | null | undefined): string {
+  return (job?.lastExecutionSummaryStatus || 'NONE').toLowerCase()
+}
+
+function executionSummaryText(job: Partial<CronJob> | null | undefined): string {
+  if (job?.lastExecutionSummaryText) return job.lastExecutionSummaryText
+  return t('cronJobs.executionSummary.' + executionStatusKey(job))
 }
 
 function formatTime(datetime: string | undefined): string {
@@ -668,6 +743,12 @@ function formatTime(datetime: string | undefined): string {
   gap: 8px;
 }
 
+.job-context-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .agent-badge {
   display: inline-flex;
   align-items: center;
@@ -683,8 +764,32 @@ function formatTime(datetime: string | undefined): string {
 }
 .type-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .type-text { background: var(--mc-primary-bg); color: var(--mc-primary); }
-.type-reminder { background: var(--mc-warning-bg, var(--mc-primary-bg)); color: var(--mc-warning, var(--mc-primary-hover)); }
 .type-agent { background: var(--mc-success-bg, var(--mc-primary-bg)); color: var(--mc-success, var(--mc-primary-hover)); }
+.project-badge,
+.permission-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-badge {
+  background: color-mix(in srgb, var(--mc-bg-sunken) 72%, var(--mc-bg-elevated) 28%);
+  color: var(--mc-text-secondary);
+}
+.permission-badge--limited {
+  background: rgba(245, 158, 11, 0.14);
+  color: rgb(180, 83, 9);
+}
+.permission-badge--full {
+  background: rgba(34, 197, 94, 0.14);
+  color: rgb(21, 128, 61);
+}
 .cron-code { display: inline-flex; background: var(--mc-bg-sunken); padding: 4px 8px; border-radius: 8px; font-size: 12px; color: var(--mc-text-primary); font-family: monospace; }
 .cron-readable { font-size: 12px; line-height: 1.45; color: var(--mc-text-tertiary); margin-top: 6px; }
 .runtime-stack { display: flex; flex-direction: column; gap: 6px; }
@@ -708,7 +813,7 @@ function formatTime(datetime: string | undefined): string {
 }
 .time-empty { color: var(--mc-text-tertiary); }
 
-/* RFC-063r §2.14: delivery-status badge — neutral / blue / green / red. */
+.execution-badge,
 .delivery-badge {
   display: inline-flex;
   align-items: center;
@@ -718,6 +823,15 @@ function formatTime(datetime: string | undefined): string {
   font-weight: 600;
   white-space: nowrap;
 }
+
+.execution-none { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.execution-running { background: rgba(59, 130, 246, 0.12); color: rgb(59, 130, 246); }
+.execution-awaiting_approval { background: rgba(245, 158, 11, 0.14); color: rgb(180, 83, 9); }
+.execution-permission_denied { background: rgba(249, 115, 22, 0.14); color: rgb(194, 65, 12); }
+.execution-execution_failed { background: rgba(239, 68, 68, 0.12); color: rgb(239, 68, 68); }
+.execution-execution_succeeded { background: rgba(34, 197, 94, 0.12); color: rgb(34, 197, 94); }
+
+/* RFC-063r §2.14: delivery-status badge — neutral / blue / green / red. */
 .delivery-none { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
 .delivery-pending { background: rgba(59, 130, 246, 0.12); color: rgb(59, 130, 246); }
 .delivery-delivered { background: rgba(34, 197, 94, 0.12); color: rgb(34, 197, 94); }
@@ -761,6 +875,12 @@ function formatTime(datetime: string | undefined): string {
 .modal-close { width: 32px; height: 32px; border: none; background: none; cursor: pointer; color: var(--mc-text-tertiary); display: flex; align-items: center; justify-content: center; border-radius: 6px; }
 .modal-close:hover { background: var(--mc-bg-sunken); }
 .modal-body { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+.form-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mc-text-tertiary);
+}
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

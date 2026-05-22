@@ -2,8 +2,8 @@ package vip.mate.llm.embedding;
 
 import com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeConnectionProperties;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
-import com.alibaba.cloud.ai.dashscope.embedding.text.DashScopeEmbeddingModel;
-import com.alibaba.cloud.ai.dashscope.embedding.text.DashScopeEmbeddingOptions;
+import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
+import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingOptions;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.MetadataMode;
@@ -12,15 +12,19 @@ import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.retry.RetryUtils;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestClient;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.model.EmbeddingProtocol;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.service.ModelProviderService;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -54,6 +58,15 @@ public class EmbeddingModelFactory {
 
     /** 构造 API 时共享的 retry template（用 Spring AI 默认） */
     private static final RetryTemplate DEFAULT_RETRY = RetryUtils.DEFAULT_RETRY_TEMPLATE;
+
+    /** 查询时 embedding 走同步链路，禁用内层重试以避免坏 provider 把聊天长时间拖住。 */
+    private static final RetryTemplate NO_RETRY = RetryTemplate.builder().maxAttempts(1).build();
+
+    /** OpenAI-compatible embedding 的连接超时：坏 endpoint 应尽快失败并进入 cooldown。 */
+    private static final Duration OPENAI_CONNECT_TIMEOUT = Duration.ofSeconds(5);
+
+    /** OpenAI-compatible embedding 的读取超时：避免 Wiki 检索把对话卡死。 */
+    private static final Duration OPENAI_READ_TIMEOUT = Duration.ofSeconds(15);
 
     /** 按 modelConfig.id 缓存 EmbeddingModel，config 变更时调用 {@link #evict} 清除 */
     private final ConcurrentHashMap<Long, EmbeddingModel> cache = new ConcurrentHashMap<>();
@@ -159,18 +172,26 @@ public class EmbeddingModelFactory {
                     "Provider Base URL 未配置: " + provider.getProviderId());
         }
 
+        HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(OPENAI_CONNECT_TIMEOUT)
+            .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(OPENAI_READ_TIMEOUT);
+        RestClient.Builder restClientBuilder = RestClient.builder().requestFactory(requestFactory);
+
         // 最简构造：不做 chat-specific 的 header 重写、reasoning patch 等
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey.trim())
                 .embeddingsPath("/v1/embeddings")
+            .restClientBuilder(restClientBuilder)
                 .build();
 
         OpenAiEmbeddingOptions options = OpenAiEmbeddingOptions.builder()
                 .model(modelConfig.getModelName())
                 .build();
 
-        return new OpenAiEmbeddingModel(api, MetadataMode.EMBED, options, DEFAULT_RETRY);
+        return new OpenAiEmbeddingModel(api, MetadataMode.EMBED, options, NO_RETRY);
     }
 
     /** 归一化 OpenAI base URL：去掉末尾的 /v1 / 斜杠（避免双 /v1） */

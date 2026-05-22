@@ -112,7 +112,7 @@ const ERROR_TEXT_PATTERNS: Array<{ pattern: RegExp; category: ChatErrorCategory;
   // Broad: any other 401-ish wording is treated as a model-side auth failure.
   { pattern: /unauthorized|401|invalid.?api.?key|api.?key.*expired|认证失败/i, category: 'provider_auth_error', retryable: false },
   { pattern: /权限|forbidden|403/i,                          category: 'forbidden',           retryable: false },
-  { pattern: /过长|too.?long|context.?length|prompt/i,       category: 'bad_request',         retryable: false },
+  { pattern: /413|payload too large|过长|too.?long|context.?length|prompt/i, category: 'bad_request', retryable: false },
   { pattern: /超时|timeout/i,                                category: 'timeout',             retryable: true },
   { pattern: /不可用|unavailable|503|502|504|过载|overload/i, category: 'service_unavailable', retryable: true },
   { pattern: /服务器|server.?error|500|internal/i,           category: 'server_error',        retryable: true },

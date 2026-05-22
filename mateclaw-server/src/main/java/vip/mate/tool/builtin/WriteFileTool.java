@@ -3,8 +3,10 @@ package vip.mate.tool.builtin;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -20,8 +22,8 @@ import java.nio.file.Paths;
  * <p>
  * 安全说明：
  * <ul>
- *   <li>写入操作经过 ToolGuard 审批（DefaultToolGuard 对 file_write 工具默认返回 NEEDS_APPROVAL）</li>
- *   <li>覆写已有文件前需要用户确认</li>
+ *   <li>目标路径始终受 workspace / project 边界约束</li>
+ *   <li>是否需要审批由当前 ToolGuard findings 与 workspace 权限模式共同决定</li>
  * </ul>
  *
  * @author MateClaw Team
@@ -34,12 +36,13 @@ public class WriteFileTool {
     private final vip.mate.i18n.I18nService i18n;
 
     @vip.mate.tool.ConcurrencyUnsafe("file write — must serialize with reads/writes on overlapping paths")
-    @Tool(description = "Write content to a file. Overwrites if exists, creates if not (auto-creates parent directories). "
+        @Tool(description = "Write content to a file. Overwrites if exists, creates if not (auto-creates parent directories). "
             + "Returns structured JSON with filePath, bytesWritten. "
-            + "Requires user approval.")
+            + "Target path must stay inside the active project boundary; risky writes may require user approval.")
     public String write_file(
             @ToolParam(description = "Absolute or relative file path") String filePath,
-            @ToolParam(description = "Content to write to the file") String content) {
+            @ToolParam(description = "Content to write to the file") String content,
+            @Nullable ToolContext ctx) {
 
         JSONObject result = new JSONObject();
         result.set("filePath", filePath);
@@ -54,7 +57,7 @@ public class WriteFileTool {
 
             Path path;
             try {
-                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath);
+                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath, ctx);
             } catch (IllegalArgumentException e) {
                 return errorResult(filePath, e.getMessage());
             }

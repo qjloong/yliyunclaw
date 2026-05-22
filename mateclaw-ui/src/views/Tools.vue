@@ -4,7 +4,7 @@
       <div class="mc-page-inner tools-page">
         <div class="mc-page-header">
           <div>
-            <div class="mc-page-kicker">{{ t('tools.kicker') }}</div>
+            <div class="mc-page-kicker">Execution Surface</div>
             <h1 class="mc-page-title">{{ t('tools.title') }}</h1>
             <p class="mc-page-desc">{{ t('tools.desc') }}</p>
           </div>
@@ -22,6 +22,7 @@
         <thead>
           <tr>
             <th>{{ t('tools.columns.tool') }}</th>
+            <th>{{ t('tools.columns.beanName') }}</th>
             <th>{{ t('tools.columns.type') }}</th>
             <th>{{ t('tools.columns.status') }}</th>
             <th>{{ t('tools.columns.actions') }}</th>
@@ -39,10 +40,10 @@
                 <div>
                   <div class="tool-name">{{ tool.name }}</div>
                   <div class="tool-desc">{{ tool.description }}</div>
-                  <code class="tool-bean">{{ tool.beanName }}</code>
                 </div>
               </div>
             </td>
+            <td><code class="bean-name">{{ tool.beanName }}</code></td>
             <td>
               <span class="type-badge" :class="'type-' + tool.toolType">{{ tool.toolType }}</span>
             </td>
@@ -70,7 +71,7 @@
             </td>
           </tr>
           <tr v-if="tools.length === 0">
-            <td colspan="4" class="empty-row">
+            <td colspan="5" class="empty-row">
               <div class="empty-state">
                 <span class="empty-icon">🔧</span>
                 <p>{{ t('tools.empty') }}</p>
@@ -130,8 +131,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { toolApi } from '@/api/index'
 import type { Tool } from '@/types/index'
 
@@ -187,12 +187,7 @@ async function saveTool() {
 }
 
 async function deleteTool(id: string | number) {
-  const ok = await mcConfirm({
-    title: t('tools.messages.deleteTitle'),
-    message: t('tools.messages.deleteConfirm'),
-    tone: 'danger',
-  })
-  if (!ok) return
+  try { await ElMessageBox.confirm(t('tools.messages.deleteConfirm'), t('tools.messages.deleteTitle'), { type: 'warning' }) } catch { return }
   try {
     await toolApi.delete(id)
     await loadTools()
@@ -226,7 +221,6 @@ async function toggleTool(tool: Tool) {
 .tool-name { font-weight: 500; color: var(--mc-text-primary); }
 .tool-desc { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 1px; }
 .bean-name { background: var(--mc-bg-sunken); padding: 2px 8px; border-radius: 4px; font-size: 12px; color: var(--mc-text-primary); }
-.tool-bean { display: inline-block; margin-top: 4px; padding: 1px 6px; background: var(--mc-bg-sunken); border-radius: 4px; font-size: 11px; color: var(--mc-text-tertiary); font-family: var(--mc-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 .type-badge { padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; }
 .type-builtin { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .type-mcp { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }

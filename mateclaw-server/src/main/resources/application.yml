@@ -25,19 +25,6 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
-    # Issue #50: explicit Hikari sizing. Default of 10 was being exhausted
-    # by O(100) cron jobs firing on minute boundaries (each run holds 3-4
-    # connections sequentially) plus ChannelHealthMonitor's per-minute scan.
-    # 30 leaves headroom for HTTP / SSE / channel adapters even with the
-    # cron concurrency limiter (CronJobService.MAX_CONCURRENT_CRON_RUNS=8)
-    # at full saturation.
-    hikari:
-      maximum-pool-size: 30
-      minimum-idle: 5
-      connection-timeout: 30000
-      idle-timeout: 600000
-      max-lifetime: 1800000
-      leak-detection-threshold: 60000
 
   # SQL 初始化由 DatabaseBootstrapRunner 接管，关闭 Spring 自动执行
   sql:
@@ -53,33 +40,16 @@ spring:
       - classpath:db/migration/h2
     validate-on-migrate: true
     clean-disabled: true
-    # Disable Flyway's built-in ${...} placeholder substitution. Some migrations
-    # (e.g. V85 ckjia MCP seed) intentionally store ${ENV_VAR} literals so that
-    # mateclaw's runtime header parser (McpClientManager.parseHeaders) can
-    # expand them at request time. Flyway would otherwise try to resolve those
-    # tokens at migration time and fail with "No value provided for placeholder".
-    # Safe to disable globally because no migration in this project relies on
-    # Flyway-side ${...} substitution.
-    placeholder-replacement: false
 
   h2:
     console:
       enabled: ${H2_CONSOLE_ENABLED:false}
       path: /h2-console
 
-  # Spring AI Alibaba (DashScope) — Spring AI Alibaba 1.1.x configuration path.
-  #
-  # The api-key here is only consumed by Spring AI Alibaba's auto-configured beans
-  # as a *fallback*. The real source of truth for every provider/key/model is the
-  # admin UI ("Settings → Models", persisted in mate_model_provider /
-  # mate_model_config); AgentDashScopeChatModelBuilder resolves the key per-request
-  # from the provider row first, only falling back to this property when the row
-  # is incomplete. The placeholder default keeps DashScopeChatAutoConfiguration
-  # happy at startup when no env var is set (Docker / fresh install) — leave it
-  # alone unless you know what you're doing.
+  # Spring AI Alibaba (DashScope) - Spring AI Alibaba 1.1.x 配置路径
   ai:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:configure-in-admin-ui}
+      api-key: ${DASHSCOPE_API_KEY:your-dashscope-api-key-here}
       chat:
         options:
           model: qwen-max
@@ -126,7 +96,10 @@ springdoc:
 mateclaw:
   jwt:
     secret: ${JWT_SECRET:MateClaw-JWT-Secret-Key-2024-Please-Change-In-Production}
-    expiration: 86400000
+    # Keep desktop/web sessions signed in by default. The frontend persists the
+    # token and the auth filter renews it when it is close to expiry.
+    expiration: ${JWT_EXPIRATION:2592000000} # 30 days
+    renewal-threshold: ${JWT_RENEWAL_THRESHOLD:604800000} # 7 days
   # 搜索配置已迁移至数据库（mate_system_setting 表），通过 UI 系统设置管理
   # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
   mcp:
@@ -139,8 +112,6 @@ mateclaw:
     hub:
       base-url: https://clawhub.ai
       search-path: /api/v1/search
-      skills-path: /api/v1/skills
-      download-path: /api/v1/download
       http-timeout: 15
       http-retries: 3
   plugin:
@@ -180,16 +151,8 @@ mateclaw:
         enabled: true
         failure-threshold: 3
         cooldown-ms: 300000
-  # Multi-agent delegation (DelegateAgentTool).
-  delegation:
-    # Wall-clock budget for one delegateParallel batch (shared across all
-    # children — they run concurrently on virtual threads, so this is total
-    # latency, not per-child). 300 s headroom is needed because thinking
-    # models (Kimi / GLM / MiniMax) routinely take 90–290 s per LLM turn
-    # when the child must produce multi-section structured output.
-    parallel-timeout-seconds: 300
 
-# MateClaw Agent 配置
+# MateY Agent 配置
 mate:
   agent:
     graph:
@@ -207,19 +170,16 @@ mate:
         per-category:
           shell: 120
           web: 30
-    # Tool-result budget (per-result spill + per-turn aggregate budget).
-    # The executor tries to spill the RAW result first so the full output is
-    # preserved on disk; the in-context preview points the agent at the spill
-    # file via read_file. When spill is disabled, the tool is on the exclusion
-    # list, the body is at or below the threshold, or the disk write fails,
-    # the executor falls back to inline hard-truncation to the same character
-    # cap. Per-turn aggregate caps the combined size across one tool turn.
+    # RFC-008 Phase 3: tool-result three-layer budget (per-result spill + per-turn aggregate budget).
+    # Layer 1 (per-tool cap) lives inside individual tools; Layer 2 spills oversized
+    # single results to disk; Layer 3 enforces an aggregate cap on the combined
+    # response size of one tool turn. The full output is preserved on disk and
+    # the in-context preview points the agent at the spill file (read_file tool).
     tool-result:
       enabled: true
-      per-result-threshold-chars: 8000    # aligned with executor hard cap; > this size → spill, ≤ → inline verbatim
-      per-turn-budget-chars: 32000        # headroom for multi-tool turns
+      per-result-threshold-chars: 16000   # was 4000 — prevents WebSearch spill-to-disk
+      per-turn-budget-chars: 32000        # was 16000 — headroom for multi-tool turns
       preview-head-chars: 800
-      excluded-tool-inline-chars: 2500
       storage-base-dir: ""
       # Retrieval-style tools that must NEVER be spilled. Spilling read_file's
       # output causes a recursion: the agent reads the spill path, that read also
@@ -229,14 +189,6 @@ mate:
       excluded-tools:
         - read_file
         - read_workspace_memory_file
-      # Spill files are deleted after this many days. Default 0 disables the
-      # scheduled sweep entirely so a summary/preview that points at a spill
-      # path stays valid for the whole life of the conversation. Files are
-      # still purged when the conversation is deleted explicitly via
-      # ConversationService.deleteConversation. Raise to a positive value if
-      # disk pressure outweighs recoverability for your deployment.
-      retention-days: 0
-      cleanup-cron: "0 0 3 * * ?"
     conversation:
       window:
         # 测试时临时调低：2000 token ≈ 2000 中文字，3 轮对话即可触发压缩

@@ -5,6 +5,9 @@
 -- CronJobEntity.deleted is declared but never set by current code, so
 -- defensively treat any deleted=1 row as stale and remove it physically.
 
+ALTER TABLE mate_cron_job ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_cron_job_workspace ON mate_cron_job(workspace_id, deleted);
+
 -- Step 1: physically purge any deleted=1 rows. The cron service treats
 -- the entity as hard-delete-only (no @TableLogic, no global logic-delete
 -- config), so any deleted=1 rows are legacy artifacts and unsafe to keep.
@@ -14,13 +17,4 @@ DELETE FROM mate_cron_job WHERE deleted = 1;
 -- left the table clean, this is a no-op. If V69 picked a deleted=1 row
 -- as the survivor and Step 1 just removed it, an active duplicate may
 -- still need re-converging.
-DELETE FROM mate_cron_job
-WHERE deleted = 0
-  AND id NOT IN (
-    SELECT keep_id FROM (
-        SELECT MIN(id) AS keep_id
-        FROM mate_cron_job
-        WHERE deleted = 0
-        GROUP BY workspace_id, agent_id, name
-    )
-  );
+EXECUTE IMMEDIATE 'DELETE FROM mate_cron_job WHERE deleted = 0 AND id NOT IN (SELECT keep_id FROM (SELECT MIN(id) AS keep_id FROM mate_cron_job WHERE deleted = 0 GROUP BY workspace_id, agent_id, name) keepers)';

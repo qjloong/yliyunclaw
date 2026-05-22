@@ -9,7 +9,7 @@
         <select v-model="selectedAgentId" class="agent-select" @change="onAgentChange">
           <option value="" disabled>{{ t('agentContext.selectAgent') }}</option>
           <option v-for="agent in agents" :key="agent.id" :value="agent.id">
-            {{ plainTextIcon(agent.icon) }} {{ agent.name }}
+            {{ plainTextIcon(agent.icon, '🤖') }} {{ agent.name }}
           </option>
         </select>
       </div>
@@ -205,14 +205,11 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, agentContextApi } from '@/api/index'
-import { copyToClipboard } from '@/utils/clipboard'
+import { plainTextIcon } from '@/composables/usePixelarticons'
 import type { Agent, WorkspaceFile } from '@/types/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
-import { handleMermaidDownload } from '@/composables/useMermaidRenderer'
-import { plainTextIcon } from '@/composables/usePixelarticons'
 
 const { renderMarkdown } = useMarkdownRenderer()
 
@@ -322,7 +319,6 @@ async function fetchPromptFiles() {
 }
 
 function handlePreviewClick(e: MouseEvent) {
-  if (handleMermaidDownload(e)) return
   const btn = (e.target as HTMLElement).closest('.code-block__copy') as HTMLElement | null
   if (!btn) return
   // Same as ChatConsole: the copy button now lives inside <details><summary>
@@ -333,7 +329,7 @@ function handlePreviewClick(e: MouseEvent) {
   const encoded = btn.getAttribute('data-code')
   if (!encoded) return
   const code = decodeURIComponent(encoded)
-  copyToClipboard(code).then(() => {
+  navigator.clipboard.writeText(code).then(() => {
     btn.classList.add('copied')
     const textEl = btn.querySelector('.code-block__copy-text')
     if (textEl) textEl.textContent = t('chat.copied') || 'Copied'
@@ -396,12 +392,13 @@ async function toggleFileEnabled(file: WorkspaceFile) {
 async function confirmDeleteFile() {
   if (!selectedFile.value) return
   const name = selectedFile.value.filename
-  const ok = await mcConfirm({
-    title: t('common.delete'),
-    message: t('agentContext.deleteConfirm', { name }),
-    tone: 'danger',
-  })
-  if (!ok) return
+  try {
+    await ElMessageBox.confirm(
+      t('agentContext.deleteConfirm', { name }),
+      t('common.delete'),
+      { type: 'warning' }
+    )
+  } catch { return }
 
   try {
     await agentContextApi.deleteFile(selectedAgentId.value, name)

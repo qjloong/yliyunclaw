@@ -1,18 +1,10 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessageBox } from 'element-plus'
 import { modelApi } from '@/api'
 import type { ProviderInfo } from '@/types'
 import { safeParseJson } from '@/utils/safeJson'
 import { chatModelToProtocol, protocolToChatModel } from '@/utils/modelProtocol'
-
-// Provider IDs are used as path segments in DELETE / config endpoints.
-// Slashes / spaces / # / ? would make `{providerId}` PathVariable miss
-// the controller and fall through to the static-resource handler
-// (see issue #39: "No static resource api/v1/models/custom-providers/...").
-// Keep this in sync with the backend if a server-side guard is added.
-const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 
 interface ListDeps {
   loadProviders: () => Promise<void>
@@ -39,7 +31,6 @@ export function useProviderForm(deps: ListDeps) {
     apiKeyPrefix: 'sk-',
     protocol: 'openai-compatible',
     chatModel: 'OpenAIChatModel',
-    requireApiKey: true,
     generateKwargsText: '{}',
     enableSearch: false,
     searchStrategy: '',
@@ -71,10 +62,7 @@ export function useProviderForm(deps: ListDeps) {
     if (id === 'openrouter') return 'https://openrouter.ai/api/v1'
     if (id === 'zhipu-cn') return 'https://open.bigmodel.cn/api/paas/v4'
     if (id === 'zhipu-intl') return 'https://open.z.ai/api/paas/v4'
-    if (id === 'zhipu-cn-codingplan') return 'https://open.bigmodel.cn/api/coding/paas/v4'
-    if (id === 'zhipu-intl-codingplan') return 'https://api.z.ai/api/coding/paas/v4'
     if (id === 'volcengine') return 'https://ark.cn-beijing.volces.com/api/v3'
-    if (id === 'xiaomi-mimo') return 'https://api.xiaomimimo.com/v1'
     return 'https://example.com/v1'
   })
 
@@ -90,7 +78,6 @@ export function useProviderForm(deps: ListDeps) {
     if (id === 'zhipu-cn') return t('settings.model.hints.zhipu')
     if (id === 'zhipu-intl') return t('settings.model.hints.zhipuIntl')
     if (id === 'volcengine') return t('settings.model.hints.volcengine')
-    if (id === 'xiaomi-mimo') return t('settings.model.hints.xiaomiMimo')
     return t('settings.model.hints.openaiCompatible')
   })
 
@@ -111,7 +98,6 @@ export function useProviderForm(deps: ListDeps) {
       apiKeyPrefix: 'sk-',
       protocol: 'openai-compatible',
       chatModel: 'OpenAIChatModel',
-      requireApiKey: true,
       generateKwargsText: '{}',
       enableSearch: false,
       searchStrategy: '',
@@ -136,7 +122,6 @@ export function useProviderForm(deps: ListDeps) {
       apiKeyPrefix: provider.apiKeyPrefix || 'sk-',
       protocol,
       chatModel: provider.chatModel || 'OpenAIChatModel',
-      requireApiKey: protocol === 'openai-compatible' ? provider.requireApiKey !== false : true,
       generateKwargsText: JSON.stringify(kwargs, null, 2),
       enableSearch: searchDefault,
       searchStrategy: (kwargs.searchStrategy as string) || '',
@@ -151,19 +136,7 @@ export function useProviderForm(deps: ListDeps) {
     advancedOpen.value = false
   }
 
-  async function saveProvider(): Promise<boolean> {
-    // RFC-074 / issue #39: provider id becomes a URL path segment, so a slash
-    // or other unsafe char makes the row impossible to delete later. Validate
-    // before hitting the API on the create path; editing is exempt because the
-    // id field is hidden and the existing value is reused untouched.
-    if (!editingProvider.value) {
-      const id = providerForm.id.trim()
-      if (!id || !PROVIDER_ID_PATTERN.test(id)) {
-        ElMessage.error(t('settings.model.providerIdInvalid'))
-        return false
-      }
-      providerForm.id = id
-    }
+  async function saveProvider() {
     const kwargs = safeParseJson(providerForm.generateKwargsText)
     if (providerForm.enableSearch) {
       kwargs.enableSearch = true
@@ -178,16 +151,12 @@ export function useProviderForm(deps: ListDeps) {
     }
     // RFC-009 P3.5: clamp to non-negative, coerce string input back to integer.
     const fallbackPriority = Math.max(0, Math.floor(Number(providerForm.fallbackPriority) || 0))
-    const requireApiKey = providerForm.protocol === 'openai-compatible'
-      ? providerForm.requireApiKey
-      : true
     if (editingProvider.value) {
       await modelApi.updateProviderConfig(editingProvider.value.id, {
         apiKey: providerForm.apiKey,
         baseUrl: providerForm.baseUrl,
         protocol: providerForm.protocol,
         chatModel: protocolToChatModel(providerForm.protocol),
-        requireApiKey,
         generateKwargs: kwargs,
         fallbackPriority,
       })
@@ -199,7 +168,6 @@ export function useProviderForm(deps: ListDeps) {
         apiKeyPrefix: providerForm.apiKeyPrefix,
         protocol: providerForm.protocol,
         chatModel: protocolToChatModel(providerForm.protocol),
-        requireApiKey,
         models: [],
       })
       if (providerForm.apiKey || providerForm.generateKwargsText || fallbackPriority > 0) {
@@ -208,7 +176,6 @@ export function useProviderForm(deps: ListDeps) {
           baseUrl: providerForm.baseUrl,
           protocol: providerForm.protocol,
           chatModel: protocolToChatModel(providerForm.protocol),
-          requireApiKey,
           generateKwargs: kwargs,
           fallbackPriority,
         })
@@ -216,7 +183,6 @@ export function useProviderForm(deps: ListDeps) {
     }
     closeProviderModal()
     await Promise.all([deps.loadProviders(), deps.loadActiveModel()])
-    return true
   }
 
   /**
@@ -242,13 +208,19 @@ export function useProviderForm(deps: ListDeps) {
   }
 
   async function deleteProvider(provider: ProviderInfo) {
-    const ok = await mcConfirm({
-      title: t('common.confirm'),
-      message: t('settings.model.deleteConfirm', { name: provider.name }),
-      confirmText: t('common.delete'),
-      tone: 'danger',
-    })
-    if (!ok) return false
+    try {
+      await ElMessageBox.confirm(
+        t('settings.model.deleteConfirm', { name: provider.name }),
+        t('common.confirm'),
+        {
+          type: 'warning',
+          confirmButtonText: t('common.delete'),
+          cancelButtonText: t('common.cancel'),
+        },
+      )
+    } catch {
+      return false
+    }
     await modelApi.deleteCustomProvider(provider.id)
     await deps.loadProviders()
     return true

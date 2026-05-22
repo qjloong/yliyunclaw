@@ -42,10 +42,7 @@ public class AgentOpenAiCompatibleChatModelBuilder implements ChatModelBuilder {
 
     @Override
     public ChatModel build(ModelConfigEntity model, ModelProviderEntity provider, RetryTemplate retry) {
-        // RFC-03 Lane B1 — pass model.requestTimeoutSeconds so providers /
-        // models with extended-thinking p99s don't false-positive on the
-        // hardcoded 180s read timeout.
-        OpenAiApi api = agentGraphBuilder.buildOpenAiApi(provider, model.getRequestTimeoutSeconds());
+        OpenAiApi api = agentGraphBuilder.buildOpenAiApi(provider);
         OpenAiChatOptions options = agentGraphBuilder.buildOpenAiOptions(model, provider);
         ChatModel raw = OpenAiChatModel.builder()
                 .openAiApi(api)

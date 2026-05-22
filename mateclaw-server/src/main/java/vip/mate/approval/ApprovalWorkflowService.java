@@ -8,11 +8,8 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,13 +17,12 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.context.ChatOriginHolder;
-import vip.mate.approval.event.WorkflowApprovalResolvedEvent;
+import vip.mate.approval.ApprovalGrantService.ApprovalGrantContext;
 import vip.mate.approval.model.ToolApprovalEntity;
 import vip.mate.approval.repository.ToolApprovalMapper;
 import vip.mate.tool.guard.model.GuardEvaluation;
 import vip.mate.tool.guard.model.GuardFinding;
 import vip.mate.workspace.conversation.ConversationService;
-import vip.mate.workspace.conversation.event.ConversationDeletedEvent;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -52,15 +48,10 @@ import java.util.concurrent.TimeUnit;
 public class ApprovalWorkflowService implements ApplicationRunner {
 
     private final ApprovalService approvalService;
+    private final ApprovalGrantService approvalGrantService;
     private final ToolApprovalMapper approvalMapper;
     private final ObjectMapper objectMapper;
     private final ConversationService conversationService;
-    /** Optional — injected only in full Spring context. The workflow
-     *  module listens for {@link WorkflowApprovalResolvedEvent}; in tests
-     *  that don't wire the workflow runtime this stays null and the
-     *  publish is a no-op. */
-    @Autowired(required = false)
-    private ApplicationEventPublisher events;
 
     /**
      * GC scheduler — owns the 5-minute clock for the entire approval state machine
@@ -90,26 +81,6 @@ public class ApprovalWorkflowService implements ApplicationRunner {
     void shutdownGc() {
         if (gcScheduler != null) {
             gcScheduler.shutdownNow();
-        }
-    }
-
-    /**
-     * Drop in-memory approval state for a deleted conversation. The cascade in
-     * {@link ConversationService#deleteConversation} already removed the
-     * {@code mate_tool_approval} rows; this listener clears the parallel
-     * {@code pendingMap} entries so {@code findPendingByConversation} cannot
-     * keep returning a ghost approval that points at a non-existent
-     * conversation row.
-     * <p>
-     * Runs after the DB cascade commits — see
-     * {@link ConversationDeletedEvent}.
-     */
-    @EventListener
-    public void onConversationDeleted(ConversationDeletedEvent event) {
-        int removed = approvalService.removeAllByConversation(event.conversationId());
-        if (removed > 0) {
-            log.info("[ApprovalWorkflow] Dropped {} in-memory pending entries for deleted conversation {}",
-                    removed, event.conversationId());
         }
     }
 
@@ -170,6 +141,10 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                 snapshot.setFindingsJson(entity.getFindingsJson());
                 snapshot.setMaxSeverity(entity.getMaxSeverity());
                 snapshot.setSummary(entity.getSummary());
+                snapshot.setWorkspaceId(entity.getWorkspaceId());
+                snapshot.setProjectPath(entity.getProjectPath());
+                snapshot.setApprovalKey(entity.getApprovalKey());
+                snapshot.setGrantScope(entity.getGrantScope());
                 snapshot.setChatOrigin(entity.getChatOrigin());
 
                 approvalService.registerRecovered(snapshot);
@@ -240,7 +215,13 @@ public class ApprovalWorkflowService implements ApplicationRunner {
         // it is non-null for IM / web triggered tool calls. Snapshot is
         // serialized once here and persisted on the DB row so cross-restart
         // replays keep the channel binding.
-        String chatOriginJson = serializeChatOrigin(ChatOriginHolder.get());
+        ChatOrigin origin = ChatOriginHolder.get();
+        String chatOriginJson = serializeChatOrigin(origin);
+        ApprovalGrantContext grantContext = approvalGrantService.buildContext(
+            conversationId,
+            origin,
+            toolName,
+            evaluation);
 
         // 2. 增强内存记录
         approvalService.getPending(pendingId).ifPresent(pending -> {
@@ -249,12 +230,15 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                 pending.setMaxSeverity(evaluation.maxSeverity() != null ? evaluation.maxSeverity().name() : null);
                 pending.setSummary(evaluation.summary());
             }
+            pending.setWorkspaceId(grantContext.workspaceId());
+            pending.setProjectPath(grantContext.projectPath());
+            pending.setApprovalKey(grantContext.approvalKey());
             pending.setChatOrigin(chatOriginJson);
         });
 
         // 3. DB 层
         persistToDb(pendingId, conversationId, userId, toolName, toolArguments,
-                toolCallPayload, siblingToolCalls, agentId, evaluation, chatOriginJson);
+            toolCallPayload, siblingToolCalls, agentId, evaluation, chatOriginJson, grantContext);
 
         return pendingId;
     }
@@ -267,78 +251,6 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                                 String toolCallPayload, String siblingToolCalls, String agentId) {
         return createPending(conversationId, userId, toolName, toolArguments, reason,
                 toolCallPayload, siblingToolCalls, agentId, null);
-    }
-
-    /**
-     * Workflow-scoped approval request — creates a {@code mate_tool_approval}
-     * row keyed to a workflow run + step instead of a conversation, so an
-     * {@code await_approval} step is visible in the same approval inbox the
-     * tool-approval flow uses. Returns the row's auto-generated long id; the
-     * caller (typically {@code AwaitApprovalStepAdapter}) writes that id back
-     * onto {@code mate_workflow_run_pause.external_approval_id} so a future
-     * approval-resolve callback can map "approval X resolved → resume run Y".
-     *
-     * <p>The approval row's {@code conversationId} is set to
-     * {@code "workflow:run:{runId}"} as a synthetic key — that lets the
-     * existing {@link ApprovalService#findPendingByConversation} surface the
-     * workflow approval to operator UIs without needing a parallel query
-     * surface. {@code toolName} is set to {@code "workflow:{kind}"} so the
-     * inbox can group / filter workflow approvals from tool approvals.
-     *
-     * <p>v0 keeps the resume path through {@code WorkflowResumeController}
-     * with the pauseToken; this method does not yet wire a resolve→resume
-     * callback. The approval row's purpose for v0 is operator visibility
-     * and a stable foreign key for the pause record.
-     */
-    public Long requestWorkflowApproval(long workspaceId,
-                                        long runId,
-                                        Long stepId,
-                                        String approvalKind,
-                                        String approvalMessage,
-                                        java.util.List<String> approverChannels,
-                                        Integer timeoutSecs) {
-        try {
-            ToolApprovalEntity entity = new ToolApprovalEntity();
-            // pendingId is the string handle the existing approval pipeline
-            // uses for resolve / get; "wf-" prefix lets future code branch
-            // on workflow-scoped vs tool-scoped approvals at a glance. The
-            // pending_id column is VARCHAR(32) so we trim a no-dashes UUID
-            // down to fit ("wf-" + 24 hex chars = 27 chars; collisions of
-            // 24 hex chars per workflow are astronomically rare and we
-            // also fall back to UNIQUE-key violation handling).
-            String shortId = java.util.UUID.randomUUID().toString()
-                    .replace("-", "").substring(0, 24);
-            entity.setPendingId("wf-" + shortId);
-            entity.setConversationId("workflow:run:" + runId);
-            String kind = approvalKind == null || approvalKind.isBlank() ? "manual" : approvalKind.trim();
-            entity.setToolName("workflow:" + kind);
-            entity.setSummary(approvalMessage == null ? "" : approvalMessage);
-            // Encode approver channels in tool_arguments so the inbox UI can
-            // render which channels were asked. Plain JSON to keep parsing
-            // trivial on the read path.
-            try {
-                if (approverChannels != null && !approverChannels.isEmpty()) {
-                    entity.setToolArguments(objectMapper.writeValueAsString(
-                            java.util.Map.of(
-                                    "runId", runId,
-                                    "stepId", stepId,
-                                    "approverChannels", approverChannels)));
-                }
-            } catch (Exception e) {
-                log.warn("[ApprovalWorkflow] failed to encode approverChannels: {}", e.getMessage());
-            }
-            entity.setStatus("PENDING");
-            entity.setCreatedAt(LocalDateTime.now());
-            entity.setExpireAt(LocalDateTime.now().plusSeconds(
-                    timeoutSecs != null && timeoutSecs > 0 ? timeoutSecs : 30 * 60));
-            approvalMapper.insert(entity);
-            log.info("[ApprovalWorkflow] requested workflow approval row id={}, runId={}, workspace={}, kind={}",
-                    entity.getId(), runId, workspaceId, kind);
-            return entity.getId();
-        } catch (Exception e) {
-            log.warn("[ApprovalWorkflow] requestWorkflowApproval failed: {}", e.getMessage());
-            return null;
-        }
     }
 
     /**
@@ -371,6 +283,7 @@ public class ApprovalWorkflowService implements ApplicationRunner {
         String snapshotStatus = approved ? "approved" : "denied";
 
         return performResolve(pendingId, userId, dbStatus, metaDecision, snapshotStatus,
+            ApprovalGrantScope.ONCE,
                 /* removeFromMap */ false);
     }
 
@@ -384,8 +297,15 @@ public class ApprovalWorkflowService implements ApplicationRunner {
      */
     @Transactional
     public ResolveOutcome resolveAndConsume(String pendingId, String userId) {
+        return resolveAndConsume(pendingId, userId, ApprovalGrantScope.ONCE);
+    }
+
+    @Transactional
+    public ResolveOutcome resolveAndConsume(String pendingId, String userId,
+                                            ApprovalGrantScope grantScope) {
         return performResolve(pendingId, userId, "CONSUMED", MetadataDecision.APPROVED,
-                "consumed", /* removeFromMap */ true);
+                "consumed", grantScope != null ? grantScope : ApprovalGrantScope.ONCE,
+                /* removeFromMap */ true);
     }
 
     /**
@@ -400,7 +320,7 @@ public class ApprovalWorkflowService implements ApplicationRunner {
             return ResolveOutcome.alreadyResolved(null);
         }
         return performResolveOnSnapshot(target, null, "CONSUMED", MetadataDecision.APPROVED,
-                "consumed", /* removeFromMap */ true);
+                "consumed", ApprovalGrantScope.ONCE, /* removeFromMap */ true);
     }
 
     /**
@@ -424,7 +344,8 @@ public class ApprovalWorkflowService implements ApplicationRunner {
         for (PendingApproval target : targets) {
             try {
                 ResolveOutcome outcome = performResolveOnSnapshot(target, userId, "DENIED",
-                        MetadataDecision.DENIED, "denied", /* removeFromMap */ true);
+                        MetadataDecision.DENIED, "denied", ApprovalGrantScope.ONCE,
+                        /* removeFromMap */ true);
                 if (outcome.dbSynced()) outcomes.add(outcome);
             } catch (Exception e) {
                 log.warn("[ApprovalWorkflow] denyAll: failed to deny {}: {}",
@@ -452,7 +373,8 @@ public class ApprovalWorkflowService implements ApplicationRunner {
         List<ResolveOutcome> outcomes = new java.util.ArrayList<>(targets.size());
         for (PendingApproval target : targets) {
             ResolveOutcome outcome = performResolveOnSnapshot(target, null, "SUPERSEDED",
-                    MetadataDecision.DENIED, "superseded", /* removeFromMap */ true);
+                    MetadataDecision.DENIED, "superseded", ApprovalGrantScope.ONCE,
+                    /* removeFromMap */ true);
             if (outcome.dbSynced()) outcomes.add(outcome);
         }
         return outcomes;
@@ -468,6 +390,7 @@ public class ApprovalWorkflowService implements ApplicationRunner {
     @Transactional
     ResolveOutcome markTimeout(String pendingId) {
         return performResolve(pendingId, null, "TIMEOUT", MetadataDecision.DENIED, "timeout",
+                ApprovalGrantScope.ONCE,
                 /* removeFromMap */ true);
     }
 
@@ -529,7 +452,8 @@ public class ApprovalWorkflowService implements ApplicationRunner {
 
     private ResolveOutcome performResolve(String pendingId, String userId,
                                           String dbStatus, MetadataDecision metaDecision,
-                                          String snapshotStatus, boolean removeFromMap) {
+                                          String snapshotStatus, ApprovalGrantScope grantScope,
+                                          boolean removeFromMap) {
         PendingApproval snapshot = approvalService.getPending(pendingId).orElse(null);
         if (snapshot == null || !"pending".equals(snapshot.getStatus())) {
             log.debug("[ApprovalWorkflow] resolve {}: not pending (snapshot={}, status={})",
@@ -537,12 +461,13 @@ public class ApprovalWorkflowService implements ApplicationRunner {
             return ResolveOutcome.alreadyResolved(pendingId);
         }
         return performResolveOnSnapshot(snapshot, userId, dbStatus, metaDecision,
-                snapshotStatus, removeFromMap);
+            snapshotStatus, grantScope, removeFromMap);
     }
 
     private ResolveOutcome performResolveOnSnapshot(PendingApproval snapshot, String userId,
                                                     String dbStatus, MetadataDecision metaDecision,
-                                                    String snapshotStatus, boolean removeFromMap) {
+                                String snapshotStatus, ApprovalGrantScope grantScope,
+                                boolean removeFromMap) {
         // Phase 1 — DB UPDATE (conditional). The eq("PENDING") guard makes the call
         // idempotent: if another path already won, we get rows=0 and bail without
         // touching metadata or memory.
@@ -553,6 +478,18 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                     .eq(ToolApprovalEntity::getStatus, "PENDING")
                     .set(ToolApprovalEntity::getStatus, dbStatus)
                     .set(ToolApprovalEntity::getResolvedAt, LocalDateTime.now());
+            if (snapshot.getWorkspaceId() != null) {
+                wrapper.set(ToolApprovalEntity::getWorkspaceId, snapshot.getWorkspaceId());
+            }
+            if (snapshot.getProjectPath() != null) {
+                wrapper.set(ToolApprovalEntity::getProjectPath, snapshot.getProjectPath());
+            }
+            if (snapshot.getApprovalKey() != null) {
+                wrapper.set(ToolApprovalEntity::getApprovalKey, snapshot.getApprovalKey());
+            }
+            if (grantScope != null && grantScope.isReusable()) {
+                wrapper.set(ToolApprovalEntity::getGrantScope, grantScope.name());
+            }
             if (userId != null) {
                 wrapper.set(ToolApprovalEntity::getResolvedBy, userId);
             }
@@ -583,45 +520,10 @@ public class ApprovalWorkflowService implements ApplicationRunner {
         afterCommit(() -> {
             snapshot.setStatus(snapshotStatus);
             snapshot.setResolvedAt(resolvedAt);
+            snapshot.setGrantScope(grantScope != null && grantScope.isReusable() ? grantScope.name() : null);
             if (userId != null) snapshot.setResolvedBy(userId);
             if (removeFromMap) approvalService.removeFromMap(snapshot.getPendingId());
         });
-
-        // Phase 4 — workflow bridge. Workflow-scoped approval rows
-        // (pendingId starting with "wf-") are linked to a paused workflow
-        // run via {@code mate_workflow_run_pause.external_approval_id}.
-        // Publishing the resolve here lets the workflow module's listener
-        // call WorkflowResumer with the matching outcome, so an operator
-        // approving in the inbox actually advances the workflow instead
-        // of leaving it paused forever. We publish AFTER commit so a tx
-        // rollback can't fire a stale resume; the row id is stable
-        // because the row already lived in DB.
-        if (events != null && snapshot.getPendingId() != null
-                && snapshot.getPendingId().startsWith("wf-")) {
-            // Look up the row id since the snapshot only carries the string
-            // pendingId, not the long primary key. One quick equality query.
-            try {
-                ToolApprovalEntity row = approvalMapper.selectOne(
-                        new LambdaQueryWrapper<ToolApprovalEntity>()
-                                .eq(ToolApprovalEntity::getPendingId, snapshot.getPendingId()));
-                if (row != null && row.getId() != null) {
-                    final long rowId = row.getId();
-                    final String pendingId = snapshot.getPendingId();
-                    afterCommit(() -> {
-                        try {
-                            events.publishEvent(new WorkflowApprovalResolvedEvent(
-                                    rowId, pendingId, snapshotStatus, /* workspaceId */ null));
-                        } catch (Exception e) {
-                            log.warn("[ApprovalWorkflow] failed to publish workflow-resolved event for {}: {}",
-                                    pendingId, e.getMessage());
-                        }
-                    });
-                }
-            } catch (Exception e) {
-                log.warn("[ApprovalWorkflow] approval row lookup for resolve event failed for {}: {}",
-                        snapshot.getPendingId(), e.getMessage());
-            }
-        }
 
         boolean consumed = "consumed".equals(snapshotStatus);
         ResolveOutcome outcome = consumed
@@ -668,7 +570,8 @@ public class ApprovalWorkflowService implements ApplicationRunner {
     private void persistToDb(String pendingId, String conversationId, String userId,
                              String toolName, String toolArguments,
                              String toolCallPayload, String siblingToolCalls, String agentId,
-                             GuardEvaluation evaluation, String chatOriginJson) {
+                             GuardEvaluation evaluation, String chatOriginJson,
+                             ApprovalGrantContext grantContext) {
         try {
             ToolApprovalEntity entity = new ToolApprovalEntity();
             entity.setPendingId(pendingId);
@@ -682,6 +585,11 @@ public class ApprovalWorkflowService implements ApplicationRunner {
             entity.setStatus("PENDING");
             entity.setCreatedAt(LocalDateTime.now());
             entity.setExpireAt(LocalDateTime.now().plusMinutes(30));
+            if (grantContext != null) {
+                entity.setWorkspaceId(grantContext.workspaceId());
+                entity.setProjectPath(grantContext.projectPath());
+                entity.setApprovalKey(grantContext.approvalKey());
+            }
             // RFC-063r §2.12: persist Memento snapshot. Null when the entry
             // path didn't supply an origin — replay falls back to ChatOrigin.EMPTY.
             entity.setChatOrigin(chatOriginJson);

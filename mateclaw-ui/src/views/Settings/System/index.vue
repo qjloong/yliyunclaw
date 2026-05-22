@@ -278,6 +278,8 @@ function showSavedTip(message: string) {
 .setting-control { width: 220px; display: flex; align-items: center; justify-content: flex-end; }
 .setting-control-full { width: 100%; }
 .form-input { width: 100%; border: 1px solid var(--mc-border); border-radius: 10px; padding: 10px 12px; font-size: 14px; background: var(--mc-bg-sunken); color: var(--mc-text-primary); }
+.status-chip { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 12px; border-radius: 999px; background: var(--mc-primary-bg); color: var(--mc-primary); font-size: 13px; font-weight: 600; max-width: 220px; text-align: center; word-break: break-all; }
+.desktop-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 18px; }
 .form-input:focus { outline: none; border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.1); }
 .form-input:disabled { opacity: 0.5; cursor: not-allowed; }
 

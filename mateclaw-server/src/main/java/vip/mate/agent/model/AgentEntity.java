@@ -31,30 +31,10 @@ public class AgentEntity {
     private String systemPrompt;
 
     /**
-     * Per-Agent model override.
-     *
-     * <p>When non-blank, the runtime resolves this value via
-     * {@code ModelConfigService.resolveModel(...)} — a case-sensitive,
-     * enabled-only lookup against {@code mate_model_config.model_name}.
-     * On match, the resolved entity is used as the primary model in
-     * place of {@code getDefaultModel()}.
-     *
-     * <p>Null / blank → fall back to the global default (preserves the
-     * original behavior). Stale rows whose named model has been removed
-     * or disabled also fall back, since {@code resolveModel} returns the
-     * default when no enabled match is found.
-     *
-     * <p>{@link FieldStrategy#ALWAYS} so a {@code PUT} with explicit null
-     * actually clears the column — the MyBatis-Plus default {@code NOT_NULL}
-     * strategy silently drops null fields from UPDATE, which means a user
-     * who once picked a model could never revert back to "use global default"
-     * via the UI (only by directly editing the DB). Smoke test on 2026-05-02
-     * caught it.
-     *
-     * <p>RFC-03 Lane G1 — re-enables this field after it was silently
-     * deprecated in earlier work; the database column is unchanged.
+     * 保留但不再生效：运行时统一使用全局默认模型（ModelConfigService.getDefaultModel()）。
+     * 该字段为历史残留，仅保留以避免数据库迁移。
      */
-    @TableField(value = "model_name", updateStrategy = FieldStrategy.ALWAYS)
+    @Deprecated
     private String modelName;
 
     /** 最大迭代次数 */
@@ -69,11 +49,40 @@ public class AgentEntity {
     /** 标签（逗号分隔） */
     private String tags;
 
+    /** Built-in/system template id used to create this agent, if any. */
+    private String templateId;
+
+    /** Template version captured at creation time. */
+    private String templateVersion;
+
+    /** Template category, for example coding or education. */
+    private String templateCategory;
+
+    /** Template domain, for example software_engineering. */
+    private String templateDomain;
+
+    /** Bound AgentProfile id from the template manifest. */
+    private String profileId;
+
+    /** Bound CapabilityPack id from the template manifest. */
+    private String capabilityPackId;
+
+    /** Full template manifest snapshot captured when the agent was created. */
+    @TableField("template_metadata_json")
+    private String templateMetadataJson;
+
+    /** Optional JSON array of wiki knowledge base ids explicitly bound to this agent. */
+    @TableField(value = "knowledge_base_ids_json", updateStrategy = FieldStrategy.ALWAYS)
+    private String knowledgeBaseIdsJson;
+
+    @TableField(value = "home_subtitle", updateStrategy = FieldStrategy.ALWAYS)
+    private String homeSubtitle;
+
+    @TableField(value = "home_quick_starts_json", updateStrategy = FieldStrategy.ALWAYS)
+    private String homeQuickStartsJson;
+
     /** 所属工作区 ID（默认 1 = default） */
     private Long workspaceId;
-
-    /** Creator user ID — backfilled on create; lets members delete their own Agents without admin role */
-    private Long creatorUserId;
 
     /** 默认思考深度：off / low / medium / high / max，null 表示跟随模型默认 */
     private String defaultThinkingLevel;

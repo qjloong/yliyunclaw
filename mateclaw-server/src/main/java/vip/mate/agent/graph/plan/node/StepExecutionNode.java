@@ -36,12 +36,7 @@ import java.util.Map;
  * 步骤执行节点
  * <p>
  * 执行当前步骤，使用显式工具执行循环（internalToolExecutionEnabled=false）。
- * 单步最大工具调用次数限制为 {@link #MAX_TOOL_CALLS_PER_STEP} 次，与
- * {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING} 对齐——因此实际生效的上限
- * 永远是 agent 的 {@code max_iterations}（DB 列），单步本身不会先于 agent
- * 的整体预算被打掉。早期 5 次的硬限制对"查新闻 + 整理 Word"这种合理多
- * 工具任务过紧，被 LimitExceededNode 提前拦截后用户看到的是冷冰冰的
- * "工具调用次数超出最大限制"。
+ * 单步最大工具调用次数限制为 8 次，防止无限循环，同时给知识检索型步骤留出足够预算。
  * <p>
  * 支持 NEEDS_APPROVAL 审批流程：对需要审批的工具调用创建 pending，
  * 发出 SSE 事件后立即返回审批提示（非阻塞）。审批通过后通过 replay 重新执行。
@@ -59,29 +54,8 @@ public class StepExecutionNode implements NodeAction {
     private final ConversationWindowManager conversationWindowManager;
     private final String reasoningEffort;
     private final NodeStreamingChatHelper streamingHelper;
-    private final long stepWallClockTimeoutMs;
 
-    /**
-     * Per-step tool-call ceiling, aligned with {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING}.
-     * Matching the agent-level cap means this constant is never the bottleneck —
-     * the agent's own {@code max_iterations} (DB column) will fire first if a
-     * task is genuinely runaway, and a well-budgeted multi-tool step (e.g.
-     * web_search + browser_navigate + browser_read*N + file_write) is no longer
-     * cut short by an arbitrary 5-call ceiling.
-     */
-    private static final int MAX_TOOL_CALLS_PER_STEP = 100;
-
-    /**
-     * Wall-clock budget per step, complementing {@link #MAX_TOOL_CALLS_PER_STEP}.
-     * The call-count cap doesn't help when a single LLM stream stalls or a
-     * concurrency-unsafe tool runs synchronously without a per-tool deadline
-     * (the parallel batch path enforces {@code ToolTimeoutProperties}, but the
-     * single-unsafe path in {@code ToolExecutionExecutor#executeSingleTool}
-     * currently does not). 10 minutes is generous for legitimate long steps
-     * (large file edits, multi-page browser flows) while still cutting off the
-     * pathological cases where the agent appears frozen to the user.
-     */
-    private static final long STEP_WALL_CLOCK_TIMEOUT_MS = 10 * 60 * 1000L;
+    private static final int MAX_TOOL_CALLS_PER_STEP = 8;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
@@ -90,19 +64,6 @@ public class StepExecutionNode implements NodeAction {
                              ChatStreamTracker streamTracker,
                              String reasoningEffort, NodeStreamingChatHelper streamingHelper,
                              ConversationWindowManager conversationWindowManager) {
-        this(chatModel, toolSet, executor, planningService, streamTracker,
-                reasoningEffort, streamingHelper, conversationWindowManager,
-                STEP_WALL_CLOCK_TIMEOUT_MS);
-    }
-
-    /** Test-friendly overload — production callers use the default timeout. */
-    StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
-                      ToolExecutionExecutor executor,
-                      PlanningService planningService,
-                      ChatStreamTracker streamTracker,
-                      String reasoningEffort, NodeStreamingChatHelper streamingHelper,
-                      ConversationWindowManager conversationWindowManager,
-                      long stepWallClockTimeoutMs) {
         this.chatModel = chatModel;
         this.toolSet = toolSet;
         this.executor = executor;
@@ -111,7 +72,6 @@ public class StepExecutionNode implements NodeAction {
         this.conversationWindowManager = conversationWindowManager;
         this.reasoningEffort = reasoningEffort;
         this.streamingHelper = streamingHelper;
-        this.stepWallClockTimeoutMs = stepWallClockTimeoutMs;
     }
 
     @Override
@@ -146,15 +106,6 @@ public class StepExecutionNode implements NodeAction {
         log.info("[StepExecution] Executing step {}/{}: {}", stepIndex + 1, steps.size(), step);
 
         List<GraphEventPublisher.GraphEvent> events = new ArrayList<>();
-        // Iteration boundary for the plan-execute loop: each step is one
-        // iteration that may itself fan out to multiple LLM calls. Reason is
-        // "plan_step" so consumers can distinguish it from ReAct's
-        // "react_step" / "first_turn" markers when both stream into the
-        // same SSE feed.
-        boolean iterationEventsOn = streamTracker == null || streamTracker.isIterationEventsEnabled();
-        if (iterationEventsOn) {
-            events.add(GraphEventPublisher.iterationStart(stepIndex, "plan_step", "parent", null));
-        }
         events.add(GraphEventPublisher.stepStarted(stepIndex, step));
         events.add(GraphEventPublisher.phase("executing", Map.of("stepIndex", stepIndex, "stepTitle", step)));
 
@@ -177,46 +128,24 @@ public class StepExecutionNode implements NodeAction {
         // outputs across the inner loop and break out as soon as one appears.
         List<DirectToolOutput> stepDirectOutputs = new ArrayList<>();
 
-        // Wall-clock budget guards against a single hung LLM stream or
-        // synchronous unsafe-tool call (the per-tool timeout is enforced only
-        // in the parallel batch path of ToolExecutionExecutor). Checked at the
-        // top of each iteration so we never issue another LLM call after the
-        // budget is gone.
-        long stepStartedAtMs = System.currentTimeMillis();
-        boolean wallClockExceeded = false;
-
         try {
             while (toolCallCount < MAX_TOOL_CALLS_PER_STEP) {
-                long elapsedMs = System.currentTimeMillis() - stepStartedAtMs;
-                if (elapsedMs > stepWallClockTimeoutMs) {
-                    log.warn("[StepExecution] Step {} exceeded wall-clock budget " +
-                            "({} ms > {} ms) after {} tool round(s); aborting step",
-                            stepIndex, elapsedMs, stepWallClockTimeoutMs, toolCallCount);
-                    wallClockExceeded = true;
-                    break;
-                }
                 // PR-2 (RFC-049 §2.3.4): always use OpenAiChatOptions so the relay
                 // producer in NodeStreamingChatHelper.doStreamCall can attach the
                 // user-token. Using ToolCallingChatOptions when reasoningEffort is
                 // null (e.g. DeepSeek-Reasoner whose thinking is model-inherent,
                 // or Kimi-K2.5) would bypass the relay and multi-round tool-calls
                 // would 400 again.
-                OpenAiChatOptions oaiOpts = OpenAiChatOptions.builder()
-                        .toolCallbacks(toolSet.callbacks())
-                        .build();
+                OpenAiChatOptions.Builder oaiOptsBuilder = OpenAiChatOptions.builder();
+                if (toolSet != null && !toolSet.callbacks().isEmpty()) {
+                    oaiOptsBuilder.toolCallbacks(toolSet.callbacks());
+                }
+                OpenAiChatOptions oaiOpts = oaiOptsBuilder.build();
                 if (StringUtils.hasText(reasoningEffort)) {
                     oaiOpts.setReasoningEffort(reasoningEffort);
                 }
                 oaiOpts.setInternalToolExecutionEnabled(false);
                 ChatOptions options = oaiOpts;
-
-                if (conversationWindowManager != null) {
-                    // Pass conversationId + workspaceBasePath so oversized
-                    // older tool results can be spilled to disk instead of
-                    // being rewritten into a lossy single-line summary.
-                    messages = conversationWindowManager.pruneOldToolResultsForModelInput(
-                            messages, conversationId, workspaceBasePath);
-                }
 
                 NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCall(
                         chatModel, new Prompt(messages, options), conversationId,
@@ -330,7 +259,8 @@ public class StepExecutionNode implements NodeAction {
             // 处理审批暂停
             if (approvalTriggered) {
                 planningService.updateSubPlanStatus(planId, stepIndex, "awaiting_approval");
-                String awaitingResult = "[APPROVAL_PENDING] " + approvalToolName + " awaiting user decision";
+                String awaitingResult = "已发起权限审批：当前步骤需要执行工具 `" + approvalToolName
+                    + "`。用户批准后应从当前步骤继续；若用户不批准，可改为使用现有知识库/会话材料，或引导用户缩小到可直接读取的目录/文件。";
                 return PlanStateAccessor.output()
                         .currentStepResult(awaitingResult)
                         .currentStepIndex(stepIndex)  // 不递增！下次重放从同一步开始
@@ -361,10 +291,6 @@ public class StepExecutionNode implements NodeAction {
                         "Plan completed via returnDirect tool: " +
                         stepDirectOutputs.get(0).toolName());
                 events.add(GraphEventPublisher.stepCompleted(stepIndex, assembled));
-                if (iterationEventsOn) {
-                    events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
-                            assembled != null ? assembled.length() : 0, 0));
-                }
                 return PlanStateAccessor.output()
                         .currentStepResult(assembled)
                         .currentStepIndex(steps.size())  // 越界 → dispatcher 收束
@@ -382,27 +308,22 @@ public class StepExecutionNode implements NodeAction {
             }
 
             if (finalResult == null) {
-                if (wallClockExceeded) {
-                    finalResult = "步骤执行超过最大耗时限制（"
-                            + (stepWallClockTimeoutMs / 1000) + "秒），已中止本步骤";
-                } else {
-                    finalResult = "步骤执行超过最大工具调用次数限制（" + MAX_TOOL_CALLS_PER_STEP + "次）";
-                    log.warn("[StepExecution] Step {} exceeded max tool call limit", stepIndex);
-                }
+                finalResult = buildGoalOrientedRecovery(step,
+                        "步骤执行超过最大工具调用次数限制（" + MAX_TOOL_CALLS_PER_STEP + "次）",
+                        "tool_call_limit");
+                log.warn("[StepExecution] Step {} exceeded max tool call limit", stepIndex);
             }
 
         } catch (Exception e) {
             log.error("[StepExecution] Step {} execution failed: {}", stepIndex, e.getMessage(), e);
             String shortError = summarizeError(e);
+            String recovery = buildGoalOrientedRecovery(step, shortError, "exception");
             planningService.updateSubPlanFailure(planId, stepIndex, shortError);
             planningService.markPlanFailed(planId, "步骤" + (stepIndex + 1) + " 执行失败：" + shortError);
-            events.add(GraphEventPublisher.stepCompleted(stepIndex, shortError));
-            if (iterationEventsOn) {
-                events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
-                        shortError != null ? shortError.length() : 0, 0));
-            }
+            events.add(GraphEventPublisher.stepCompleted(stepIndex, recovery));
             return PlanStateAccessor.output()
-                    .currentStepResult(shortError)
+                .currentStepResult(recovery)
+                .finalSummary(recovery)
                     .currentPhase("plan_aborted")
                     .contentStreamed(false)
                     .put(MateClawStateKeys.PROMPT_TOKENS, state.value(MateClawStateKeys.PROMPT_TOKENS, 0) + stepPromptTokens)
@@ -413,11 +334,6 @@ public class StepExecutionNode implements NodeAction {
 
         planningService.updateSubPlanResult(planId, stepIndex, finalResult);
         events.add(GraphEventPublisher.stepCompleted(stepIndex, finalResult));
-        if (iterationEventsOn) {
-            events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
-                    finalResult != null ? finalResult.length() : 0,
-                    stepThinking != null ? stepThinking.length() : 0));
-        }
 
         log.info("[StepExecution] Step {}/{} completed: {}",
                 stepIndex + 1, steps.size(),
@@ -479,7 +395,8 @@ public class StepExecutionNode implements NodeAction {
         List<Message> messages = new ArrayList<>();
 
         // Layer 1: System prompt（增强指令）
-        String enhancedSystemPrompt = systemPrompt + """
+        boolean hasTools = toolSet != null && !toolSet.callbacks().isEmpty();
+        String stepGuidance = hasTools ? """
 
                 你是任务执行器，只负责执行"当前步骤"。
 
@@ -492,7 +409,23 @@ public class StepExecutionNode implements NodeAction {
                 6. 当前步骤完成后只返回这一步的结果，不要总结整个任务。
                 7. 如果前一步已经有结果，默认信任，不要重复验证，除非当前步骤必须依赖再次确认。
                 8. 每一步最多做一个必要的检查和一个必要的执行，不要无意义循环。
+                9. 涉及目录/资料时，先建立精简索引，只把当前目标所需的文件或片段带入上下文，避免原文堆满上下文窗口。
+                10. 如果权限、路径、材料缺失或工具失败导致当前步骤受阻，不要只写"无法完成"。优先给出最接近目标的继续路径：发起审批、改用已绑定知识库/会话材料、缩小到子目录、或向用户提出一个最小必要问题。
+                """ : """
+
+                你是任务执行器，只负责执行"当前步骤"。
+
+                硬性规则：
+                1. 不要先解释你要做什么，直接行动。
+                2. 当前模型没有可用工具，请直接根据已有知识回答问题，不要尝试调用任何工具，也不要在回答中分析工具不可用或配置错误的原因。
+                3. 默认不要额外读取 MEMORY.md、PROFILE.md 或 memory/ 每日日记；但如果当前步骤明显依赖历史偏好、既有决策、长期约束或持续上下文，可以做一次必要的记忆读取。
+                4. 不要输出"我来先看一下""现在我来..."之类的过程话术。
+                5. 当前步骤完成后只返回这一步的结果，不要总结整个任务。
+                6. 如果前一步已经有结果，默认信任，不要重复验证，除非当前步骤必须依赖再次确认。
+                7. 每一步最多做一个必要的检查和一个必要的执行，不要无意义循环。
+                8. 涉及目录/资料时，先建立精简索引，只把当前目标所需的文件或片段带入上下文，避免原文堆满上下文窗口。
                 """;
+        String enhancedSystemPrompt = systemPrompt + stepGuidance;
         messages.add(new SystemMessage(enhancedSystemPrompt));
         // 注入运行时上下文（当前时间 + 工作目录）
         messages.add(new UserMessage(RuntimeContextInjector.buildContextMessage(workspaceBasePath)));
@@ -581,6 +514,40 @@ public class StepExecutionNode implements NodeAction {
             return "LLM 限流（rate limit），请稍后重试";
         }
         return msg.length() > 200 ? msg.substring(0, 200) + "…" : msg;
+    }
+
+    private static String buildGoalOrientedRecovery(String step, String issue, String category) {
+        String normalizedStep = step == null || step.isBlank() ? "当前步骤" : step;
+        String normalizedIssue = issue == null || issue.isBlank() ? "出现未明确的问题" : issue;
+        String lower = normalizedIssue.toLowerCase();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("当前还不能直接完成这一步：").append(normalizedStep).append("。\n");
+        sb.append("已识别问题：").append(normalizedIssue).append("。\n\n");
+        sb.append("建议优先继续路径：\n");
+
+        if (lower.contains("approval") || lower.contains("权限") || lower.contains("outside workspace")
+                || lower.contains("denied") || lower.contains("blocked")) {
+            sb.append("1. 若涉及受限目录或敏感操作，先发起/等待审批，审批通过后从当前步骤继续。\n");
+            sb.append("2. 若不方便审批，可询问用户是否改用当前已绑定知识库、Wiki 或本轮会话材料继续生成。\n");
+            sb.append("3. 也可请用户把范围缩小到当前工作区内的具体子目录或关键文件。\n");
+        } else if (lower.contains("知识库") || lower.contains("material") || lower.contains("资料")
+                || lower.contains("not found") || lower.contains("不存在")) {
+            sb.append("1. 先确认是否可改用当前已绑定知识库、Wiki 页面或会话中已上传/已读取的材料继续生成。\n");
+            sb.append("2. 若仍需本地资料，请让用户指定更明确的子目录、文件名，或先上传关键材料。\n");
+            sb.append("3. 对可复用资料，引导用户导入知识库后再继续正式出题。\n");
+        } else if ("tool_call_limit".equals(category)) {
+            sb.append("1. 先缩小本轮范围，例如限定到某个子目录、章节、文件类型或 1-3 个关键文件。\n");
+            sb.append("2. 对目录类任务先建立精简索引，再按目标只读取必要文件，避免继续盲探。\n");
+            sb.append("3. 如果用户接受，也可以先基于现有知识库/会话材料生成一版结果，再补充本地资料细化。\n");
+        } else {
+            sb.append("1. 优先尝试最接近目标的替代路径，而不是直接结束任务。\n");
+            sb.append("2. 可询问用户是否接受基于现有知识库/会话材料先生成一版结果。\n");
+            sb.append("3. 如果必须依赖缺失资源，请提出一个最小必要问题，让任务能继续推进。\n");
+        }
+
+        sb.append("\n不要停在“无法完成”，应继续推动用户在以上路径中选择一种完成任务。");
+        return sb.toString();
     }
 
     /**

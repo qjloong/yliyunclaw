@@ -10,6 +10,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.AgentState;
 import vip.mate.agent.BaseAgent;
@@ -17,6 +18,9 @@ import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.StructuredStreamCapable;
 import vip.mate.agent.context.ConversationWindowManager;
 import vip.mate.agent.graph.state.MateClawStateKeys;
+import vip.mate.harness.model.HarnessExecutionSummary;
+import vip.mate.harness.service.HarnessRunService;
+import vip.mate.tool.image.vision.ImageVisionService;
 import vip.mate.workspace.conversation.ConversationService;
 
 import java.util.*;
@@ -53,47 +57,44 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
     private final CompiledGraph compiledGraph;
     private final org.springframework.ai.chat.model.ChatModel chatModel;
     private final ConversationWindowManager conversationWindowManager;
-    /**
-     * Held only so {@link #buildInitialState} can include the tools schema in
-     * the context-window budget — those bytes ride along on every LLM call
-     * and were previously ignored, making compression decisions fire late.
-     * Nullable for the legacy 5-arg constructor used by older tests.
-     */
-    private final vip.mate.agent.AgentToolSet toolSet;
-
-    public StateGraphReActAgent(ChatClient chatClient, ConversationService conversationService,
-                                CompiledGraph compiledGraph,
-                                org.springframework.ai.chat.model.ChatModel chatModel,
-                                ConversationWindowManager conversationWindowManager) {
-        this(chatClient, conversationService, compiledGraph, chatModel,
-                conversationWindowManager, null);
-    }
+    private final HarnessRunService harnessRunService;
 
     public StateGraphReActAgent(ChatClient chatClient, ConversationService conversationService,
                                 CompiledGraph compiledGraph,
                                 org.springframework.ai.chat.model.ChatModel chatModel,
                                 ConversationWindowManager conversationWindowManager,
-                                vip.mate.agent.AgentToolSet toolSet) {
-        super(chatClient, conversationService);
+                                ImageVisionService imageVisionService,
+                                HarnessRunService harnessRunService) {
+        super(chatClient, conversationService, imageVisionService);
         this.compiledGraph = compiledGraph;
         this.chatModel = chatModel;
         this.conversationWindowManager = conversationWindowManager;
-        this.toolSet = toolSet;
+        this.harnessRunService = harnessRunService;
     }
 
     @Override
     public String chat(String userMessage, String conversationId) {
         setState(AgentState.RUNNING);
+        String harnessRunId = startHarnessRun("chat", conversationId);
         try {
             log.info("[{}] StateGraph chat: conversationId={}", agentName, conversationId);
 
             Map<String, Object> inputs = buildInitialState(userMessage, conversationId);
             Optional<OverAllState> result = compiledGraph.invoke(inputs);
 
+            if (result.isPresent()) {
+                completeHarnessRun(harnessRunId, result.get());
+            } else {
+                HarnessExecutionSummary summary = new HarnessExecutionSummary();
+                summary.setFinishReason("completed");
+                harnessRunService.completeRun(harnessRunId, summary);
+            }
+
             return result
                     .flatMap(s -> s.<String>value(FINAL_ANSWER))
                     .orElse("未能生成回答。");
         } catch (Exception e) {
+            harnessRunService.failRun(harnessRunId, e);
             log.error("[{}] StateGraph chat failed: {}", agentName, e.getMessage(), e);
             setState(AgentState.ERROR);
             throw new RuntimeException("对话失败：" + e.getMessage(), e);
@@ -107,6 +108,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
     @Override
     public Flux<String> chatStream(String userMessage, String conversationId) {
         setState(AgentState.RUNNING);
+        String harnessRunId = startHarnessRun("chat_stream", conversationId);
         try {
             log.info("[{}] StateGraph stream: conversationId={}", agentName, conversationId);
 
@@ -114,7 +116,9 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             String threadId = UUID.randomUUID().toString();
             RunnableConfig config = RunnableConfig.builder().threadId(threadId).build();
 
-            return compiledGraph.stream(inputs, config)
+            Flux<NodeOutput> observedStream = observeHarnessStream(compiledGraph.stream(inputs, config), harnessRunId);
+
+            return observedStream
                     .filter(this::hasFinalAnswer)
                     .map(this::extractFinalAnswer)
                     .filter(content -> content != null && !content.isEmpty())
@@ -126,6 +130,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         setState(AgentState.ERROR);
                     });
         } catch (Exception e) {
+            harnessRunService.failRun(harnessRunId, e);
             log.error("[{}] StateGraph stream setup failed: {}", agentName, e.getMessage(), e);
             setState(AgentState.ERROR);
             return Flux.error(e);
@@ -140,6 +145,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
     @Override
     public String chatWithReplay(String userMessage, String conversationId, String toolCallPayload) {
         setState(AgentState.RUNNING);
+        String harnessRunId = startHarnessRun("chat_replay", conversationId);
         try {
             log.info("[{}] StateGraph chatWithReplay: conversationId={}", agentName, conversationId);
 
@@ -149,10 +155,19 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             }
             Optional<OverAllState> result = compiledGraph.invoke(inputs);
 
+            if (result.isPresent()) {
+                completeHarnessRun(harnessRunId, result.get());
+            } else {
+                HarnessExecutionSummary summary = new HarnessExecutionSummary();
+                summary.setFinishReason("completed");
+                harnessRunService.completeRun(harnessRunId, summary);
+            }
+
             return result
                     .flatMap(s -> s.<String>value(FINAL_ANSWER))
                     .orElse("工具已执行。");
         } catch (Exception e) {
+            harnessRunService.failRun(harnessRunId, e);
             log.error("[{}] StateGraph chatWithReplay failed: {}", agentName, e.getMessage(), e);
             setState(AgentState.ERROR);
             throw new RuntimeException("重放执行失败：" + e.getMessage(), e);
@@ -173,6 +188,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
     public Flux<AgentService.StreamDelta> chatWithReplayStream(String userMessage, String conversationId,
                                                                 String toolCallPayload, String requesterId) {
         setState(AgentState.RUNNING);
+        String harnessRunId = startHarnessRun("chat_replay_stream", conversationId);
         try {
             log.info("[{}] StateGraph chatWithReplayStream: conversationId={}", agentName, conversationId);
 
@@ -183,6 +199,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             }
             String threadId = UUID.randomUUID().toString();
             RunnableConfig config = RunnableConfig.builder().threadId(threadId).build();
+            Flux<NodeOutput> observedStream = observeHarnessStream(compiledGraph.stream(inputs, config), harnessRunId);
 
             AtomicInteger sentEventCount = new AtomicInteger(0);
             AtomicInteger finalPromptTokens = new AtomicInteger(0);
@@ -193,12 +210,8 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             AtomicBoolean finalAnswerEmitted = new AtomicBoolean(false);
             AtomicBoolean finalThinkingEmitted = new AtomicBoolean(false);
             AtomicReference<String> lastEmittedStreamedContent = new AtomicReference<>("");
-            // Silent-termination guard (mirrors chatStructuredStream)
-            AtomicInteger lastIteration = new AtomicInteger(0);
-            AtomicInteger lastSoftCap = new AtomicInteger(0);
-            AtomicBoolean sawLegitimateExit = new AtomicBoolean(false);
 
-            return BaseAgent.routingStartupDelta(inputs).concatWith(compiledGraph.stream(inputs, config)
+            return observedStream
                     .flatMapIterable(output -> {
                         List<AgentService.StreamDelta> deltas = new ArrayList<>();
                         List<GraphEventPublisher.GraphEvent> allEvents = GraphEventPublisher.extractEvents(output);
@@ -243,41 +256,25 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         finalModelName.set(output.state().value(RUNTIME_MODEL_NAME, ""));
                         finalProviderId.set(output.state().value(RUNTIME_PROVIDER_ID, ""));
 
-                        lastIteration.set(output.state().value(CURRENT_ITERATION, 0));
-                        lastSoftCap.set(output.state().value(MAX_ITERATIONS, 0));
-                        if (hasFinalAnswer(output)
-                                || Boolean.TRUE.equals(output.state().value(LIMIT_EXCEEDED, false))
-                                || !output.state().<String>value(FINISH_REASON).orElse("").isBlank()) {
-                            sawLegitimateExit.set(true);
-                        }
-
                         return deltas;
                     })
                     .concatWith(Mono.fromSupplier(() -> {
-                        if (finalPromptTokens.get() > 0 || finalCompletionTokens.get() > 0) {
-                            return AgentService.StreamDelta.event("_usage_final", Map.of(
-                                    "promptTokens", finalPromptTokens.get(),
-                                    "completionTokens", finalCompletionTokens.get(),
-                                    "runtimeModelName", finalModelName.get(),
-                                    "runtimeProviderId", finalProviderId.get()
-                            ));
-                        }
-                        return null;
-                    }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty())))
-                    .doOnComplete(() -> {
-                        setState(AgentState.IDLE);
-                        if (!sawLegitimateExit.get()) {
-                            log.error("[{}] StateGraph replay stream completed WITHOUT a final answer / "
-                                            + "limit_exceeded / finish_reason — likely framework-level silent "
-                                            + "termination. conversationId={}, lastIteration={}, softCap={}",
-                                    agentName, conversationId, lastIteration.get(), lastSoftCap.get());
-                        }
-                    })
+                        String modelName = finalModelName.get();
+                        String providerId = finalProviderId.get();
+                        Map<String, Object> usageData = new HashMap<>();
+                        usageData.put("promptTokens", finalPromptTokens.get());
+                        usageData.put("completionTokens", finalCompletionTokens.get());
+                        usageData.put("runtimeModelName", modelName != null ? modelName : "");
+                        usageData.put("runtimeProviderId", providerId != null ? providerId : "");
+                        return AgentService.StreamDelta.event("_usage_final", usageData);
+                    }).flatMapMany(Flux::just))
+                    .doOnComplete(() -> setState(AgentState.IDLE))
                     .doOnError(e -> {
                         log.error("[{}] StateGraph replay stream error: {}", agentName, e.getMessage());
                         setState(AgentState.ERROR);
                     });
         } catch (Exception e) {
+            harnessRunService.failRun(harnessRunId, e);
             setState(AgentState.ERROR);
             return Flux.error(e);
         }
@@ -292,6 +289,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
     public Flux<AgentService.StreamDelta> chatStructuredStream(String userMessage, String conversationId,
                                                                 String requesterId) {
         setState(AgentState.RUNNING);
+        String harnessRunId = startHarnessRun("chat_structured_stream", conversationId);
         try {
             log.info("[{}] StateGraph structured stream: conversationId={}", agentName, conversationId);
 
@@ -299,6 +297,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             inputs.put(REQUESTER_ID, requesterId != null ? requesterId : "");
             String threadId = UUID.randomUUID().toString();
             RunnableConfig config = RunnableConfig.builder().threadId(threadId).build();
+            Flux<NodeOutput> observedStream = observeHarnessStream(compiledGraph.stream(inputs, config), harnessRunId);
 
             // Lambda 内需要维护已发送事件偏移；这里只是局部可变计数器，不涉及跨会话共享。
             AtomicInteger sentEventCount = new AtomicInteger(0);
@@ -314,19 +313,8 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             // STREAMED_CONTENT 是 REPLACE 策略（每轮 ReasoningNode/SummarizingNode 覆写），
             // 用 lastEmitted 跟踪已发送的值，避免在 ActionNode/ObservationNode 的 NodeOutput 上重复发送同一段内容。
             AtomicReference<String> lastEmittedStreamedContent = new AtomicReference<>("");
-            // Silent-termination guardrail: track the highest iteration / soft cap
-            // observed and whether the graph reached a legitimate exit (final answer
-            // or limit-exceeded node). If the framework completes the Flux without
-            // either signal we log.error in doOnComplete — the graph framework
-            // historically treated its own recursion cap as a silent normal
-            // completion, which masked turns ending mid-execution. Decoupling the
-            // recursionLimit at compile time should keep this from firing, but the
-            // guard catches any future regression instead of letting it ship silent.
-            AtomicInteger lastIteration = new AtomicInteger(0);
-            AtomicInteger lastSoftCap = new AtomicInteger(0);
-            AtomicBoolean sawLegitimateExit = new AtomicBoolean(false);
 
-            return BaseAgent.routingStartupDelta(inputs).concatWith(compiledGraph.stream(inputs, config)
+            return observedStream
                     .flatMapIterable(output -> {
                         List<AgentService.StreamDelta> deltas = new ArrayList<>();
                         // 1. 提取所有累积的事件，只发送新增部分
@@ -380,44 +368,26 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         finalModelName.set(output.state().value(RUNTIME_MODEL_NAME, ""));
                         finalProviderId.set(output.state().value(RUNTIME_PROVIDER_ID, ""));
 
-                        // 4. Silent-termination guard inputs
-                        lastIteration.set(output.state().value(CURRENT_ITERATION, 0));
-                        lastSoftCap.set(output.state().value(MAX_ITERATIONS, 0));
-                        if (hasFinalAnswer(output)
-                                || Boolean.TRUE.equals(output.state().value(LIMIT_EXCEEDED, false))
-                                || !output.state().<String>value(FINISH_REASON).orElse("").isBlank()) {
-                            sawLegitimateExit.set(true);
-                        }
-
                         return deltas;
                     })
                     // 流正常完成后追加内部 usage 事件
                     .concatWith(Mono.fromSupplier(() -> {
-                        if (finalPromptTokens.get() > 0 || finalCompletionTokens.get() > 0) {
-                            return AgentService.StreamDelta.event("_usage_final", Map.of(
-                                    "promptTokens", finalPromptTokens.get(),
-                                    "completionTokens", finalCompletionTokens.get(),
-                                    "runtimeModelName", finalModelName.get(),
-                                    "runtimeProviderId", finalProviderId.get()
-                            ));
-                        }
-                        return null;
-                    }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty())))
-                    .doOnComplete(() -> {
-                        setState(AgentState.IDLE);
-                        if (!sawLegitimateExit.get()) {
-                            log.error("[{}] StateGraph structured stream completed WITHOUT a final answer / "
-                                            + "limit_exceeded / finish_reason — likely framework-level silent "
-                                            + "termination (recursionLimit reached or upstream truncation). "
-                                            + "conversationId={}, lastIteration={}, softCap={}",
-                                    agentName, conversationId, lastIteration.get(), lastSoftCap.get());
-                        }
-                    })
+                        String modelName = finalModelName.get();
+                        String providerId = finalProviderId.get();
+                        Map<String, Object> usageData = new HashMap<>();
+                        usageData.put("promptTokens", finalPromptTokens.get());
+                        usageData.put("completionTokens", finalCompletionTokens.get());
+                        usageData.put("runtimeModelName", modelName != null ? modelName : "");
+                        usageData.put("runtimeProviderId", providerId != null ? providerId : "");
+                        return AgentService.StreamDelta.event("_usage_final", usageData);
+                    }).flatMapMany(Flux::just))
+                    .doOnComplete(() -> setState(AgentState.IDLE))
                     .doOnError(e -> {
                         log.error("[{}] StateGraph structured stream error: {}", agentName, e.getMessage());
                         setState(AgentState.ERROR);
                     });
         } catch (Exception e) {
+            harnessRunService.failRun(harnessRunId, e);
             setState(AgentState.ERROR);
             return Flux.error(e);
         }
@@ -438,33 +408,29 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                     maxInputTokens,
                     chatModel,
                     conversationId,
-                    parsedAgentId,
-                    toolSet != null ? toolSet.callbacks() : null,
-                    workspaceBasePath);
+                    parsedAgentId);
         }
 
         List<Message> messages = new ArrayList<>(historyMessages);
         // 构建当前用户消息：支持 multimodal（如果有图片附件，直接注入 Media）
-        // 同步获取 routing decision，写入 state 供后续节点 / accumulator 读取。
-        BaseAgent.CurrentTurnUserMessage currentTurn = buildCurrentUserMessageWithRouting(conversationId, userMessage);
-        messages.add(currentTurn.userMessage());
+        messages.add(buildCurrentUserMessage(conversationId, userMessage));
 
         Map<String, Object> inputs = new HashMap<>();
         // 输入
         inputs.put(USER_MESSAGE, userMessage);
         inputs.put(CONVERSATION_ID, conversationId);
         inputs.put(AGENT_ID, agentId != null ? agentId : "");
-        inputs.put(WORKSPACE_BASE_PATH, workspaceBasePath != null ? workspaceBasePath : "");
+        vip.mate.agent.context.ChatOrigin origin = vip.mate.agent.context.ChatOriginHolder.get();
+        String effectiveWorkspaceBasePath = origin.workspaceBasePath() != null && !origin.workspaceBasePath().isBlank()
+            ? origin.workspaceBasePath()
+            : workspaceBasePath;
+        inputs.put(WORKSPACE_BASE_PATH, effectiveWorkspaceBasePath != null ? effectiveWorkspaceBasePath : "");
         inputs.put(SYSTEM_PROMPT, systemPrompt != null ? systemPrompt : "你是一个有帮助的AI助手。");
         inputs.put(MESSAGES, messages);
         // 迭代控制：深度思考模式允许更多迭代（思考需要更多轮工具调用）
-        // maxIterations<=0 表示软上限解除（由 LLM 自己决定何时收尾），加分要短路，
-        // 否则 thinking-on 会把"无限"误算成 5（变成"5 步就停"）。
         String thinkingLevel = vip.mate.agent.ThinkingLevelHolder.get();
         boolean thinkingOn = thinkingLevel != null && !"off".equalsIgnoreCase(thinkingLevel);
-        int effectiveMaxIterations = (maxIterations <= 0)
-                ? 0
-                : (thinkingOn ? maxIterations + 5 : maxIterations);
+        int effectiveMaxIterations = thinkingOn ? maxIterations + 5 : maxIterations;
         inputs.put(MAX_ITERATIONS, effectiveMaxIterations);
         inputs.put(CURRENT_ITERATION, 0);
         // 初始化新字段
@@ -485,26 +451,16 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
         inputs.put(RUNTIME_PROVIDER_ID, runtimeProviderId != null ? runtimeProviderId : "");
         inputs.put(TRACE_ID, UUID.randomUUID().toString().substring(0, 8));
 
-        // Multimodal sidecar routing — null when the turn carries no media or
-        // the primary model already covers the modalities. Stored as a Map so
-        // graph state stays JSON-friendly.
-        if (currentTurn.routingDecision() != null
-                && currentTurn.routingDecision().strategy() != vip.mate.llm.routing.model.MultimodalRoutingDecision.Strategy.NONE
-                || (currentTurn.routingDecision() != null && !currentTurn.routingDecision().skipped().isEmpty())) {
-            inputs.put(MateClawStateKeys.ROUTING_DECISION, currentTurn.routingDecision().toMap());
-        }
-
         // RFC-063r §2.5: enrich the originating ChatOrigin with this agent's id
         // and workspace, then write it into graph state so ActionNode +
         // StepExecutionNode can forward it to ToolExecutionExecutor → ToolContext.
-        vip.mate.agent.context.ChatOrigin origin = vip.mate.agent.context.ChatOriginHolder.get();
         Long parsedAgentIdForOrigin = null;
         try { parsedAgentIdForOrigin = agentId != null ? Long.valueOf(agentId) : null; } catch (Exception ignored) {}
         if (parsedAgentIdForOrigin != null) {
             origin = origin.withAgent(parsedAgentIdForOrigin);
         }
         origin = origin.withConversationId(conversationId)
-                .withWorkspace(origin.workspaceId(), workspaceBasePath);
+                .withWorkspace(origin.workspaceId(), effectiveWorkspaceBasePath);
         inputs.put(CHAT_ORIGIN, origin);
         return inputs;
     }
@@ -527,5 +483,183 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             return null;
         }
         return output.state().<String>value(FINAL_THINKING).orElse(null);
+    }
+
+    private String startHarnessRun(String interactionType, String conversationId) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("interactionType", interactionType);
+        metadata.put("agentType", "react");
+        enrichOriginMetadata(metadata, conversationId);
+        return harnessRunService.startRun("react", conversationId, agentId, agentName, metadata).getId();
+    }
+
+    private void enrichOriginMetadata(Map<String, Object> metadata, String conversationId) {
+        vip.mate.agent.context.ChatOrigin origin = vip.mate.agent.context.ChatOriginHolder.get();
+        if (origin != null) {
+            if (origin.requesterId() != null && !origin.requesterId().isBlank()) {
+                metadata.put("requesterId", origin.requesterId());
+            }
+            if (origin.workspaceId() != null) {
+                metadata.put("workspaceId", origin.workspaceId());
+            }
+            if (origin.workspaceBasePath() != null && !origin.workspaceBasePath().isBlank()) {
+                metadata.put("workspaceBasePath", origin.workspaceBasePath());
+            }
+            if (origin.channelId() != null) {
+                metadata.put("channelId", origin.channelId());
+            }
+            if (origin.invocationMetadata() != null && !origin.invocationMetadata().isEmpty()) {
+                metadata.putAll(origin.invocationMetadata());
+            }
+        }
+        if (conversationId != null && conversationId.startsWith("cron:")) {
+            metadata.put("entrypoint", "cron");
+        } else if (origin != null && origin.channelId() != null) {
+            metadata.put("entrypoint", "channel");
+        } else {
+            metadata.put("entrypoint", "web");
+        }
+    }
+
+    private Flux<NodeOutput> observeHarnessStream(Flux<NodeOutput> stream, String runId) {
+        AtomicInteger sentEventCount = new AtomicInteger(0);
+        AtomicReference<NodeOutput> lastOutput = new AtomicReference<>();
+        AtomicBoolean finalized = new AtomicBoolean(false);
+        return stream
+                .doOnNext(output -> {
+                    lastOutput.set(output);
+                    List<GraphEventPublisher.GraphEvent> allEvents = GraphEventPublisher.extractEvents(output);
+                    int newStart = sentEventCount.get();
+                    if (newStart < allEvents.size()) {
+                        harnessRunService.ingestEvents(runId, allEvents.subList(newStart, allEvents.size()));
+                        sentEventCount.set(allEvents.size());
+                    }
+                    harnessRunService.updateSummary(runId, summary -> mergeSummary(summary, buildHarnessSummary(output)));
+                })
+                .doOnError(error -> {
+                    if (finalized.compareAndSet(false, true)) {
+                        harnessRunService.failRun(runId, error);
+                    }
+                })
+                .doFinally(signalType -> {
+                    if (!finalized.compareAndSet(false, true)) {
+                        return;
+                    }
+                    NodeOutput output = lastOutput.get();
+                    if (signalType == SignalType.CANCEL && !isTerminalOutput(output)) {
+                        harnessRunService.interruptRun(runId, "cancelled");
+                        return;
+                    }
+                    harnessRunService.completeRun(runId, buildHarnessSummary(output));
+                });
+    }
+
+    private void completeHarnessRun(String runId, OverAllState state) {
+        List<GraphEventPublisher.GraphEvent> events = state.<List<GraphEventPublisher.GraphEvent>>value(PENDING_EVENTS)
+                .orElse(List.of());
+        harnessRunService.ingestEvents(runId, events);
+        harnessRunService.completeRun(runId, buildHarnessSummary(state));
+    }
+
+    private boolean isTerminalOutput(NodeOutput output) {
+        if (output == null || output.state() == null) {
+            return false;
+        }
+        if (hasFinalAnswer(output)) {
+            return true;
+        }
+        if (Boolean.TRUE.equals(output.state().value(AWAITING_APPROVAL, false))) {
+            return true;
+        }
+        return output.state().<String>value(FINISH_REASON)
+                .filter(reason -> !reason.isBlank())
+                .isPresent();
+    }
+
+    private HarnessExecutionSummary buildHarnessSummary(NodeOutput output) {
+        HarnessExecutionSummary summary = new HarnessExecutionSummary();
+        if (output == null || output.state() == null) {
+            summary.setFinishReason("completed");
+            return summary;
+        }
+        summary.setPromptTokens(output.state().value(PROMPT_TOKENS, 0));
+        summary.setCompletionTokens(output.state().value(COMPLETION_TOKENS, 0));
+        summary.setRuntimeModelName(output.state().value(RUNTIME_MODEL_NAME, ""));
+        summary.setRuntimeProviderId(output.state().value(RUNTIME_PROVIDER_ID, ""));
+        summary.setErrorMessage(output.state().<String>value(ERROR).orElse(null));
+        summary.setFinalAnswerPreview(trimFinalAnswer(output.state().<String>value(FINAL_ANSWER).orElse(null)));
+        summary.setFinishReason(resolveFinishReason(output.state().value(FINISH_REASON, ""),
+                output.state().value(AWAITING_APPROVAL, false),
+                output.state().value(LIMIT_EXCEEDED, false),
+                hasFinalAnswer(output)));
+        return summary;
+    }
+
+    private HarnessExecutionSummary buildHarnessSummary(OverAllState state) {
+        HarnessExecutionSummary summary = new HarnessExecutionSummary();
+        summary.setPromptTokens(state.value(PROMPT_TOKENS, 0));
+        summary.setCompletionTokens(state.value(COMPLETION_TOKENS, 0));
+        summary.setRuntimeModelName(state.value(RUNTIME_MODEL_NAME, ""));
+        summary.setRuntimeProviderId(state.value(RUNTIME_PROVIDER_ID, ""));
+        summary.setErrorMessage(state.<String>value(ERROR).orElse(null));
+        summary.setFinalAnswerPreview(trimFinalAnswer(state.<String>value(FINAL_ANSWER).orElse(null)));
+        boolean hasFinalAnswer = state.<String>value(FINAL_ANSWER).filter(answer -> !answer.isBlank()).isPresent();
+        summary.setFinishReason(resolveFinishReason(state.value(FINISH_REASON, ""),
+                state.value(AWAITING_APPROVAL, false),
+                state.value(LIMIT_EXCEEDED, false),
+                hasFinalAnswer));
+        return summary;
+    }
+
+    private String resolveFinishReason(String finishReason, boolean awaitingApproval,
+                                       boolean limitExceeded, boolean hasFinalAnswer) {
+        if (finishReason != null && !finishReason.isBlank()) {
+            return finishReason;
+        }
+        if (awaitingApproval) {
+            return "awaiting_approval";
+        }
+        if (limitExceeded) {
+            return "limit_exceeded";
+        }
+        if (hasFinalAnswer) {
+            return "completed";
+        }
+        return "completed";
+    }
+
+    private void mergeSummary(HarnessExecutionSummary target, HarnessExecutionSummary source) {
+        if (source.getPromptTokens() > 0) {
+            target.setPromptTokens(source.getPromptTokens());
+        }
+        if (source.getCompletionTokens() > 0) {
+            target.setCompletionTokens(source.getCompletionTokens());
+        }
+        if (source.getRuntimeModelName() != null && !source.getRuntimeModelName().isBlank()) {
+            target.setRuntimeModelName(source.getRuntimeModelName());
+        }
+        if (source.getRuntimeProviderId() != null && !source.getRuntimeProviderId().isBlank()) {
+            target.setRuntimeProviderId(source.getRuntimeProviderId());
+        }
+        if (source.getFinishReason() != null && !source.getFinishReason().isBlank()) {
+            target.setFinishReason(source.getFinishReason());
+        }
+        if (source.getErrorMessage() != null && !source.getErrorMessage().isBlank()) {
+            target.setErrorMessage(source.getErrorMessage());
+        }
+        if (source.getFinalAnswerPreview() != null && !source.getFinalAnswerPreview().isBlank()) {
+            target.setFinalAnswerPreview(source.getFinalAnswerPreview());
+        }
+    }
+
+    private String trimFinalAnswer(String answer) {
+        if (answer == null) {
+            return null;
+        }
+        String normalized = answer.trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return normalized.length() > 1600 ? normalized.substring(0, 1600) + "…" : normalized;
     }
 }

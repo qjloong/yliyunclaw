@@ -33,9 +33,10 @@ public class PlanningService {
      * 创建执行计划（由 StateGraphPlanExecuteAgent 调用）
      */
     @Transactional
-    public PlanEntity createPlan(String agentId, String goal, List<String> steps) {
+    public PlanEntity createPlan(String agentId, String conversationId, String goal, List<String> steps) {
         PlanEntity plan = new PlanEntity();
         plan.setAgentId(agentId);
+        plan.setConversationId(conversationId);
         plan.setGoal(goal);
         plan.setStatus("running");
         plan.setTotalSteps(steps.size());
@@ -51,7 +52,8 @@ public class PlanningService {
             subPlanMapper.insert(sub);
         });
 
-        log.info("Created plan {} with {} steps for agent {}", plan.getId(), steps.size(), agentId);
+        log.info("Created plan {} with {} steps for agent {} in conversation {}",
+            plan.getId(), steps.size(), agentId, conversationId);
         return plan;
     }
 
@@ -165,42 +167,74 @@ public class PlanningService {
      * 审批 replay 上下文：找到最近一条 running 且含 awaiting_approval 步骤的计划，
      * 返回恢复图执行所需的全部状态。
      */
-    public PlanResumeContext findAwaitingApprovalContext() {
-        PlanEntity plan = planMapper.selectOne(new LambdaQueryWrapper<PlanEntity>()
+        public PlanResumeContext findAwaitingApprovalContext(String conversationId) {
+        if (conversationId != null && !conversationId.isBlank()) {
+            List<PlanEntity> conversationPlans = planMapper.selectList(new LambdaQueryWrapper<PlanEntity>()
                 .eq(PlanEntity::getStatus, "running")
-                .orderByDesc(PlanEntity::getCreateTime)
-                .last("LIMIT 1"));
-        if (plan == null) return null;
+                .eq(PlanEntity::getConversationId, conversationId)
+                .orderByDesc(PlanEntity::getCreateTime));
+            for (PlanEntity plan : conversationPlans) {
+            PlanResumeContext ctx = buildResumeContext(plan);
+            if (ctx != null) {
+                log.info("[PlanningService] Found awaiting-approval context by conversation: conversationId={}, planId={}, steps={}, awaitingStep={}",
+                    conversationId, plan.getId(), ctx.steps().size(), ctx.awaitingStepIndex());
+                return ctx;
+            }
+            }
+        }
 
-        List<SubPlanEntity> subPlans = subPlanMapper.selectList(
-                new LambdaQueryWrapper<SubPlanEntity>()
-                        .eq(SubPlanEntity::getPlanId, plan.getId())
-                        .orderByAsc(SubPlanEntity::getStepIndex));
-
-        int awaitingIndex = subPlans.stream()
-                .filter(s -> "awaiting_approval".equals(s.getStatus()))
-                .mapToInt(SubPlanEntity::getStepIndex)
-                .findFirst()
-                .orElse(-1);
-        if (awaitingIndex < 0) return null;
-
-        List<String> steps = subPlans.stream()
-                .map(SubPlanEntity::getDescription)
-                .collect(Collectors.toList());
-
-        List<String> completedResults = subPlans.stream()
-                .filter(s -> "completed".equals(s.getStatus()))
-                .map(s -> String.format("步骤%d结果：%s", s.getStepIndex() + 1, s.getResult()))
-                .collect(Collectors.toList());
-
-        log.info("[PlanningService] Found awaiting-approval context: planId={}, steps={}, awaitingStep={}",
-                plan.getId(), steps.size(), awaitingIndex);
-        return new PlanResumeContext(plan.getId(), steps, awaitingIndex, completedResults);
+        // Legacy fallback for rows created before conversation_id existed.
+        // Only reuse when there is exactly one awaiting-approval candidate.
+        List<PlanResumeContext> candidates = planMapper.selectList(new LambdaQueryWrapper<PlanEntity>()
+                .eq(PlanEntity::getStatus, "running")
+                .orderByDesc(PlanEntity::getCreateTime))
+            .stream()
+            .map(this::buildResumeContext)
+            .filter(java.util.Objects::nonNull)
+            .collect(Collectors.toList());
+        if (candidates.size() == 1) {
+            PlanResumeContext ctx = candidates.get(0);
+            log.warn("[PlanningService] Falling back to legacy global awaiting-approval plan lookup for conversation {}: planId={}",
+                conversationId, ctx.planId());
+            return ctx;
+        }
+        if (candidates.size() > 1) {
+            log.warn("[PlanningService] Multiple awaiting-approval plans found without conversation match for conversation {}; refusing ambiguous replay context",
+                conversationId);
+        }
+        return null;
     }
 
     /** replay 恢复上下文 DTO */
     public record PlanResumeContext(Long planId, List<String> steps, int awaitingStepIndex,
                                     List<String> completedResults) {}
+
+        private PlanResumeContext buildResumeContext(PlanEntity plan) {
+        if (plan == null) return null;
+
+        List<SubPlanEntity> subPlans = subPlanMapper.selectList(
+            new LambdaQueryWrapper<SubPlanEntity>()
+                .eq(SubPlanEntity::getPlanId, plan.getId())
+                .orderByAsc(SubPlanEntity::getStepIndex));
+
+        int awaitingIndex = subPlans.stream()
+            .filter(s -> "awaiting_approval".equals(s.getStatus()))
+            .mapToInt(SubPlanEntity::getStepIndex)
+            .findFirst()
+            .orElse(-1);
+        if (awaitingIndex < 0) return null;
+
+        List<String> steps = subPlans.stream()
+            .map(SubPlanEntity::getDescription)
+            .collect(Collectors.toList());
+
+        List<String> completedResults = subPlans.stream()
+            .filter(s -> "completed".equals(s.getStatus()))
+            .map(s -> String.format("步骤%d结果：%s", s.getStepIndex() + 1, s.getResult()))
+            .collect(Collectors.toList());
+
+        return new PlanResumeContext(plan.getId(), steps, awaitingIndex, completedResults);
+        }
 
     private SubPlanEntity getSubPlan(Long planId, int stepIndex) {
         return subPlanMapper.selectOne(new LambdaQueryWrapper<SubPlanEntity>()

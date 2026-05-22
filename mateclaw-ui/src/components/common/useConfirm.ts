@@ -1,7 +1,7 @@
 import { shallowRef } from 'vue'
 
 /**
- * MateClaw confirm dialog — imperative API.
+ * Meta Y confirm dialog — imperative API.
  *
  * Usage:
  *   const ok = await mcConfirm({

@@ -391,8 +391,11 @@ loadProviderNames().then(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: auto;
-  padding-bottom: 24px;
+  min-height: max-content;
+  overflow: visible;
+  padding-bottom: 32px;
+  padding-right: 2px;
+  box-sizing: border-box;
 }
 
 .config-header { padding-bottom: 10px; border-bottom: 1px solid var(--mc-border-light); }

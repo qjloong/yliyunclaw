@@ -1,0 +1,67 @@
+{
+  "name": "metay-desktop",
+  "version": "1.1.137-SNAPSHOT",
+  "private": true,
+  "description": "Meta Y Electron desktop shell for local packaging and testing",
+  "author": "Local Meta Y Desktop Test Shell",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env MATECLAW_BACKEND_URL=http://127.0.0.1:18088 electron .",
+    "dev:ui": "cross-env MATECLAW_RENDERER_URL=http://127.0.0.1:5173 MATECLAW_BACKEND_URL=http://127.0.0.1:18088 electron .",
+    "build:renderer": "pnpm --dir ../mateclaw-ui build:desktop",
+    "pack": "pnpm run build:renderer && electron-builder --dir",
+    "dist": "pnpm run build:renderer && electron-builder --win nsis portable",
+    "dist:nsis": "pnpm run build:renderer && electron-builder --win nsis",
+    "dist:portable": "pnpm run build:renderer && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "vip.mate.metay.desktop",
+    "productName": "Meta Y Desktop",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "electron/**/*",
+      "renderer-dist/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "win": {
+      "icon": "../mateclaw-ui/public/logo/mateclaw_logo.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "serve-handler": "^6.1.6"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^35.7.5",
+    "electron-builder": "^25.1.8"
+  },
+  "packageManager": "pnpm@9.12.2+sha512.22721b3a11f81661ae1ec68ce1a7b879425a1ca5b991c975b074ac220b187ce56c708fe5db69f4c962c989452eee76c82877f4ee80f474cebd61ee13461b6228"
+}

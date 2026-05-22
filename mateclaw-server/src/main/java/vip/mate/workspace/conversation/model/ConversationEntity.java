@@ -45,6 +45,30 @@ public class ConversationEntity {
     /** 所属工作区 ID（默认 1 = default） */
     private Long workspaceId;
 
+    /**
+     * 会话级工作目录覆盖；为空时回退到工作区 basePath。
+     */
+    @TableField(value = "working_directory", updateStrategy = FieldStrategy.ALWAYS)
+    private String workingDirectory;
+
+    /**
+    * 会话级运行模式；default = 跟随 Agent 默认类型，plan/coding = 强制走 Plan-Execute。
+     */
+    @TableField(value = "runtime_mode", updateStrategy = FieldStrategy.ALWAYS)
+    private String runtimeMode;
+
+    /**
+     * 会话级运行时 Provider 覆盖；为空时回退到系统默认模型。
+     */
+    @TableField(value = "runtime_provider_id", updateStrategy = FieldStrategy.ALWAYS)
+    private String runtimeProviderId;
+
+    /**
+     * 会话级运行时模型覆盖；为空时回退到系统默认模型。
+     */
+    @TableField(value = "runtime_model_name", updateStrategy = FieldStrategy.ALWAYS)
+    private String runtimeModelName;
+
     /** 父会话 ID（委派场景下，子会话记录其父会话的 conversationId） */
     private String parentConversationId;
 

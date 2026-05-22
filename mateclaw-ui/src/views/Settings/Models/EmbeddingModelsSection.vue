@@ -14,55 +14,83 @@
     </h3>
 
     <div v-if="loading" class="loading-state">加载中...</div>
-    <div v-else-if="models.length === 0" class="empty-state">
-      暂无可用的 Embedding 模型。系统已预置 DashScope Text Embedding v3/v2，
-      请在"云端模型"下的 <strong>DashScope</strong> Provider 中配置 API Key。
-    </div>
-
-    <div v-else class="embedding-grid">
-      <div v-for="model in models" :key="model.id" class="embedding-card">
-        <div class="embedding-card-header">
-          <div class="embedding-name">
-            {{ model.name }}
-            <span v-if="String(model.id) === defaultModelId" class="default-badge">默认</span>
-          </div>
-          <span class="provider-badge">{{ model.provider }}</span>
+    <template v-else>
+      <div class="embedding-add-box">
+        <div class="embedding-add-box__title">手动添加 Embedding 模型</div>
+        <div class="embedding-add-box__hint">
+          选一个已启用的 Provider，然后填写该 Provider 下的向量模型名称。
+          例如 Ollama 可填写 <strong>nomic-embed-text</strong>、<strong>bge-m3</strong>。
         </div>
-        <div class="embedding-model-id">{{ model.modelName }}</div>
-        <div v-if="model.description" class="embedding-desc">{{ model.description }}</div>
-
-        <!-- 测试结果 -->
-        <div v-if="testResults[String(model.id)]" class="test-result" :class="testResults[String(model.id)].success ? 'success' : 'error'">
-          <span v-if="testResults[String(model.id)].success">
-            ✓ 测试通过 · 维度 {{ testResults[String(model.id)].dimensions }}
-          </span>
-          <span v-else>✗ {{ testResults[String(model.id)].message }}</span>
-        </div>
-
-        <div class="embedding-actions">
-          <button
-            class="card-btn test-btn"
-            :disabled="testingId === String(model.id)"
-            @click="onTest(model)"
-          >
-            {{ testingId === String(model.id) ? '测试中...' : '测试连通性' }}
-          </button>
-          <button
-            v-if="String(model.id) !== defaultModelId"
-            class="card-btn"
-            @click="onSetDefault(model)"
-          >
-            设为系统默认
+        <div class="embedding-add-grid">
+          <select v-model="addProviderId" class="embedding-input" :disabled="adding || selectableProviders.length === 0">
+            <option value="" disabled>选择 Provider</option>
+            <option v-for="provider in selectableProviders" :key="provider.id" :value="provider.id">
+              {{ provider.name }} ({{ provider.id }})
+            </option>
+          </select>
+          <input v-model="addModelId" class="embedding-input" placeholder="模型 ID，例如 nomic-embed-text" :disabled="adding || selectableProviders.length === 0" />
+          <input v-model="addModelName" class="embedding-input" placeholder="显示名称（可选）" :disabled="adding || selectableProviders.length === 0" />
+          <button class="card-btn test-btn embedding-add-btn" :disabled="adding || !addProviderId || !addModelId.trim()" @click="onAddEmbeddingModel">
+            {{ adding ? '添加中...' : '添加 Embedding 模型' }}
           </button>
         </div>
       </div>
-    </div>
+
+      <div v-if="models.length === 0" class="empty-state">
+        暂无可用的 Embedding 模型。系统已预置 DashScope Text Embedding v3/v2，
+        请在"云端模型"下的 <strong>DashScope</strong> Provider 中配置 API Key。
+      </div>
+
+      <div v-else class="embedding-grid">
+        <div v-for="model in models" :key="model.id" class="embedding-card">
+          <div class="embedding-card-header">
+            <div class="embedding-name">
+              {{ model.name }}
+              <span v-if="String(model.id) === defaultModelId" class="default-badge">默认</span>
+            </div>
+            <span class="provider-badge">{{ model.provider }}</span>
+          </div>
+          <div class="embedding-model-id">{{ model.modelName }}</div>
+          <div v-if="model.description" class="embedding-desc">{{ model.description }}</div>
+
+          <!-- 测试结果 -->
+          <div v-if="testResults[String(model.id)]" class="test-result" :class="testResults[String(model.id)].success ? 'success' : 'error'">
+            <span v-if="testResults[String(model.id)].success">
+              ✓ 测试通过 · 维度 {{ testResults[String(model.id)].dimensions }}
+            </span>
+            <span v-else>✗ {{ testResults[String(model.id)].message }}</span>
+          </div>
+
+          <div class="embedding-actions">
+            <button
+              class="card-btn test-btn"
+              :disabled="testingId === String(model.id)"
+              @click="onTest(model)"
+            >
+              {{ testingId === String(model.id) ? '测试中...' : '测试连通性' }}
+            </button>
+            <button
+              v-if="String(model.id) !== defaultModelId"
+              class="card-btn"
+              @click="onSetDefault(model)"
+            >
+              设为系统默认
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { modelApi } from '@/api'
+import type { ProviderInfo } from '@/types'
+
+const props = defineProps<{
+  providers?: ProviderInfo[]
+}>()
 
 interface EmbeddingModel {
   id: string | number
@@ -79,6 +107,23 @@ const loading = ref(false)
 const defaultModelId = ref<string>('')
 const testingId = ref<string>('')
 const testResults = ref<Record<string, { success: boolean; dimensions?: number; message?: string }>>({})
+const addProviderId = ref('')
+const addModelId = ref('')
+const addModelName = ref('')
+const adding = ref(false)
+
+const selectableProviders = computed(() => props.providers || [])
+
+function ensureSelectedProvider() {
+  if (!selectableProviders.value.length) {
+    addProviderId.value = ''
+    return
+  }
+  if (!addProviderId.value || !selectableProviders.value.some((p: ProviderInfo) => p.id === addProviderId.value)) {
+    const preferred = selectableProviders.value.find((p: ProviderInfo) => p.id === 'ollama')
+    addProviderId.value = preferred?.id || selectableProviders.value[0].id
+  }
+}
 
 async function loadAll() {
   loading.value = true
@@ -93,6 +138,25 @@ async function loadAll() {
     console.error('[EmbeddingModels] Load failed:', e?.message)
   } finally {
     loading.value = false
+  }
+}
+
+async function onAddEmbeddingModel() {
+  if (!addProviderId.value || !addModelId.value.trim()) return
+  adding.value = true
+  try {
+    await modelApi.addProviderModel(addProviderId.value, {
+      id: addModelId.value.trim(),
+      name: (addModelName.value || addModelId.value).trim(),
+      modelType: 'embedding',
+    })
+    addModelId.value = ''
+    addModelName.value = ''
+    await loadAll()
+  } catch (e: any) {
+    console.error('[EmbeddingModels] Add failed:', e?.message)
+  } finally {
+    adding.value = false
   }
 }
 
@@ -125,7 +189,15 @@ async function onSetDefault(model: EmbeddingModel) {
   }
 }
 
-onMounted(loadAll)
+onMounted(async () => {
+  ensureSelectedProvider()
+  await loadAll()
+})
+
+watch(selectableProviders, () => {
+  ensureSelectedProvider()
+}, { immediate: true })
+
 defineExpose({ refresh: loadAll })
 </script>
 
@@ -161,6 +233,46 @@ defineExpose({ refresh: loadAll })
   color: var(--mc-text-tertiary);
   background: var(--mc-bg-sunken);
   border-radius: 8px;
+}
+.embedding-add-box {
+  margin-bottom: 14px;
+  padding: 14px;
+  background: var(--mc-bg-surface);
+  border: 1px solid var(--mc-border);
+  border-radius: 10px;
+}
+.embedding-add-box__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+}
+.embedding-add-box__hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--mc-text-secondary);
+}
+.embedding-add-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.embedding-input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-primary);
+}
+.embedding-input:focus {
+  outline: none;
+  border-color: var(--mc-primary);
+}
+.embedding-add-btn {
+  min-width: 160px;
 }
 .empty-state strong { color: var(--mc-primary); }
 
@@ -250,5 +362,17 @@ defineExpose({ refresh: loadAll })
   background: var(--mc-primary-bg);
   color: var(--mc-primary);
   border-color: var(--mc-primary);
+}
+
+@media (max-width: 1100px) {
+  .embedding-add-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .embedding-add-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

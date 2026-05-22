@@ -20,7 +20,6 @@
           'attachment-chip--video': attachment.contentType?.startsWith('video/'),
         }"
       >
-        <!-- 图片缩略图预览（优先用本地 previewUrl，避免 JWT 认证问题） -->
         <img
           v-if="attachment.contentType?.startsWith('image/') && (attachment.previewUrl || attachment.url)"
           :src="attachment.previewUrl || attachment.url"
@@ -28,7 +27,6 @@
           class="attachment-chip__thumbnail"
           loading="lazy"
         />
-        <!-- 视频缩略图预览 -->
         <video
           v-else-if="attachment.contentType?.startsWith('video/') && (attachment.previewUrl || attachment.url)"
           :src="attachment.previewUrl || attachment.url"
@@ -45,6 +43,7 @@
         >
           <span>{{ attachment.contentType === 'inode/directory' ? '📁 ' : '' }}{{ attachment.name }}</span>
           <span v-if="attachment.size">{{ formatFileSize(attachment.size) }}</span>
+          <span v-if="attachment.contextHint" class="attachment-chip__hint">{{ attachment.contextHint }}</span>
           <span v-else-if="attachment.contentType === 'inode/directory'" class="attachment-chip__path">{{ attachment.path }}</span>
         </component>
         <button
@@ -67,6 +66,14 @@
         <span class="approval-bar__tool">{{ getToolLabel(pendingApproval.toolName) }}</span>
         <span class="approval-bar__label">{{ t('chat.approvalExecute') }}</span>
       </div>
+      <label class="approval-bar__scope">
+        <span class="approval-bar__scope-label">{{ t('chat.approvalRemember') }}</span>
+        <select v-model="approvalScope" class="approval-bar__scope-select">
+          <option value="once">{{ t('chat.approvalScopeOnce') }}</option>
+          <option value="conversation">{{ t('chat.approvalScopeConversation') }}</option>
+          <option value="project">{{ t('chat.approvalScopeProject') }}</option>
+        </select>
+      </label>
       <div class="approval-bar__actions">
         <button
           type="button"
@@ -79,7 +86,7 @@
         <button
           type="button"
           class="approval-bar__btn approval-bar__btn--approve"
-          @click="emit('approve', pendingApproval.pendingId)"
+          @click="emit('approve', { pendingId: pendingApproval.pendingId, scope: approvalScope })"
         >
           <el-icon><Select /></el-icon>
           {{ t('chat.approve') }}
@@ -89,7 +96,6 @@
 
     <!-- 输入区域（运行中也可输入） -->
     <div v-else class="input-area-container">
-      <!-- 排队消息指示器 -->
       <div v-if="queuedMessage && queuedMessage.status !== 'cancelled'" class="queued-indicator">
         <div class="queued-indicator__info">
           <el-icon><Timer /></el-icon>
@@ -106,90 +112,125 @@
         >{{ t('chat.queuedCancel') }}</button>
       </div>
 
+      <div v-if="shortcutPanelVisible" class="shortcut-panel" role="listbox">
+        <div class="shortcut-panel__header">
+          {{ activeShortcutKind === 'mention' ? t('chat.shortcuts.mentionHeader') : t('chat.shortcuts.commandHeader') }}
+        </div>
+        <button
+          v-for="(item, index) in filteredShortcutItems"
+          :key="item.id"
+          type="button"
+          class="shortcut-item"
+          :class="{ 'is-active': index === activeShortcutIndex }"
+          @mousedown.prevent
+          @click="applyShortcut(item)"
+        >
+          <span class="shortcut-item__icon">{{ item.icon || (activeShortcutKind === 'mention' ? '@' : '/') }}</span>
+          <span class="shortcut-item__body">
+            <span class="shortcut-item__label">{{ item.label }}</span>
+            <span v-if="item.description" class="shortcut-item__desc">{{ item.description }}</span>
+          </span>
+          <span class="shortcut-item__value">{{ item.value }}</span>
+        </button>
+        <div v-if="filteredShortcutItems.length === 0" class="shortcut-panel__empty">
+          {{ t('chat.shortcuts.noMatch') }}
+        </div>
+      </div>
+
       <div class="input-area">
-      <textarea
-        ref="textareaRef"
-        v-model="inputValue"
-        class="chat-textarea"
-        :placeholder="inputPlaceholder"
-        :disabled="disabled"
-        :maxlength="maxLength"
-        rows="1"
-        @keydown.enter.exact.prevent="handleEnter"
-        @compositionstart="isComposing = true"
-        @compositionend="isComposing = false"
-        @focus="isFocused = true"
-        @blur="isFocused = false"
-        @input="autoResize"
-        @paste="handlePaste"
-      ></textarea>
+        <textarea
+          ref="textareaRef"
+          v-model="inputValue"
+          class="chat-textarea"
+          :placeholder="inputPlaceholder"
+          :disabled="disabled"
+          :maxlength="maxLength"
+          rows="1"
+          @keydown="handleKeydown"
+          @compositionstart="isComposing = true"
+          @compositionend="isComposing = false"
+          @focus="handleFocus"
+          @blur="handleBlur"
+          @input="handleInput"
+          @click="syncShortcutState"
+          @keyup="handleKeyup"
+          @paste="handlePaste"
+        ></textarea>
 
-      <div class="input-actions">
-        <!-- 附件按钮 -->
-        <button
-          v-if="enableAttachments"
-          type="button"
-          class="action-btn attach-btn"
-          :disabled="disabled || loading || uploading"
-          @click="openFilePicker"
-        >
-          <el-icon><Paperclip /></el-icon>
-        </button>
+        <div class="input-actions">
+          <button
+            v-if="enableAttachments && showAttachmentButton"
+            type="button"
+            class="action-btn attach-btn"
+            :disabled="disabled || loading || uploading"
+            @click="openFilePicker"
+          >
+            <el-icon><Paperclip /></el-icon>
+          </button>
 
-        <!-- 深度思考开关 (RFC-049 PR-1-UI: 不支持 reasoning_effort 的模型灰态) -->
-        <button
-          type="button"
-          class="action-btn thinking-btn"
-          :class="{ active: thinkingEnabled && thinkingSupported, unsupported: !thinkingSupported }"
-          :disabled="disabled || !thinkingSupported"
-          @click="thinkingSupported && emit('toggle-thinking')"
-          :title="!thinkingSupported
-            ? t('chat.thinkingUnsupported')
-            : (thinkingEnabled ? t('chat.thinkingOn') : t('chat.thinkingOff'))"
-        >
-          <el-icon><MagicStick /></el-icon>
-        </button>
+          <button
+            v-if="showThinkingButton"
+            type="button"
+            class="action-btn thinking-btn"
+            :class="{ active: thinkingEnabled && thinkingSupported, unsupported: !thinkingSupported }"
+            :disabled="disabled || !thinkingSupported"
+            @click="thinkingSupported && emit('toggle-thinking')"
+            :title="!thinkingSupported
+              ? t('chat.thinkingUnsupported')
+              : (thinkingEnabled ? t('chat.thinkingOn') : t('chat.thinkingOff'))"
+          >
+            <el-icon><MagicStick /></el-icon>
+          </button>
 
-        <!-- Talk Mode 按钮 -->
-        <button
-          v-if="enableTalkMode"
-          type="button"
-          class="action-btn talk-btn"
-          :disabled="disabled || loading"
-          @click="emit('talk')"
-          :title="t('talk.title')"
-        >
-          <el-icon><Microphone /></el-icon>
-        </button>
+          <button
+            v-if="enableTalkMode && showTalkButton"
+            type="button"
+            class="action-btn talk-btn"
+            :disabled="disabled || loading"
+            @click="emit('talk')"
+            :title="t('talk.title')"
+          >
+            <el-icon><Microphone /></el-icon>
+          </button>
 
-        <!-- 发送/停止/中断按钮 -->
-        <button
-          type="button"
-          class="action-btn send-btn"
-          :class="sendBtnClass"
-          :disabled="!canSend && !loading"
-          @click="handleSubmit"
-        >
-          <!-- 有输入时始终显示发送图标（运行中发送 = interrupt） -->
-          <el-icon v-if="canSend"><Promotion /></el-icon>
-          <!-- 运行中无输入：停止图标 -->
-          <el-icon v-else-if="loading"><CloseBold /></el-icon>
-          <!-- 空闲无输入 -->
-          <el-icon v-else><Promotion /></el-icon>
-        </button>
+          <button
+            type="button"
+            class="action-btn send-btn"
+            :class="sendBtnClass"
+            :disabled="!canSend && !loading"
+            @click="handleSubmit"
+          >
+            <el-icon v-if="canSend"><Promotion /></el-icon>
+            <el-icon v-else-if="loading"><CloseBold /></el-icon>
+            <el-icon v-else><Promotion /></el-icon>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="$slots['toolbar-left'] || $slots['toolbar-right']" class="composer-toolbar">
+        <div class="composer-toolbar__left">
+          <slot name="toolbar-left"></slot>
+        </div>
+        <div class="composer-toolbar__right">
+          <slot name="toolbar-right"></slot>
+        </div>
       </div>
     </div>
-    </div>
 
-    <!-- 底部信息 -->
     <div class="input-footer">
-      <span class="input-hint">{{ hint }}</span>
-      <span v-if="maxLength" class="input-length">
-        {{ inputValue.length }}/{{ maxLength }}
-      </span>
+      <div class="input-footer__left">
+        <slot name="footer-left">
+          <span class="input-hint">{{ hint }}</span>
+        </slot>
+      </div>
+      <div class="input-footer__right">
+        <slot name="footer-right"></slot>
+        <span v-if="maxLength" class="input-length">
+          {{ inputValue.length }}/{{ maxLength }}
+        </span>
+      </div>
     </div>
 
-    <!-- 隐藏的文件输入 -->
     <input
       ref="fileInputRef"
       type="file"
@@ -206,7 +247,14 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CloseBold, MagicStick, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
 import { useToolLabel } from '@/composables/useToolLabel'
-import type { ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage } from '@/types'
+import type { ApprovalDecisionPayload, ApprovalDecisionScope, ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage, ChatShortcutItem } from '@/types'
+
+interface ActiveShortcutQuery {
+  kind: 'command' | 'mention'
+  query: string
+  start: number
+  end: number
+}
 
 interface Props {
   /** 输入值 */
@@ -239,8 +287,18 @@ interface Props {
   queueSize?: number
   /** 是否启用 Talk Mode 按钮 */
   enableTalkMode?: boolean
+  /** 是否显示附件按钮 */
+  showAttachmentButton?: boolean
+  /** 是否显示深度思考按钮 */
+  showThinkingButton?: boolean
+  /** 是否显示 Talk Mode 按钮 */
+  showTalkButton?: boolean
   /** 深度思考开关状态 */
   thinkingEnabled?: boolean
+  /** slash 命令候选 */
+  shortcutCommands?: ChatShortcutItem[]
+  /** @ 引用候选 */
+  shortcutMentions?: ChatShortcutItem[]
   /**
    * RFC-049 PR-1-UI: 当前 runtime 模型是否支持 reasoning_effort。false 时按钮灰掉，
    * 不响应点击，tooltip 提示当前模型不支持深度思考。默认 true 以保持向后兼容。
@@ -263,7 +321,12 @@ const props = withDefaults(defineProps<Props>(), {
   queuedMessage: null,
   queueSize: 0,
   enableTalkMode: false,
+  showAttachmentButton: true,
+  showThinkingButton: true,
+  showTalkButton: true,
   thinkingEnabled: false,
+  shortcutCommands: () => [],
+  shortcutMentions: () => [],
   thinkingSupported: true,
 })
 
@@ -274,7 +337,7 @@ const emit = defineEmits<{
   'cancel-queued': []
   'file-select': [files: File[]]
   'attachment-remove': [storedName: string]
-  approve: [pendingId: string]
+  approve: [payload: ApprovalDecisionPayload]
   deny: [pendingId: string]
   talk: []
   'toggle-thinking': []
@@ -289,6 +352,13 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isFocused = ref(false)
 const isComposing = ref(false)
+const activeShortcutQuery = ref<ActiveShortcutQuery | null>(null)
+const activeShortcutIndex = ref(0)
+const approvalScope = ref<ApprovalDecisionScope>('once')
+
+watch(() => props.pendingApproval?.pendingId, () => {
+  approvalScope.value = 'once'
+})
 
 // 输入值处理
 const inputValue = computed({
@@ -309,6 +379,22 @@ const inputPlaceholder = computed(() => {
   }
   return props.placeholder
 })
+
+const activeShortcutKind = computed<'command' | 'mention' | null>(() => activeShortcutQuery.value?.kind || null)
+
+const filteredShortcutItems = computed(() => {
+  const query = activeShortcutQuery.value
+  if (!query) return []
+  const source = query.kind === 'mention' ? props.shortcutMentions : props.shortcutCommands
+  const keyword = query.query.trim().toLowerCase()
+  if (!keyword) return source
+  return source.filter((item) => {
+    const haystacks = [item.label, item.value, item.description || '', ...(item.aliases || [])]
+    return haystacks.some((entry) => entry.toLowerCase().includes(keyword))
+  })
+})
+
+const shortcutPanelVisible = computed(() => !!activeShortcutQuery.value)
 
 // 处理提交
 const handleSubmit = () => {
@@ -348,8 +434,134 @@ const sendBtnClass = computed(() => ({
   'is-interrupt': props.loading && canSend.value,
 }))
 
-// 处理回车键
-const handleEnter = () => {
+function closeShortcutPanel() {
+  activeShortcutQuery.value = null
+  activeShortcutIndex.value = 0
+}
+
+function getTokenBoundaryEnd(text: string, startIndex: number) {
+  let cursor = startIndex
+  while (cursor < text.length && !/\s/.test(text[cursor])) {
+    cursor += 1
+  }
+  return cursor
+}
+
+function detectShortcutQuery(): ActiveShortcutQuery | null {
+  if (props.disabled || props.pendingApproval) return null
+  const textarea = textareaRef.value
+  const text = inputValue.value || ''
+  const cursor = textarea?.selectionStart ?? text.length
+  const beforeCursor = text.slice(0, cursor)
+  const commandMatch = beforeCursor.match(/(^|\s)(\/[^\s]*)$/)
+  if (commandMatch) {
+    const token = commandMatch[2]
+    const start = cursor - token.length
+    return {
+      kind: 'command',
+      query: token.slice(1),
+      start,
+      end: getTokenBoundaryEnd(text, cursor),
+    }
+  }
+  const mentionMatch = beforeCursor.match(/(^|\s)(@[^\s@]*)$/)
+  if (mentionMatch) {
+    const token = mentionMatch[2]
+    const start = cursor - token.length
+    return {
+      kind: 'mention',
+      query: token.slice(1),
+      start,
+      end: getTokenBoundaryEnd(text, cursor),
+    }
+  }
+  return null
+}
+
+function syncShortcutState() {
+  activeShortcutQuery.value = detectShortcutQuery()
+  activeShortcutIndex.value = 0
+}
+
+function setCaret(position: number) {
+  nextTick(() => {
+    const textarea = textareaRef.value
+    if (!textarea) return
+    textarea.focus()
+    textarea.setSelectionRange(position, position)
+  })
+}
+
+function applyShortcut(item: ChatShortcutItem) {
+  const query = activeShortcutQuery.value
+  if (!query) return
+  const replacement = `${item.value}${item.suffix ?? ' '}`
+  const nextValue = `${inputValue.value.slice(0, query.start)}${replacement}${inputValue.value.slice(query.end)}`
+  emit('update:modelValue', nextValue)
+  closeShortcutPanel()
+  setCaret(query.start + replacement.length)
+}
+
+function moveShortcutSelection(offset: number) {
+  const total = filteredShortcutItems.value.length
+  if (!total) return
+  activeShortcutIndex.value = (activeShortcutIndex.value + offset + total) % total
+}
+
+function handleFocus() {
+  isFocused.value = true
+  syncShortcutState()
+}
+
+function handleBlur() {
+  isFocused.value = false
+  closeShortcutPanel()
+}
+
+function handleInput() {
+  autoResize()
+  syncShortcutState()
+}
+
+function handleKeyup(event: KeyboardEvent) {
+  if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+    return
+  }
+  syncShortcutState()
+}
+
+// 统一处理键盘事件
+const handleKeydown = (event: KeyboardEvent) => {
+  const isPlainEnter = event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
+
+  if (shortcutPanelVisible.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveShortcutSelection(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveShortcutSelection(-1)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeShortcutPanel()
+      return
+    }
+    if (event.key === 'Tab' || isPlainEnter) {
+      const selected = filteredShortcutItems.value[activeShortcutIndex.value]
+      if (selected) {
+        event.preventDefault()
+        applyShortcut(selected)
+        return
+      }
+    }
+  }
+
+  if (!isPlainEnter) return
+  event.preventDefault()
   if (isComposing.value) return
   handleSubmit()
 }
@@ -367,7 +579,20 @@ const autoResize = () => {
 }
 
 // 监听输入值变化，调整高度
-watch(inputValue, autoResize)
+watch(inputValue, () => {
+  autoResize()
+  syncShortcutState()
+})
+
+watch(filteredShortcutItems, (items) => {
+  if (!items.length) {
+    activeShortcutIndex.value = 0
+    return
+  }
+  if (activeShortcutIndex.value >= items.length) {
+    activeShortcutIndex.value = 0
+  }
+})
 
 // 文件处理
 const openFilePicker = () => {
@@ -417,6 +642,7 @@ const formatFileSize = (size: number) => {
 defineExpose({
   focus: () => textareaRef.value?.focus(),
   blur: () => textareaRef.value?.blur(),
+  openFilePicker,
   clear: () => {
     emit('update:modelValue', '')
     nextTick(() => {
@@ -433,10 +659,6 @@ defineExpose({
   padding: 10px 14px 12px;
   background: var(--mc-bg-elevated, #f8fafc);
   flex-shrink: 0;
-}
-
-.chat-input-wrapper.is-focused {
-  /* focus state handled on .input-area */
 }
 
 /* 附件列表 */
@@ -491,6 +713,14 @@ defineExpose({
   flex-shrink: 0;
   font-size: 12px;
   color: var(--mc-primary, #D97757);
+}
+
+.attachment-chip__hint {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mc-text-tertiary, #64748b) !important;
 }
 
 .attachment-chip__remove {
@@ -657,6 +887,15 @@ defineExpose({
   align-items: center;
   margin-top: 6px;
   padding: 0 4px;
+  gap: 10px;
+}
+
+.input-footer__left,
+.input-footer__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .input-hint {
@@ -727,6 +966,31 @@ defineExpose({
   flex-shrink: 1;
 }
 
+.approval-bar__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.approval-bar__scope-label {
+  font-size: 12px;
+  color: var(--mc-text-tertiary, #94a3b8);
+  white-space: nowrap;
+}
+
+.approval-bar__scope-select {
+  min-width: 156px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid var(--mc-border, #e2e8f0);
+  background: var(--mc-bg-sunken, #f8fafc);
+  color: var(--mc-text-primary, #1e293b);
+  padding: 0 10px;
+  font-size: 12px;
+  outline: none;
+}
+
 .approval-bar__actions {
   display: flex;
   gap: 8px;
@@ -773,7 +1037,114 @@ defineExpose({
 .input-area-container {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 8px;
+  position: relative;
+}
+
+.shortcut-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--mc-input-bg, #ffffff);
+  border: 1px solid var(--mc-border, #e2e8f0);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+}
+
+.shortcut-panel__header {
+  padding: 2px 8px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  padding: 7px 9px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.shortcut-item:hover,
+.shortcut-item.is-active {
+  background: rgba(217, 119, 87, 0.08);
+}
+
+.shortcut-item__icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--mc-primary, #D97757);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.shortcut-item__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.shortcut-item__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-primary, #1e293b);
+}
+
+.shortcut-item__desc {
+  font-size: 11px;
+  color: var(--mc-text-secondary, #64748b);
+}
+
+.shortcut-item__value {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
+.shortcut-panel__empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.composer-toolbar__left,
+.composer-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 /* 排队指示器 */
@@ -805,6 +1176,19 @@ defineExpose({
     gap: 8px;
     padding: 7px 8px 7px 10px;
     border-radius: 14px;
+  }
+
+  .shortcut-item {
+    align-items: flex-start;
+  }
+
+  .shortcut-item__value {
+    display: none;
+  }
+
+  .composer-toolbar,
+  .input-footer {
+    flex-wrap: wrap;
   }
 
   .chat-textarea {
@@ -869,6 +1253,15 @@ defineExpose({
 
   .approval-bar__info {
     flex-wrap: wrap;
+  }
+
+  .approval-bar__scope {
+    justify-content: space-between;
+  }
+
+  .approval-bar__scope-select {
+    flex: 1;
+    min-width: 0;
   }
 
   .approval-bar__actions {

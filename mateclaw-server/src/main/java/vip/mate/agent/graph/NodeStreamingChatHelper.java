@@ -1,6 +1,5 @@
 package vip.mate.agent.graph;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -10,6 +9,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import vip.mate.agent.AssistantThinkingRelay;
+import vip.mate.agent.context.TokenEstimator;
 import vip.mate.channel.web.ChatStreamTracker;
 
 import reactor.core.Disposable;
@@ -273,46 +273,6 @@ public class NodeStreamingChatHelper {
 
     // ==================== 重试配置 ====================
 
-    /**
-     * Soft upper bound on per-call thinking ({@code reasoning_content}) chars
-     * with zero visible content and zero tool calls. Beyond this the helper
-     * disposes the upstream subscription and returns a partial result so the
-     * graph can advance instead of streaming thinking forever. Calibrated
-     * against typical Claude/DeepSeek extended-thinking budgets — well above
-     * normal long-form reasoning, low enough to bound a runaway loop in under
-     * ~30 seconds of wall clock.
-     */
-    private static final int THINKING_ONLY_HARD_CAP_CHARS = 32768;
-
-    /**
-     * Narrow content-repetition guard — fires when the buffer ends with
-     * the same period-sized chunk repeated {@link
-     * #CONTENT_REPEAT_MAX_OCCURRENCES}+ times in a row. Picked to catch
-     * the specific failure mode where reasoning-mode models (qwen3.6,
-     * deepseek-r1) get into a "Wait, I should X. → 写答案 → Wait, I
-     * should Y. → 写同一份答案 → …" self-arguing loop and emit the same
-     * final-answer paragraph dozens of times until {@code max_tokens}
-     * runs out.
-     *
-     * <p>Tests probe sizes from {@link #CONTENT_REPEAT_MIN_PERIOD} up
-     * to {@link #CONTENT_REPEAT_MAX_PERIOD}; the smallest period that
-     * yields the required consecutive copies trips the guard. 4
-     * verbatim consecutive copies of any 24+ char unit is a near-
-     * impossible coincidence in real text, so false positives are very
-     * rare. Not as exhaustive as the previous {@code RepetitionDetector}
-     * (removed at 42d406ff for being brittle on legitimate long-form
-     * content), just the cheap specific check that catches this loop.
-     */
-    public static final int CONTENT_REPEAT_MIN_PERIOD = 24;
-    public static final int CONTENT_REPEAT_MAX_PERIOD = 240;
-    private static final int CONTENT_REPEAT_MAX_OCCURRENCES = 4;
-    /**
-     * Re-scan every N chars of new content. Smaller = faster reaction,
-     * larger = less CPU. The probe loop is O(period_range × occurrences)
-     * char comparisons per scan — cheap even at 400-char intervals.
-     */
-    private static final int CONTENT_REPEAT_CHECK_INTERVAL = 200;
-
     private static final int MAX_RETRIES = 5;
     // RATE_LIMIT: fail fast to failover chain — staying on the same
     // provider during a rate-limit window wastes time without recovery.
@@ -320,8 +280,6 @@ public class NodeStreamingChatHelper {
     private static final int MAX_RETRIES_RATE_LIMIT = 2;
     private static final long BACKOFF_BASE_MS = 3000;
     private static final long BACKOFF_CAP_MS = 60_000;
-
-    private static final ObjectMapper TOOL_ARG_JSON_MAPPER = new ObjectMapper();
 
     /**
      * 判断错误是否可重试（基于状态码/异常类型）
@@ -401,35 +359,18 @@ public class NodeStreamingChatHelper {
             return ErrorType.MODEL_NOT_FOUND;
         }
         // Client errors (400 Bad Request — unsupported format, invalid params, etc.) — NOT retryable
+        if (msg.contains("413") || msg.contains("Payload Too Large")) {
+            return ErrorType.CLIENT_ERROR;
+        }
         if (msg.contains("400") || msg.contains("Bad Request")
                 || msg.contains("invalid_request_error") || msg.contains("unsupported")) {
             return ErrorType.CLIENT_ERROR;
         }
-        // Server errors and transient TLS / socket-level network hiccups.
-        // Without the TLS-specific patterns, a single SSL fatal alert
-        // (e.g. bad_record_mac during long-running streams) falls through to
-        // UNKNOWN — non-retryable — so one transient handshake glitch surfaces
-        // to the user as "LLM 调用失败" with no recovery attempt. These are
-        // network-layer transients that almost always succeed on retry, so
-        // they belong in the same retryable bucket as 5xx/timeouts.
+        // Server errors
         if (msg.contains("500") || msg.contains("502") || msg.contains("503") || msg.contains("504")
                 || msg.contains("APITimeoutError") || msg.contains("APIConnectionError")
                 || msg.contains("Connection reset") || msg.contains("Connection refused")
-                || msg.contains("timeout") || msg.contains("Timeout")
-                // TLS-layer transients: bad_record_mac (RFC 5246 §7.2.2 fatal
-                // alert 20), aborted handshakes, mid-stream protocol errors.
-                || msg.contains("SSLException") || msg.contains("SSLHandshakeException")
-                || msg.contains("SSLProtocolException") || msg.contains("bad_record_mac")
-                // Socket-level transients: a peer closing the TCP connection
-                // mid-response, or the OS reporting a half-closed pipe.
-                || msg.contains("SocketException") || msg.contains("Broken pipe")
-                || msg.contains("Premature close") || msg.contains("PrematureCloseException")
-                || msg.contains("Connection prematurely closed")
-                || msg.contains("Connection closed prematurely")
-                // Reactor Netty wraps the raw socket cause in WebClientRequestException;
-                // surface that wrapper too so retries fire even when the cause chain
-                // string is "WebClientRequestException ...; nested ... SSLException".
-                || msg.contains("WebClientRequestException")) {
+                || msg.contains("timeout") || msg.contains("Timeout")) {
             return ErrorType.SERVER_ERROR;
         }
         return ErrorType.UNKNOWN;
@@ -632,8 +573,18 @@ public class NodeStreamingChatHelper {
         }
 
         logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
-        return lastResult != null ? lastResult
-                : buildErrorResult("LLM 调用失败，已达最大重试次数", conversationId, phase);
+        if (lastResult != null) {
+            return lastResult;
+        }
+        // Diagnostic: distinguish "primary skipped with no fallback" from generic retry-exhausted.
+        if (primarySkipped && fallbackChain.isEmpty()) {
+            String reason = primaryOutOfPool
+                    ? "主模型已被移出可用池（认证/计费/模型不存在），且没有配置备选模型"
+                    : "主模型暂时不可用（冷却中），且没有配置备选模型";
+            return buildErrorResultWithType("LLM 调用失败：" + reason + "。请检查模型设置或启用其他模型。",
+                    conversationId, phase, ErrorType.UNKNOWN);
+        }
+        return buildErrorResult("LLM 调用失败，已达最大重试次数", conversationId, phase);
     }
 
     /** D-6: log a structured performance summary for the LLM call phase. */
@@ -764,53 +715,31 @@ public class NodeStreamingChatHelper {
         AtomicInteger cacheReadTokens = new AtomicInteger(0);
         AtomicInteger cacheWriteTokens = new AtomicInteger(0);
 
-        // thinking-only soft cap 触发后设为 true，外层轮询线程据此 dispose 订阅。
-        // 注意：内容流的字符级 / 句子级重复检测已整体移除（参考 Hermes 思路：
-        // agent 不替模型审核输出退化，靠 max_tokens + max_iterations 兜底）；
-        // 仅保留 thinking-only 这条体积兜底，处理 volcengine-plan 等 provider
-        // 在 thinking 通道堆字符不出 content 的死循环（生产 trace c1eefa45）。
-        AtomicBoolean thinkingOnlyCapTriggered = new AtomicBoolean(false);
-        // Content-repetition guard: trips when the same paragraph-sized
-        // suffix appears CONTENT_REPEAT_MAX_OCCURRENCES+ times in
-        // contentAccum. The outer poll loop disposes the upstream
-        // subscription within 500ms once flipped — same pattern as the
-        // thinking-only cap above.
-        AtomicBoolean contentRepeatCapTriggered = new AtomicBoolean(false);
-        // Last contentAccum length at which we ran the repetition scan.
-        // Throttles the O(n) substring scan so it runs at most once per
-        // CONTENT_REPEAT_CHECK_INTERVAL chars, not on every chunk.
-        AtomicInteger lastContentRepeatCheckLen = new AtomicInteger(0);
-
-        // Lifecycle events emitted at most once per call so consumers can
-        // pivot the UI between "thinking" and "drafting" without inspecting
-        // delta rates.
-        AtomicBoolean thinkingStartEmitted = new AtomicBoolean(false);
-        AtomicBoolean thinkingEndEmitted = new AtomicBoolean(false);
-        AtomicBoolean firstTokenSignaled = new AtomicBoolean(false);
-
-        // Pre-stream lifecycle: tell the front-end how the prompt was sized
-        // and which provider/model is being asked. These events ride on the
-        // existing SSE bus, so the heartbeat / first_token signaling stays
-        // consistent.
-        if (broadcast && streamTracker != null && conversationId != null && !conversationId.isEmpty()) {
-            int messageCount = prompt.getInstructions() != null ? prompt.getInstructions().size() : 0;
-            int contextChars = approximatePromptChars(prompt);
-            streamTracker.broadcastObject(conversationId, "context_prepared", Map.of(
-                    "messages", messageCount,
-                    "contextChars", contextChars,
-                    "timestamp", System.currentTimeMillis()
-            ));
-            String modelId = identifyModel(chatModel);
-            String providerId = primaryProviderId != null ? primaryProviderId : "";
-            streamTracker.broadcastObject(conversationId, "llm_request_sent", Map.of(
-                    "provider", providerId,
-                    "model", modelId != null ? modelId : "",
-                    "phase", phase != null ? phase : "",
-                    "timestamp", System.currentTimeMillis()
-            ));
-        }
+        // 重复检测器：检测 LLM 退化输出（如不断重复同一句话）
+        RepetitionDetector contentRepDetector = new RepetitionDetector();
+        RepetitionDetector thinkingRepDetector = new RepetitionDetector();
+        // 重复检测触发后设为 true，外层轮询线程据此 dispose 订阅
+        AtomicBoolean repetitionTriggered = new AtomicBoolean(false);
 
         CountDownLatch latch = new CountDownLatch(1);
+
+        // Fallback: estimate tokens when the provider does not return usage metadata
+        // (e.g. Ollama in streaming mode). Runs on stream completion or before return.
+        Runnable estimateTokensIfMissing = () -> {
+            if (promptTokens.get() == 0 || completionTokens.get() == 0) {
+                try {
+                    int estimatedPrompt = TokenEstimator.estimateTokens(prompt.getInstructions());
+                    String outputText = contentAccum.toString() + thinkingAccum.toString();
+                    int estimatedCompletion = TokenEstimator.estimateTokens(outputText);
+                    promptTokens.set(estimatedPrompt);
+                    completionTokens.set(estimatedCompletion);
+                    log.info("[{}] Provider did not return usage; estimated tokens: prompt={}, completion={}: conversationId={}",
+                            phase, estimatedPrompt, estimatedCompletion, conversationId);
+                } catch (Exception e) {
+                    log.warn("[{}] Failed to estimate tokens for conversation {}: {}", phase, conversationId, e.getMessage());
+                }
+            }
+        };
 
         Disposable subscription = chatModel.stream(prompt)
                 .doOnNext(chatResponse -> {
@@ -821,26 +750,19 @@ public class NodeStreamingChatHelper {
                     AssistantMessage msg = generation.getOutput();
                     lastAssistantMessage.set(msg);
 
-                    // thinking-only soft cap 已触发 → 跳过一切处理（等外层 dispose）
-                    if (thinkingOnlyCapTriggered.get() || contentRepeatCapTriggered.get()) {
+                    // 重复已触发 → 跳过一切处理（等外层 dispose）
+                    if (repetitionTriggered.get()) {
                         return;
                     }
 
-                    // 1. 提取 content delta
+                    // 1. 提取 content delta（含重复检测）
                     String contentDelta = msg.getText();
                     if (contentDelta != null && !contentDelta.isEmpty()) {
-                        // First content delta closes the thinking phase if one
-                        // was open, and arms first-token heartbeat relaxation.
-                        if (broadcast && streamTracker != null
-                                && firstTokenSignaled.compareAndSet(false, true)) {
-                            streamTracker.markFirstTokenReceived(conversationId);
-                        }
-                        if (broadcast && thinkingAccum.length() > 0
-                                && thinkingEndEmitted.compareAndSet(false, true)) {
-                            streamTracker.broadcastObject(conversationId, "thinking_end", Map.of(
-                                    "thinkingChars", thinkingAccum.length(),
-                                    "timestamp", System.currentTimeMillis()
-                            ));
+                        if (contentRepDetector.appendAndCheck(contentDelta)) {
+                            log.warn("[{}] Content repetition detected, will cancel stream " +
+                                    "for conversation {}", phase, conversationId);
+                            repetitionTriggered.set(true);
+                            return;
                         }
                         contentAccum.append(contentDelta);
                         if (broadcast) {
@@ -848,27 +770,14 @@ public class NodeStreamingChatHelper {
                         }
                     }
 
-                    // 2. 提取 thinking delta. Do not cancel the stream for
-                    // repeated thinking phrases: some models emit repetitive
-                    // internal planning while still making valid tool progress.
+                    // 2. 提取 thinking delta（含重复检测）
                     String thinkingDelta = extractReasoningContent(msg);
                     if (thinkingDelta != null && !thinkingDelta.isEmpty()) {
-                        // First-token signaling fires for thinking too — UI
-                        // shows "thinking" activity before any content streams.
-                        if (broadcast && streamTracker != null
-                                && firstTokenSignaled.compareAndSet(false, true)) {
-                            streamTracker.markFirstTokenReceived(conversationId);
-                        }
-                        // First thinking delta opens the thinking phase. We
-                        // emit the start lazily (on first delta) rather than
-                        // before subscription so models that never produce
-                        // thinking don't ghost-pair an empty segment.
-                        if (broadcast && thinkingAccum.length() == 0
-                                && thinkingStartEmitted.compareAndSet(false, true)) {
-                            streamTracker.broadcastObject(conversationId, "thinking_start", Map.of(
-                                    "phase", phase != null ? phase : "",
-                                    "timestamp", System.currentTimeMillis()
-                            ));
+                        if (thinkingRepDetector.appendAndCheck(thinkingDelta)) {
+                            log.warn("[{}] Thinking repetition detected, will cancel stream " +
+                                    "for conversation {}", phase, conversationId);
+                            repetitionTriggered.set(true);
+                            return;
                         }
                         thinkingAccum.append(thinkingDelta);
                         // thinkingLevel=off 时不广播 thinking（模型仍可能产生，但前端不展示）
@@ -884,76 +793,28 @@ public class NodeStreamingChatHelper {
                         accumulateToolCalls(msg.getToolCalls(), toolCallAccumulators);
                     }
 
-                    // 4. Thinking-only no-progress guard. MUST run after both
-                    // content delta and tool call accumulation, otherwise a
-                    // chunk that carries thinking AND a tool_call together
-                    // (some Anthropic / DeepSeek-thinking responses do this)
-                    // would trip the guard before we observe the tool_call —
-                    // the user would see "INCOMPLETE: thinking-only" on a
-                    // request that was actually about to dispatch a tool.
-                    // Pattern-agnostic; fires on volume alone. Outer poll
-                    // tears the subscription down within 500ms once the
-                    // flag flips.
-                    if (thinkingAccum.length() >= THINKING_ONLY_HARD_CAP_CHARS
-                            && contentAccum.length() == 0
-                            && toolCallAccumulators.isEmpty()
-                            && !msg.hasToolCalls()) {
-                        log.warn("[{}] Thinking-only soft cap reached " +
-                                        "({} thinking chars, no content/tool yet) " +
-                                        "— disposing stream for conversation {}",
-                                phase, thinkingAccum.length(), conversationId);
-                        broadcastContentTruncated(conversationId,
-                                "thinking_only_no_content",
-                                thinkingAccum.length());
-                        thinkingOnlyCapTriggered.set(true);
-                        return;
-                    }
-
-                    // 5. Content-repetition guard. Some reasoning-mode models
-                    // (qwen3.6, deepseek-r1) get stuck in a "Wait, I should X
-                    // → 写答案 → Wait, I should Y → 写同一份答案 → ..." loop
-                    // and emit the same final-answer paragraph dozens of times
-                    // until max_tokens runs out. Without this, the user sees a
-                    // wall of duplicated text and the bot never actually finishes.
-                    // Throttled to one scan per CONTENT_REPEAT_CHECK_INTERVAL
-                    // chars of new content — the probe loop is cheap but no
-                    // need to run on every chunk.
-                    int currentLen = contentAccum.length();
-                    int floor = CONTENT_REPEAT_MIN_PERIOD * CONTENT_REPEAT_MAX_OCCURRENCES;
-                    if (currentLen >= floor
-                            && currentLen - lastContentRepeatCheckLen.get() >= CONTENT_REPEAT_CHECK_INTERVAL) {
-                        lastContentRepeatCheckLen.set(currentLen);
-                        if (hasRepeatingSuffix(contentAccum, CONTENT_REPEAT_MIN_PERIOD,
-                                               CONTENT_REPEAT_MAX_PERIOD,
-                                               CONTENT_REPEAT_MAX_OCCURRENCES)) {
-                            log.warn("[{}] Content-repetition cap reached " +
-                                            "({} chars, tail repeated {}+ times) " +
-                                            "— disposing stream for conversation {}",
-                                    phase, currentLen, CONTENT_REPEAT_MAX_OCCURRENCES,
-                                    conversationId);
-                            broadcastContentTruncated(conversationId,
-                                    "content_repetition",
-                                    currentLen);
-                            contentRepeatCapTriggered.set(true);
-                            return;
-                        }
-                    }
-
                     // 4. 提取 token usage（通常最后一个 chunk 携带完整 usage）
                     if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getUsage() != null) {
                         var usage = chatResponse.getMetadata().getUsage();
-                        if (usage.getPromptTokens() != null && usage.getPromptTokens() > 0) {
-                            promptTokens.set(usage.getPromptTokens().intValue());
+                        Integer pt = usage.getPromptTokens();
+                        Integer ct = usage.getCompletionTokens();
+                        if (pt != null && pt > 0) {
+                            promptTokens.set(pt.intValue());
                         }
-                        if (usage.getCompletionTokens() != null && usage.getCompletionTokens() > 0) {
-                            completionTokens.set(usage.getCompletionTokens().intValue());
+                        if (ct != null && ct > 0) {
+                            completionTokens.set(ct.intValue());
                         }
+                        log.debug("[{}] Chunk usage: promptTokens={}, completionTokens={}: conversationId={}",
+                                phase, pt, ct, conversationId);
                         // RFC-014: 反射抽取 Anthropic prompt cache 字段（DashScope/OpenAI 自然返回 0）
                         var cache = vip.mate.llm.cache.CacheUsageExtractor.extract(usage);
                         if (cache.cacheReadTokens() > 0)  cacheReadTokens.set(cache.cacheReadTokens());
                         if (cache.cacheWriteTokens() > 0) cacheWriteTokens.set(cache.cacheWriteTokens());
+                    } else if (chatResponse.getMetadata() != null) {
+                        log.debug("[{}] Chunk metadata present but usage is null: conversationId={}", phase, conversationId);
                     }
                 })
+                .doOnComplete(estimateTokensIfMissing)
                 .subscribe(
                         chunk -> { /* 处理逻辑已在 doOnNext 中完成 */ },
                         err -> { errorRef.set(err); latch.countDown(); },
@@ -964,30 +825,16 @@ public class NodeStreamingChatHelper {
         try {
             long deadlineMs = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(10);
             while (!latch.await(500, TimeUnit.MILLISECONDS)) {
-                // thinking-only 软上限触发 → 立即 dispose 上游订阅，停止消耗 tokens
-                if (thinkingOnlyCapTriggered.get()) {
-                    log.warn("[{}] Stream guard tripped (thinking_only_no_content), disposing " +
-                            "upstream subscription for conversation {}", phase, conversationId);
+                // 重复检测触发 → 立即 dispose 上游订阅，停止消耗 tokens
+                if (repetitionTriggered.get()) {
+                    log.warn("[{}] Repetition detected, disposing upstream subscription " +
+                            "for conversation {}", phase, conversationId);
                     subscription.dispose();
                     if (broadcast) {
                         broadcastDelta(conversationId, "warning",
-                                buildDeltaJson("模型在思考阶段停留过久，已自动截断"));
+                                buildDeltaJson("检测到模型输出重复，已自动截断"));
                     }
                     // dispose 后 latch 可能不会 countDown，直接跳出
-                    break;
-                }
-                if (contentRepeatCapTriggered.get()) {
-                    // Same dispose pattern as thinking-only cap. The
-                    // accumulated content is preserved (it's the looping
-                    // text — at least the user gets the FIRST occurrence
-                    // as a partial answer instead of waiting for max_tokens).
-                    log.warn("[{}] Stream guard tripped (content_repetition), disposing " +
-                            "upstream subscription for conversation {}", phase, conversationId);
-                    subscription.dispose();
-                    if (broadcast) {
-                        broadcastDelta(conversationId, "warning",
-                                buildDeltaJson("检测到回答内容反复重复，已自动截断"));
-                    }
                     break;
                 }
                 if (streamTracker.isStopRequested(conversationId)) {
@@ -996,6 +843,7 @@ public class NodeStreamingChatHelper {
                     boolean hasContent = !contentAccum.isEmpty() || !thinkingAccum.isEmpty()
                             || !toolCallAccumulators.isEmpty();
                     if (hasContent) {
+                        estimateTokensIfMissing.run();
                         log.info("[{}] Stop requested during LLM call with partial content " +
                                         "(content={} chars, thinking={} chars, toolCalls={}), " +
                                         "returning stopped partial result: conversationId={}",
@@ -1027,6 +875,7 @@ public class NodeStreamingChatHelper {
 
             if (hasAccumulatedContent) {
                 // ===== 优雅降级：LLM 已产出部分内容（如 engine_overloaded 在流尾部触发） =====
+                estimateTokensIfMissing.run();
                 log.warn("[{}] Stream error after partial content ({} chars, {} tool calls), " +
                                 "using accumulated content as partial result: {}",
                         phase, contentAccum.length(), toolCallAccumulators.size(), error.getMessage());
@@ -1085,26 +934,22 @@ public class NodeStreamingChatHelper {
                     conversationId, phase, errorType);
         }
 
-        // ===== 成功（检查是否因 thinking-only 软上限或内容重复被截断） =====
-        boolean truncatedByThinkingCap = thinkingOnlyCapTriggered.get();
-        boolean truncatedByContentRepeat = contentRepeatCapTriggered.get();
-        boolean truncated = truncatedByThinkingCap || truncatedByContentRepeat;
-        if (truncatedByThinkingCap) {
-            log.warn("[{}] LLM stream disposed: thinking-only soft cap reached for conversation {}",
+        // ===== 成功（检查是否因重复被截断） =====
+        boolean truncatedByRepetition = repetitionTriggered.get();
+        if (truncatedByRepetition) {
+            log.warn("[{}] LLM output was truncated due to repetition detection for conversation {}",
                     phase, conversationId);
-        } else if (truncatedByContentRepeat) {
-            log.warn("[{}] LLM stream disposed: content-repetition cap reached for conversation {}",
-                    phase, conversationId);
+            // warning 已在 dispose 时广播，无需重复
         }
 
         // RFC-009: guard against silent empty responses. Some providers return
         // HTTP 200 with an empty body under soft-failure conditions (rate-limit
         // capacity, context filter, upstream overload). Treat this as a failure
         // signal so streamCallInternal can hand off to the fallback chain.
-        // Only fire when neither truncation cap fired (those deliberately
-        // produce non-empty output) and there are no tool calls
-        // (tool-only responses are legitimately empty-text).
-        if (!truncated
+        // Only fire when the primary wasn't truncated by our own repetition
+        // detector (which deliberately produces short content) and when there
+        // are no tool calls (tool-only responses are legitimately empty-text).
+        if (!truncatedByRepetition
                 && contentAccum.length() == 0
                 && thinkingAccum.length() == 0
                 && toolCallAccumulators.isEmpty()) {
@@ -1112,14 +957,12 @@ public class NodeStreamingChatHelper {
             return buildErrorResultWithType("LLM 返回空响应", conversationId, phase, ErrorType.EMPTY_RESPONSE);
         }
 
-        String truncationReason = truncatedByThinkingCap ? "thinking_only_no_content"
-                : truncatedByContentRepeat ? "content_repetition"
-                : null;
+        // Ensure fallback estimation runs even if doOnComplete was skipped (e.g. disposal)
+        estimateTokensIfMissing.run();
         return assembleResult(contentAccum, thinkingAccum, toolCallAccumulators,
                 promptTokens.get(), completionTokens.get(),
                 cacheReadTokens.get(), cacheWriteTokens.get(), phase,
-                truncated,
-                truncationReason);
+                truncatedByRepetition, truncatedByRepetition ? "output_truncated_repetition" : null);
     }
 
     /** 组装 stopped partial 结果（用户主动停止，有已累积内容） */
@@ -1154,6 +997,8 @@ public class NodeStreamingChatHelper {
                                          int promptTok, int completionTok,
                                          int cacheReadTok, int cacheWriteTok,
                                          String phase, boolean partial, String errorMsg) {
+        log.info("[{}] Assembling result: promptTokens={}, completionTokens={}, partial={}, errorMsg={}",
+                phase, promptTok, completionTok, partial, errorMsg);
         List<AssistantMessage.ToolCall> finalToolCalls = buildFinalToolCalls(toolCallAccumulators);
         String fullContent = contentAccum.toString();
         String fullThinking = thinkingAccum.toString();
@@ -1430,6 +1275,10 @@ public class NodeStreamingChatHelper {
                     + "（控制台：https://console.volcengine.com/ark）";
         }
 
+        if (combined.contains("unknown variant `image_url`") || combined.contains("unknown variant image_url")) {
+            return "当前提供商的兼容接口不接受图片多模态输入。请切换到支持图片输入的模型/提供商，或先关闭图片理解后仅发送文字。";
+        }
+
         // Volcano Engine Ark — model id doesn't exist for the user's region/key.
         // Body shape: {"error":{"code":"InvalidEndpointOrModel.NotFound","message":"The model or endpoint X does not exist or you do not have access to it..."}}
         if (combined.contains("InvalidEndpointOrModel")) {
@@ -1449,6 +1298,9 @@ public class NodeStreamingChatHelper {
         }
         // 对 Jackson 反序列化错误，提取关键信息
         if (msg.contains("engine_overloaded")) return "Model service overloaded, please retry later";
+        if (combined.contains("413") || combined.contains("Payload Too Large")) {
+            return "图片载荷过大，已超过模型接口限制。请压缩图片后重试，或使用系统自动缩小后的图片重新发送。";
+        }
         if (msg.contains("unsupported image format") || msg.contains("unsupported")) return "Unsupported file format (e.g. SVG), use PNG/JPG instead";
         if (msg.contains("invalid_request_error") || msg.contains("400 Bad Request")) return "Bad request, please check input";
         if (msg.contains("rate_limit") || msg.contains("429")) return "Rate limit exceeded, please retry later";
@@ -1612,161 +1464,6 @@ public class NodeStreamingChatHelper {
     }
 
     /**
-     * Broadcast a {@code content_truncated} lifecycle event so consumers can
-     * surface when the volume-based thinking-only soft cap stops the stream.
-     */
-    private void broadcastContentTruncated(String conversationId, String reason, int truncatedChars) {
-        if (streamTracker == null || conversationId == null || conversationId.isEmpty()) {
-            return;
-        }
-        try {
-            streamTracker.broadcastObject(conversationId, "content_truncated", Map.of(
-                    "reason", reason != null ? reason : "thinking_only_no_content",
-                    "truncatedChars", truncatedChars,
-                    "timestamp", System.currentTimeMillis()
-            ));
-        } catch (Exception e) {
-            log.debug("Failed to broadcast content_truncated for {}: {}", conversationId, e.getMessage());
-        }
-    }
-
-    /**
-     * Collapse a content buffer's trailing run of verbatim repeats to a
-     * single copy. Used to clean up the persisted final answer after
-     * {@link #hasRepeatingSuffix} fires — the streamed text already
-     * contains the duplicates (SSE chunks can't be unsent), but the
-     * DB-persisted message and the IM channel reply should show ONE
-     * clean copy of the looping unit, not a wall.
-     *
-     * <p>Algorithm: find the smallest period in {@code [minPeriod,
-     * maxPeriod]} where the buffer ends with that unit repeated 2+
-     * times consecutively, then return everything up to (and including)
-     * the FIRST copy of that unit. Conservative — if no period yields
-     * 2+ consecutive matches, returns the buffer unchanged.
-     *
-     * <p>Public for unit-testing alongside {@link #hasRepeatingSuffix}.
-     */
-    public static String dedupTrailingRepeats(String content, int minPeriod, int maxPeriod) {
-        if (content == null || content.isEmpty()) return content;
-        int len = content.length();
-        if (minPeriod <= 0 || maxPeriod < minPeriod) return content;
-        int periodCap = Math.min(maxPeriod, len / 2);
-        for (int p = minPeriod; p <= periodCap; p++) {
-            int unitStart = len - p;
-            // Walk backward as far as the unit keeps matching.
-            int copies = 1;
-            int blockStart = unitStart - p;
-            while (blockStart >= 0
-                    && content.regionMatches(blockStart, content, unitStart, p)) {
-                copies++;
-                blockStart -= p;
-            }
-            if (copies >= 2) {
-                // Keep prefix + ONE copy. The first copy starts at
-                // (blockStart + p) since the loop walked back one step
-                // past the last match.
-                int firstCopyStart = blockStart + p;
-                int trimEnd = firstCopyStart + p;
-                return content.substring(0, trimEnd);
-            }
-        }
-        return content;
-    }
-
-    /**
-     * Detect whether {@code accum} ends with the same {@code period}-sized
-     * unit repeated at least {@code minOccurrences} times consecutively,
-     * for some {@code period} in {@code [minPeriod, maxPeriod]}. Returns
-     * true when the model is stuck in a "self-arguing" loop emitting the
-     * same final-answer chunk over and over.
-     *
-     * <p>Algorithm: probe period sizes from small to large. For each
-     * candidate period {@code p}, take the last {@code p} chars as the
-     * unit and check whether the {@code minOccurrences-1} preceding
-     * blocks of length {@code p} are byte-identical. The smallest period
-     * that yields the required consecutive copies trips the guard. We
-     * iterate small→large because tighter periods are more specific:
-     * a 30-char unit repeated 4× is a stronger signal than a 200-char
-     * unit happening to appear once.
-     *
-     * <p>Cost: O(periodRange × occurrences × period) char comparisons.
-     * For default thresholds (~200 × 4 × 100) that's ~80K comparisons
-     * per scan — microseconds against an LLM call. Throttled by the
-     * caller via {@code lastContentRepeatCheckLen} so the scan amortizes.
-     *
-     * <p>Package-private + static for unit-testing the threshold without
-     * spinning up a full {@code StreamResult}.
-     */
-    static boolean hasRepeatingSuffix(CharSequence accum, int minPeriod, int maxPeriod,
-                                       int minOccurrences) {
-        if (accum == null) return false;
-        int len = accum.length();
-        if (minPeriod <= 0 || minOccurrences <= 1 || maxPeriod < minPeriod) return false;
-        if (len < minPeriod * minOccurrences) return false;
-        String s = accum.toString();
-        int periodCap = Math.min(maxPeriod, len / minOccurrences);
-        for (int p = minPeriod; p <= periodCap; p++) {
-            // Unit = last p chars. Check prior (minOccurrences - 1)
-            // blocks of length p match the unit byte-for-byte.
-            int unitStart = len - p;
-            boolean allMatch = true;
-            for (int k = 2; k <= minOccurrences; k++) {
-                int blockStart = len - k * p;
-                if (blockStart < 0) { allMatch = false; break; }
-                if (!s.regionMatches(blockStart, s, unitStart, p)) {
-                    allMatch = false;
-                    break;
-                }
-            }
-            if (allMatch) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Best-effort character count of the outbound prompt for the
-     * {@code context_prepared} event. Cheaper than tokenizing and only used
-     * for UI presentation, so an exact figure is unnecessary.
-     */
-    private static int approximatePromptChars(Prompt prompt) {
-        if (prompt == null || prompt.getInstructions() == null) return 0;
-        int total = 0;
-        for (Message m : prompt.getInstructions()) {
-            String text = m.getText();
-            if (text != null) total += text.length();
-        }
-        return total;
-    }
-
-    /**
-     * Pick a stable model identifier from whatever {@link ChatModel}
-     * implementation we received — Spring AI doesn't expose a single accessor.
-     * We try the well-known fields by reflection so this stays decoupled from
-     * concrete provider classes (Anthropic / OpenAI / DashScope all expose
-     * {@code defaultOptions.model} or equivalent).
-     */
-    private static String identifyModel(ChatModel chatModel) {
-        if (chatModel == null) return "";
-        try {
-            // Common Spring AI shape: getDefaultOptions().getModel()
-            java.lang.reflect.Method getDefaultOptions = chatModel.getClass().getMethod("getDefaultOptions");
-            Object opts = getDefaultOptions.invoke(chatModel);
-            if (opts != null) {
-                try {
-                    java.lang.reflect.Method getModel = opts.getClass().getMethod("getModel");
-                    Object model = getModel.invoke(opts);
-                    if (model != null) return model.toString();
-                } catch (NoSuchMethodException ignored) {
-                    // fall through
-                }
-            }
-        } catch (Exception ignored) {
-            // fall through to class-name fallback
-        }
-        return chatModel.getClass().getSimpleName();
-    }
-
-    /**
      * 构建 {"delta":"..."} JSON
      */
     private static String buildDeltaJson(String delta) {
@@ -1844,47 +1541,9 @@ public class NodeStreamingChatHelper {
                     acc.id,
                     acc.type != null ? acc.type : "function",
                     acc.name,
-                    sanitizeToolCallArguments(acc.name, acc.arguments.toString())));
+                    acc.arguments.toString()));
         }
         return result;
-    }
-
-    /**
-     * Ensure {@code function.arguments} is always a well-formed JSON string.
-     * <p>
-     * Some providers (e.g. aliyun-codingplan) reject the entire follow-up
-     * request with HTTP 400 when the assistant message in history carries a
-     * tool call whose {@code arguments} is not parseable JSON. Streaming
-     * accumulation can produce such payloads when:
-     * <ul>
-     *   <li>The model emits zero-argument tool calls as {@code ""} instead
-     *       of {@code "{}"}.</li>
-     *   <li>The upstream stream is truncated mid-token, leaving a partial
-     *       JSON fragment like {@code "{\"a\":"}.</li>
-     * </ul>
-     * Both cases are normalized to {@code "{}"} so the chat-completions
-     * round-trip stays valid. Tool execution downstream still re-validates
-     * arguments and surfaces a per-tool error if the empty payload is wrong
-     * for that tool.
-     */
-    private static String sanitizeToolCallArguments(String toolName, String arguments) {
-        if (arguments == null || arguments.isBlank()) {
-            return "{}";
-        }
-        try {
-            TOOL_ARG_JSON_MAPPER.readTree(arguments);
-            return arguments;
-        } catch (Exception e) {
-            log.warn("Tool '{}' arguments are not valid JSON after stream aggregation "
-                            + "(len={}, head={}); replacing with empty object so the "
-                            + "follow-up chat-completions request stays well-formed. "
-                            + "Parse error: {}",
-                    toolName,
-                    arguments.length(),
-                    arguments.substring(0, Math.min(80, arguments.length())),
-                    e.getMessage());
-            return "{}";
-        }
     }
 
     private static class ToolCallAccumulator {

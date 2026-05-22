@@ -15,6 +15,10 @@ import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
+import vip.mate.memory.governance.MemoryGovernanceFilter;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageEntity;
 import vip.mate.workspace.document.WorkspaceFileService;
@@ -46,6 +50,8 @@ public class MemorySummarizationService {
     private final AgentGraphBuilder agentGraphBuilder;
     private final MemoryProperties properties;
     private final ObjectMapper objectMapper;
+    private final MemoryGovernanceFilter governanceFilter;
+    private final MemoryWriteProvenancePublisher provenancePublisher;
 
     /** Per-agent 锁，防止并发写入 */
     private final ConcurrentHashMap<Long, ReentrantLock> agentLocks = new ConcurrentHashMap<>();
@@ -86,12 +92,6 @@ public class MemorySummarizationService {
         if (messages.size() < properties.getMinMessagesForSummarize()) {
             log.debug("[Memory] Conversation {} has only {} messages, skipping",
                     conversationId, messages.size());
-            return;
-        }
-        MemorySummarizationGate.Decision decision = MemorySummarizationGate.evaluate(messages);
-        if (!decision.shouldAnalyze()) {
-            log.info("[Memory] Conversation {} skipped by summarization gate: {}",
-                    conversationId, decision.reason());
             return;
         }
 
@@ -148,7 +148,7 @@ public class MemorySummarizationService {
             }
 
             // 6. 应用更新
-            applyUpdates(agentId, root, dailyFilename, dailyContent);
+            applyUpdates(agentId, conversationId, root, dailyFilename, dailyContent);
 
             String reason = root.path("reason").asText("");
             log.info("[Memory] Memory updated for agent={}, conv={}: {}", agentId, conversationId, reason);
@@ -159,7 +159,8 @@ public class MemorySummarizationService {
         }
     }
 
-    private void applyUpdates(Long agentId, JsonNode root, String dailyFilename, String existingDailyContent) {
+    private void applyUpdates(Long agentId, String conversationId, JsonNode root,
+                              String dailyFilename, String existingDailyContent) {
         // Daily entry: 追加模式
         JsonNode dailyNode = root.path("daily_entry");
         if (!dailyNode.isNull() && dailyNode.isTextual()) {
@@ -168,7 +169,7 @@ public class MemorySummarizationService {
                 String newContent = existingDailyContent.isEmpty()
                         ? "# " + LocalDate.now() + "\n\n" + entry
                         : existingDailyContent + "\n\n" + entry;
-                workspaceFileService.saveFile(agentId, dailyFilename, newContent);
+                persistGovernedWrite(agentId, conversationId, dailyFilename, newContent, "summarize-daily");
                 log.info("[Memory] Appended daily entry to {} for agent={}", dailyFilename, agentId);
             }
         }
@@ -178,7 +179,7 @@ public class MemorySummarizationService {
         if (!memoryNode.isNull() && memoryNode.isTextual()) {
             String content = memoryNode.asText().trim();
             if (!content.isEmpty()) {
-                workspaceFileService.saveFile(agentId, "MEMORY.md", content);
+                persistGovernedWrite(agentId, conversationId, "MEMORY.md", content, "summarize-memory");
                 log.info("[Memory] Updated MEMORY.md for agent={}", agentId);
             }
         }
@@ -188,10 +189,27 @@ public class MemorySummarizationService {
         if (!profileNode.isNull() && profileNode.isTextual()) {
             String content = profileNode.asText().trim();
             if (!content.isEmpty()) {
-                workspaceFileService.saveFile(agentId, "PROFILE.md", content);
+                persistGovernedWrite(agentId, conversationId, "PROFILE.md", content, "summarize-profile");
                 log.info("[Memory] Updated PROFILE.md for agent={}", agentId);
             }
         }
+    }
+
+    private void persistGovernedWrite(Long agentId, String conversationId,
+                                      String filename, String content, String action) {
+        if (!governanceFilter.isAllowed(MemorySurfaceType.SUMMARIZATION_WRITER, MemoryOperation.SUMMARIZE, filename)) {
+            log.warn("[WP-3] Summarization write blocked by governance: agentId={}, filename={}, action={}",
+                    agentId, filename, action);
+            return;
+        }
+        workspaceFileService.saveFile(agentId, filename, content);
+        provenancePublisher.publishRequired(agentId, conversationId,
+                MemorySurfaceType.SUMMARIZATION_WRITER,
+                MemoryOperation.SUMMARIZE,
+                filename,
+                action,
+                content,
+                java.util.Map.of("writer", "MemorySummarizationService"));
     }
 
     private String buildTranscript(List<MessageEntity> messages) {

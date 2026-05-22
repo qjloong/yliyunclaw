@@ -5,7 +5,7 @@
 -- then configure CKJIA_MCP_KEY for authorization.
 --
 -- Column name is `url` (not `endpoint`) per McpServerEntity.
--- headers_json uses ${CKJIA_MCP_KEY} placeholder so the plaintext API key
+-- headers_json stores an environment-variable placeholder for CKJIA_MCP_KEY so the plaintext API key
 -- never lands in the database (parseHeaders expands env vars at request time).
 
 -- mate_mcp_server.id is BIGINT NOT NULL PRIMARY KEY without H2-side auto-increment;
@@ -22,7 +22,7 @@ VALUES (
     'ckjia-shopping',
     'sse',
     'http://localhost:8085/sse',
-    '{"Authorization": "Bearer ${CKJIA_MCP_KEY}"}',
+    '{"Authorization": "Bearer ' || '$' || '{CKJIA_MCP_KEY}"}',
     FALSE,
     'CKJIA price comparison MCP server. Disabled by default; replace the dev/test localhost URL with the production CKJIA domain before enabling.',
     30, 30, TRUE,

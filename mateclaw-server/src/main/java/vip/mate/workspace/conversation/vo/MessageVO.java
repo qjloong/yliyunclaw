@@ -41,12 +41,6 @@ public class MessageVO {
     /** Completion tokens 消耗 */
     private Integer completionTokens;
 
-    /** Model name actually used to produce this message (e.g. "deepseek-chat"). */
-    private String runtimeModel;
-
-    /** Provider id of the runtime model (e.g. "deepseek", "zhipu"). */
-    private String runtimeProvider;
-
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;
@@ -65,8 +59,6 @@ public class MessageVO {
         vo.setMetadata(parseMetadataToObject(entity.getMetadata()));
         vo.setPromptTokens(entity.getPromptTokens());
         vo.setCompletionTokens(entity.getCompletionTokens());
-        vo.setRuntimeModel(entity.getRuntimeModel());
-        vo.setRuntimeProvider(entity.getRuntimeProvider());
         vo.setCreateTime(entity.getCreateTime());
         vo.setUpdateTime(entity.getUpdateTime());
         vo.setContentParts(contentParts);

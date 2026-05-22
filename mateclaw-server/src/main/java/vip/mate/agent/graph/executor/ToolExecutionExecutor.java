@@ -1,30 +1,40 @@
 package vip.mate.agent.graph.executor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
+import vip.mate.auth.model.UserEntity;
+import vip.mate.auth.service.AuthService;
 import vip.mate.tool.builtin.ToolExecutionContext;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.graph.state.DirectToolOutput;
-import vip.mate.agent.graph.state.SourceEvidenceLedger;
+import vip.mate.approval.ApprovalGrantService;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.tool.guard.ToolExecutionGuardHelper;
 import vip.mate.tool.guard.ToolGuard;
 import vip.mate.tool.guard.ToolGuardResult;
 import vip.mate.tool.guard.model.GuardEvaluation;
+import vip.mate.policy.contract.EffectivePolicyContract;
+import vip.mate.policy.contract.PolicyDimension;
+import vip.mate.policy.resolver.EffectivePolicyResolver;
 import vip.mate.tool.guard.model.ToolInvocationContext;
 import vip.mate.tool.guard.service.ToolGuardService;
+import vip.mate.tool.metadata.ToolMetadataResolver;
+import vip.mate.tool.metadata.ToolRuntimeMetadata;
+import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.core.model.WorkspacePolicy;
+import vip.mate.workspace.core.service.WorkspaceService;
 
 import java.util.*;
 import java.util.Collections;
 import java.util.concurrent.*;
-import java.util.regex.Pattern;
 
 /**
  * 统一工具执行器（共享于 ActionNode 和 StepExecutionNode）
@@ -57,91 +67,26 @@ public class ToolExecutionExecutor {
      * method with {@link vip.mate.tool.ConcurrencyUnsafe} instead of editing
      * this list.
      */
-    /**
-     * Defense against runaway single-response tool floods.
-     *
-     * <p>Some models (StreamLake's kat-coder-pro-v1 has been observed
-     * emitting 50+ in one shot) return huge {@code tool_calls}
-     * batches in a single response. Without a cap, every call executes, which
-     * can saturate downstream provider QPS, multiply approval rows, and burn
-     * tokens. The cap is independent of {@code MAX_ITERATIONS} (which limits
-     * the loop count, not the per-response batch).
-     *
-     * <p>16 covers virtually every legitimate parallel-search / batch-edit
-     * scenario; truncated calls receive a synthetic {@link ToolResponseMessage}
-     * in the same turn so the LLM can re-issue the most-important ones in
-     * its next response rather than hanging on missing tool replies.
-     */
-    static final int MAX_TOOL_CALLS_PER_RESPONSE = 16;
-
     private static final Set<String> DEFAULT_UNSAFE_TOOLS = Set.of(
             "browser_use", "BrowserUseTool", "write_file", "edit_file"
     );
 
     /**
-     * Inline hard-truncate cap for a single tool result. Acts as the fallback
-     * when raw-first spill cannot run (storage disabled, tool excluded, body
-     * already at-or-below the spill threshold, or disk write failed).
+     * Layer 1 — hard truncation cap applied to every tool result before it
+     * reaches ToolResultStorage (Layer 2 spill) or the LLM prompt.
      *
-     * <p>Per-tool-result handling chain:
+     * <p>Two-level budget chain (RFC-008 / RFC-06 D-5):
      * <pre>
-     *   raw tool result (full bytes)
-     *     → spillRawOrTruncate(...)
-     *         ├─ persistIfOversized(...) tries to write the raw body to disk
-     *         │     when size &gt; perResultThresholdChars and tool is not
-     *         │     in the spill exclusion list. Returns a SPILL_MARKER preview
-     *         │     on success, or the original string otherwise.
-     *         └─ if no SPILL_MARKER on the return, truncateToolResult(...)
-     *               caps inline to MAX_TOOL_RESULT_CHARS so a multi-MB raw
-     *               body never enters the model prompt.
-     *     → enforceTurnBudget(..., perTurnBudgetChars=32000)   // per-turn aggregate
+     *   raw tool result
+     *     → truncateToolResult(..., MAX_TOOL_RESULT_CHARS=8000)   // Layer 1: hard cap
+     *     → persistIfOversized(..., perResultThresholdChars=16000) // Layer 2: spill to disk
+     *     → enforceTurnBudget(..., perTurnBudgetChars=32000)      // Layer 3: per-turn aggregate
      * </pre>
-     * Spill must see the RAW result so the full output is preserved on disk
-     * and the model can call {@code read_file} on the spill path. Truncating
-     * before spilling would write a pre-shortened blob to disk, defeating the
-     * "ground truth on disk" guarantee. {@link ToolResultProperties} controls
-     * the thresholds; this constant stays in code because it is the safety
-     * net for the failure case and should not vary by deployment.
+     * Layer 1 runs first and is intentionally kept at 8000 to prevent oversized
+     * results from inflating the prompt. Layers 2/3 thresholds are configured in
+     * {@link ToolResultProperties} and application.yml.
      */
     private static final int MAX_TOOL_RESULT_CHARS = 8000;
-
-    /**
-     * Raw-first spill: try to write the full result to disk via the spill
-     * store; only fall back to inline hard-truncate when no spill marker
-     * comes back. Caller distinguishes spill success from "returned
-     * unchanged" by checking {@link ToolResultStorage#SPILL_MARKER_PREFIX}
-     * on the returned string — otherwise an IO failure or under-threshold
-     * body would slip through indistinguishable from a successful spill,
-     * and a multi-MB raw body could end up in the model prompt.
-     *
-     * <p>Package-private + static so the spill/truncate decision is unit
-     * testable in isolation from the rest of the executor.
-     *
-     * @param storage          spill store; {@code null} skips the spill attempt
-     * @param maxTruncateChars fallback inline hard cap
-     * @param result           raw tool output (may be {@code null})
-     * @param toolName         used in the spill preview header
-     * @param toolUseId        unique within the conversation; becomes the file name
-     * @param conversationId   spill files are scoped per conversation; blank/null falls back to "unknown"
-     * @param workspaceBasePath where the spill directory lives when set
-     * @return the SPILL_MARKER preview when spill succeeded, otherwise the
-     *         original string (when ≤ threshold) or the inline-truncated string.
-     */
-    static String spillRawOrTruncate(ToolResultStorage storage, int maxTruncateChars,
-                                     String result, String toolName, String toolUseId,
-                                     String conversationId, String workspaceBasePath) {
-        if (result == null) return null;
-        if (storage != null) {
-            String safeConv = conversationId != null && !conversationId.isEmpty()
-                    ? conversationId : "unknown";
-            String candidate = storage.persistIfOversized(
-                    result, toolName, toolUseId, safeConv, workspaceBasePath);
-            if (candidate != null && candidate.startsWith(ToolResultStorage.SPILL_MARKER_PREFIX)) {
-                return candidate;
-            }
-        }
-        return truncateToolResult(result, maxTruncateChars);
-    }
 
     /** 尾部错误模式检测 */
     private static final java.util.regex.Pattern ERROR_TAIL_PATTERN = java.util.regex.Pattern.compile(
@@ -181,16 +126,6 @@ public class ToolExecutionExecutor {
     }
 
     private final Map<String, ToolCallback> toolCallbackMap;
-    /**
-     * Maps a normalized tool name (lowercase snake_case, with `_tool`/`_function`
-     * suffixes stripped) to the canonical name registered in {@link #toolCallbackMap}.
-     * Lets us resolve names the LLM sometimes mangles (e.g. {@code WebSearch},
-     * {@code web_search_tool}, {@code Read_File}) back to the registered tool
-     * before guard / lookup / event reporting run, so guard rules keyed on the
-     * canonical name aren't silently bypassed.
-     */
-    private final Map<String, String> normalizedNameLookup;
-    private static final Pattern CAMEL_BOUNDARY = Pattern.compile("([a-z0-9])([A-Z])");
     private final ToolGuardService toolGuardService;
     private final ToolGuard toolGuard; // legacy fallback
     private final ApprovalWorkflowService approvalService;
@@ -200,56 +135,31 @@ public class ToolExecutionExecutor {
     private final ToolResultStorage resultStorage;
     /** RFC-008 Phase 4 metadata-driven concurrency classifier; nullable for legacy constructors. */
     private final vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry;
-    /**
-     * Issue #46: when {@code toolCallbackMap} misses a name that the LLM
-     * called, we check whether it matches an active skill so we can
-     * return a precise hint instead of bare "Tool not found". Nullable —
-     * legacy constructors and tests may leave this unset, in which case
-     * the safety net falls through to the original error string.
-     */
-    private vip.mate.skill.runtime.SkillRuntimeService skillRuntimeService;
-
-    public void setSkillRuntimeService(vip.mate.skill.runtime.SkillRuntimeService s) {
-        this.skillRuntimeService = s;
-    }
-
-    /**
-     * Optional audit sink. When set, child-agent denied-tool attempts are
-     * recorded so admins can see what children are trying that gets blocked.
-     * Left optional because legacy constructors and tests run without an
-     * audit pipeline.
-     */
-    private vip.mate.audit.service.AuditEventService auditEventService;
-
-    public void setAuditEventService(vip.mate.audit.service.AuditEventService s) {
-        this.auditEventService = s;
-    }
-
-    /**
-     * Per-turn deduplication key set for child-agent denial audit. Without
-     * this, a child that retries the same denied tool many times in one
-     * turn would write one audit row per call. Cleared at the start of
-     * every {@code execute(...)} so it does not retain entries across turns.
-     */
-    private final ThreadLocal<Set<String>> auditedDenials =
-            ThreadLocal.withInitial(HashSet::new);
+    private final WorkspaceService workspaceService;
+    private final ConversationService conversationService;
+    private final ApprovalGrantService approvalGrantService;
+    private final AuthService authService;
+    private final ToolMetadataResolver toolMetadataResolver;
+    /** WP-2: wired policy resolver — delegates merge to EffectivePolicyResolver + PolicyMergeHelper. */
+    private final EffectivePolicyResolver effectivePolicyResolver;
+    private final String templateMetadataJson;
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
-        this(toolSet, toolGuardService, null, approvalService, streamTracker, null, null, null);
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, null, null, null, null, null, null, null, null, null, null);
     }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties) {
-        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, null, null);
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, null, null, null, null, null, null, null, null, null);
     }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
                                   ToolResultStorage resultStorage) {
-        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, null);
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, null, null, null, null, null, null, null, null);
     }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
@@ -257,13 +167,75 @@ public class ToolExecutionExecutor {
                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
                                   ToolResultStorage resultStorage,
                                   vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry) {
-        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, concurrencyRegistry);
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, concurrencyRegistry, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * @deprecated use the overload that also accepts {@link EffectivePolicyResolver}
+     */
+    @Deprecated
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService,
+                      ApprovalGrantService approvalGrantService,
+                      AuthService authService,
+                      ToolMetadataResolver toolMetadataResolver) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage,
+            concurrencyRegistry, workspaceService, conversationService, approvalGrantService, authService,
+            toolMetadataResolver, null, null);
+    }
+
+    /**
+     * @deprecated use the overload that also accepts {@link EffectivePolicyResolver}
+     */
+    @Deprecated
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService,
+                                  ApprovalGrantService approvalGrantService,
+                                  AuthService authService,
+                                  ToolMetadataResolver toolMetadataResolver,
+                                  String templateMetadataJson) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker,
+                toolTimeoutProperties, resultStorage, concurrencyRegistry,
+            workspaceService, conversationService, approvalGrantService,
+            authService, toolMetadataResolver, null, templateMetadataJson);
+    }
+
+    /**
+     * WP-2 entry point — wires {@link EffectivePolicyResolver} so that guard-context
+     * merges use {@link vip.mate.policy.resolver.PolicyMergeHelper} instead of the
+     * legacy inline logic, producing {@code policyProvenance} diagnostics.
+     */
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService,
+                                  ApprovalGrantService approvalGrantService,
+                                  AuthService authService,
+                                  ToolMetadataResolver toolMetadataResolver,
+                                  EffectivePolicyResolver effectivePolicyResolver,
+                                  String templateMetadataJson) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker,
+                toolTimeoutProperties, resultStorage, concurrencyRegistry,
+            workspaceService, conversationService, approvalGrantService,
+            authService, toolMetadataResolver, effectivePolicyResolver, templateMetadataJson);
     }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuard toolGuard,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
         this.toolCallbackMap = toolSet.callbackByName();
-        this.normalizedNameLookup = buildNormalizedLookup(this.toolCallbackMap.keySet());
         this.toolGuardService = null;
         this.toolGuard = toolGuard;
         this.approvalService = approvalService;
@@ -271,6 +243,13 @@ public class ToolExecutionExecutor {
         this.toolTimeoutProperties = null;
         this.resultStorage = null;
         this.concurrencyRegistry = null;
+        this.workspaceService = null;
+        this.conversationService = null;
+        this.approvalGrantService = null;
+        this.authService = null;
+        this.toolMetadataResolver = null;
+        this.effectivePolicyResolver = null;
+        this.templateMetadataJson = null;
     }
 
     private ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
@@ -278,9 +257,15 @@ public class ToolExecutionExecutor {
                                    ChatStreamTracker streamTracker,
                                    vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
                                    ToolResultStorage resultStorage,
-                                   vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry) {
+                                   vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                   WorkspaceService workspaceService,
+                                   ConversationService conversationService,
+                                   ApprovalGrantService approvalGrantService,
+                                   AuthService authService,
+                                   ToolMetadataResolver toolMetadataResolver,
+                                   EffectivePolicyResolver effectivePolicyResolver,
+                                   String templateMetadataJson) {
         this.toolCallbackMap = toolSet.callbackByName();
-        this.normalizedNameLookup = buildNormalizedLookup(this.toolCallbackMap.keySet());
         this.toolGuardService = toolGuardService;
         this.toolGuard = toolGuard;
         this.approvalService = approvalService;
@@ -288,6 +273,13 @@ public class ToolExecutionExecutor {
         this.toolTimeoutProperties = toolTimeoutProperties;
         this.resultStorage = resultStorage;
         this.concurrencyRegistry = concurrencyRegistry;
+        this.workspaceService = workspaceService;
+        this.conversationService = conversationService;
+        this.approvalGrantService = approvalGrantService;
+        this.authService = authService;
+        this.toolMetadataResolver = toolMetadataResolver;
+        this.effectivePolicyResolver = effectivePolicyResolver;
+        this.templateMetadataJson = templateMetadataJson;
     }
 
     private long getToolTimeoutMs(String toolName) {
@@ -354,58 +346,21 @@ public class ToolExecutionExecutor {
                                         String workspaceBasePath,
                                         ChatOrigin origin) {
         ChatOrigin safeOrigin = origin != null ? origin : ChatOrigin.EMPTY;
-        // Reset per-turn audit dedupe state. A retried denied tool inside the
-        // same turn writes a single audit row; the set is repopulated by the
-        // denial branch below.
-        auditedDenials.get().clear();
         List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
         List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
         // RFC-052: accumulate full-text outputs from returnDirect tools so the
         // graph can route to FinalAnswerNode without re-entering the LLM.
         List<DirectToolOutput> directOutputs = Collections.synchronizedList(new ArrayList<>());
 
-        // RFC-03 Lane A2 — cap per-response tool_calls before doing any other
-        // work. Truncated calls get synthetic responses appended right away so
-        // the LLM sees the cap on its next turn instead of hanging on missing
-        // ToolResponseMessages. See MAX_TOOL_CALLS_PER_RESPONSE javadoc.
-        CappedToolCalls capped = capToolCalls(toolCalls, MAX_TOOL_CALLS_PER_RESPONSE);
-        if (capped.wasTruncated) {
-            int requested = toolCalls.size();
-            log.warn("[ToolExecutor] Model returned {} tool_calls in one response; truncating to {} — see RFC-03 A2",
-                    requested, MAX_TOOL_CALLS_PER_RESPONSE);
-            events.add(GraphEventPublisher.phase("toolflood", Map.of(
-                    "requested", requested,
-                    "executed", MAX_TOOL_CALLS_PER_RESPONSE,
-                    "dropped", requested - MAX_TOOL_CALLS_PER_RESPONSE)));
-            allResponses.addAll(capped.truncatedResponses);
-        }
-        List<AssistantMessage.ToolCall> effectiveCalls = capped.effective;
-
-        events.add(GraphEventPublisher.phase("action", Map.of("toolCount", effectiveCalls.size())));
-
-        // Shared collector for raw-stage SourceEvidenceLedger entries. Every
-        // PreparedToolCall built below points at this same AtomicReference;
-        // executeSingleTool does an atomic accumulateAndGet(merge) right
-        // after the raw tool result is in hand and BEFORE spill/truncate
-        // shrinks it. ActionNode then reads the final ledger off
-        // ToolExecutionResult.rawEvidenceLedger() instead of rebuilding it
-        // from the spill-compacted responses (which routinely lose the
-        // exact lines that mention the cited filenames — see #4b38f04f
-        // production trace, where "ObservationNode.java" only appeared in
-        // a 30 KB grep result that got head/tail-cut to 4 KB).
-        java.util.concurrent.atomic.AtomicReference<SourceEvidenceLedger> rawEvidenceRef =
-                new java.util.concurrent.atomic.AtomicReference<>(SourceEvidenceLedger.empty());
+        events.add(GraphEventPublisher.phase("action", Map.of("toolCount", toolCalls.size())));
 
         // ═══ Phase 1: 顺序 Guard + 分段 ═══
         List<PreparedToolCall> preparedCalls = new ArrayList<>();
         ApprovalBarrier barrier = null;
 
-        for (int i = 0; i < effectiveCalls.size(); i++) {
-            AssistantMessage.ToolCall toolCall = effectiveCalls.get(i);
-            // Resolve LLM-emitted name to canonical BEFORE guard / lookup so a
-            // mangled name (Read_File, web_search_tool, BrowserUseTool) can't
-            // bypass guard rules keyed on the canonical name.
-            String toolName = resolveToolName(toolCall.name());
+        for (int i = 0; i < toolCalls.size(); i++) {
+            AssistantMessage.ToolCall toolCall = toolCalls.get(i);
+            String toolName = toolCall.name();
             String arguments = toolCall.arguments();
 
             events.add(GraphEventPublisher.toolStart(toolCall.id(), toolName, arguments));
@@ -416,22 +371,6 @@ public class ToolExecutionExecutor {
                 if (denied.contains(toolName)) {
                     String msg = "[安全限制] 子 Agent 不允许使用工具: " + toolName;
                     log.info("[ToolExecutor] Child agent blocked from using tool: {}", toolName);
-                    // Audit per (toolName, conversationId) tuple at most once
-                    // per turn so a child retrying the same denied tool many
-                    // times does not spam the audit table.
-                    if (auditEventService != null && auditedDenials.get().add(toolName)) {
-                        try {
-                            String detail = "{\"toolName\":\"" + toolName + "\",\"conversationId\":\""
-                                    + (conversationId != null ? conversationId : "")
-                                    + "\",\"agentId\":\"" + (agentId != null ? agentId : "")
-                                    + "\"}";
-                            auditEventService.record("subagent.tool.denied", "tool",
-                                    toolName, toolName, detail);
-                        } catch (Exception auditEx) {
-                            log.debug("[ToolExecutor] Audit write failed for denied tool {}: {}",
-                                    toolName, auditEx.getMessage());
-                        }
-                    }
                     events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
                     allResponses.add(new org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse(
                             toolCall.id(), toolName, msg));
@@ -456,8 +395,9 @@ public class ToolExecutionExecutor {
 
             // 2. ToolGuard 安全检查（replay 模式跳过）
             if (!isReplay) {
+                Long workspaceId = resolveWorkspaceId(conversationId, safeOrigin);
                 GuardDecision decision = evaluateGuard(toolCall, toolName, arguments,
-                        conversationId, agentId, toolCalls, i, events, requesterId);
+                    conversationId, agentId, toolCalls, i, events, requesterId, workspaceId, safeOrigin);
 
                 if (decision.blocked) {
                     allResponses.add(new ToolResponseMessage.ToolResponse(
@@ -469,8 +409,8 @@ public class ToolExecutionExecutor {
                     allResponses.add(new ToolResponseMessage.ToolResponse(
                             toolCall.id(), toolName, decision.response));
                     // 标记后续工具为等待审批
-                    for (int j = i + 1; j < effectiveCalls.size(); j++) {
-                        AssistantMessage.ToolCall remaining = effectiveCalls.get(j);
+                    for (int j = i + 1; j < toolCalls.size(); j++) {
+                        AssistantMessage.ToolCall remaining = toolCalls.get(j);
                         allResponses.add(new ToolResponseMessage.ToolResponse(
                                 remaining.id(), remaining.name(),
                                 "[⏳ 等待审批] 前序工具等待审批中，本工具暂缓执行。"));
@@ -491,29 +431,17 @@ public class ToolExecutionExecutor {
             }
             ToolCallback callback = toolCallbackMap.get(toolName);
             if (callback == null) {
-                SkillRedirect redirect = tryAutoRedirectSkillCall(toolName, arguments, safeOrigin);
-                if (redirect != null) {
-                    // Auto-redirect succeeds with success=true on the SSE event so the
-                    // model treats the SKILL.md content as the answer to a different,
-                    // valid question (rather than as another failed call to recover from).
-                    events.add(GraphEventPublisher.toolComplete(
-                            toolCall.id(), toolName, redirect.response(), true));
-                    allResponses.add(new ToolResponseMessage.ToolResponse(
-                            toolCall.id(), toolName, redirect.response()));
-                    continue;
-                }
-                String msg = skillAwareNotFoundMessage(toolName);
-                log.warn("[ToolExecutor] {}", msg);
-                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
+                log.warn("[ToolExecutor] Tool not found: {}", toolName);
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
                 allResponses.add(new ToolResponseMessage.ToolResponse(
-                        toolCall.id(), toolName, msg));
+                        toolCall.id(), toolName, "Tool not found: " + toolName));
                 continue;
             }
 
             // 4. 分类: concurrencySafe
             boolean safe = isConcurrencySafe(toolName);
             preparedCalls.add(new PreparedToolCall(toolCall, callback, arguments, safe, allResponses.size(),
-                    conversationId, requesterId, workspaceBasePath, safeOrigin, rawEvidenceRef));
+                    conversationId, requesterId, workspaceBasePath, safeOrigin));
             // 占位，Phase 2 填充
             allResponses.add(null);
         }
@@ -538,8 +466,7 @@ public class ToolExecutionExecutor {
         return new ToolExecutionResult(allResponses, events, hasApprovalPending,
                 barrier != null ? barrier.pendingId : null,
                 barrier != null ? barrier.toolName : null,
-                List.copyOf(directOutputs),
-                rawEvidenceRef.get());
+                List.copyOf(directOutputs));
     }
 
     /**
@@ -575,27 +502,14 @@ public class ToolExecutionExecutor {
             List<GraphEventPublisher.GraphEvent> events,
             String conversationId, String workspaceBasePath,
             List<DirectToolOutput> directOutputs) {
-        String toolName = resolveToolName(toolCall.name());
+        String toolName = toolCall.name();
         String callArguments = storedArguments != null ? storedArguments : toolCall.arguments();
 
         ToolCallback callback = toolCallbackMap.get(toolName);
         if (callback == null) {
-            // Same auto-redirect for pre-approved replays — a stale skill-as-tool
-            // approval shouldn't dead-end the conversation either.
-            ChatOrigin replayOriginForRedirect = ChatOrigin.EMPTY
-                    .withConversationId(conversationId)
-                    .withWorkspace(null, workspaceBasePath);
-            SkillRedirect redirect = tryAutoRedirectSkillCall(toolName, callArguments, replayOriginForRedirect);
-            if (redirect != null) {
-                events.add(GraphEventPublisher.toolComplete(
-                        toolCall.id(), toolName, redirect.response(), true));
-                return new ToolResponseMessage.ToolResponse(
-                        toolCall.id(), toolName, redirect.response());
-            }
-            String msg = skillAwareNotFoundMessage(toolName);
-            log.warn("[ToolExecutor] Pre-approved {}", msg);
-            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
-            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, msg);
+            log.warn("[ToolExecutor] Pre-approved tool not found: {}", toolName);
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
+            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, "Tool not found: " + toolName);
         }
 
         try {
@@ -625,20 +539,24 @@ public class ToolExecutionExecutor {
                 }
                 events.add(GraphEventPublisher.toolDirectResult(
                         toolCall.id(), toolName, fullResult));
+                persistToolMessageAsync(conversationId, toolName, "");
                 return new ToolResponseMessage.ToolResponse(
                         toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
             }
 
-            // Raw-first spill, inline truncate as fallback. Symmetric with the
-            // non-replay path in executeSingleTool. The caller-supplied
-            // conversationId scopes spill files into the per-conversation
-            // directory layout. See spillRawOrTruncate javadoc for why the
-            // order matters.
-            result = spillRawOrTruncate(resultStorage, MAX_TOOL_RESULT_CHARS,
-                    result, toolName, toolCall.id(), conversationId, workspaceBasePath);
+            // Phase 3 Layer 2: spill before truncation when storage is wired.
+            // Use the caller-supplied conversationId so spill files inherit the
+            // same per-conversation directory layout as the non-replay path.
+            if (resultStorage != null && result != null) {
+                String spillConv = conversationId != null && !conversationId.isEmpty() ? conversationId : "unknown";
+                result = resultStorage.persistIfOversized(
+                        result, toolName, toolCall.id(), spillConv, workspaceBasePath);
+            }
+            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Pre-approved tool {} returned {} chars{}", toolName, rawLen,
                     result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
             events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, result, true));
+            persistToolMessageAsync(conversationId, toolName, result);
             return new ToolResponseMessage.ToolResponse(
                     toolCall.id(), toolName, result != null ? result : "");
         } catch (Exception e) {
@@ -647,6 +565,7 @@ public class ToolExecutionExecutor {
                     ? "Tool execution failed (details withheld per returnDirect policy)"
                     : "Tool execution failed: " + e.getMessage();
             events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, safeError, false));
+            persistToolMessageAsync(conversationId, toolName, "");
             return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, safeError);
         }
     }
@@ -827,6 +746,7 @@ public class ToolExecutionExecutor {
                             GraphEventPublisher.EVENT_TOOL_DIRECT_RESULT, directEvent.data());
                     streamTracker.updateRunningTool(pc.conversationId, null);
                 }
+                persistToolMessageAsync(pc.conversationId, toolName, "");
                 // Placeholder keeps the tool_call_id ↔ tool_response pairing valid
                 // for OpenAI-compatible providers, while withholding the data from
                 // any subsequent LLM round (the graph won't take a next round —
@@ -835,32 +755,15 @@ public class ToolExecutionExecutor {
                         pc.toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
             }
 
-            // Capture SourceEvidenceLedger from the RAW result, before truncate/
-            // spill compacts it. Building the ledger from the post-compact
-            // response (the old ActionNode behaviour) loses any file path that
-            // happens to fall outside the head/tail kept by truncateToolResult.
-            // Wrapping the raw string in a synthetic ToolResponseMessage.ToolResponse
-            // lets us reuse SourceEvidenceLedger.fromToolResponses verbatim — no
-            // new parsing path to keep in sync.
-            if (result != null && pc.rawEvidenceCollector != null) {
-                SourceEvidenceLedger rawDelta = SourceEvidenceLedger.fromToolResponses(
-                        java.util.List.of(new ToolResponseMessage.ToolResponse(
-                                pc.toolCall.id(), toolName, result)));
-                if (rawDelta.hasEvidence()) {
-                    pc.rawEvidenceCollector.accumulateAndGet(rawDelta, SourceEvidenceLedger::merge);
-                }
+            // RFC-008 Phase 3 Layer 2: spill oversized results to disk and replace
+            // with preview + path. Falls back to truncation when spilling is
+            // disabled or fails. Spill preserves the full output (read_file can
+            // retrieve it); truncation discards the tail.
+            if (resultStorage != null && result != null) {
+                result = resultStorage.persistIfOversized(
+                        result, toolName, pc.toolCall.id(), pc.conversationId, pc.workspaceBasePath);
             }
-
-            // Raw-first spill: write the full output to disk and replace
-            // with preview + path so the model can call read_file for the
-            // ground truth. Fall back to inline truncate only when spilling
-            // is disabled, the tool is on the exclusion list, the body is
-            // already under the spill threshold, or the disk write fails.
-            // Truncating before spilling would persist a pre-shortened body
-            // to disk and silently lose data the model could otherwise
-            // recover.
-            result = spillRawOrTruncate(resultStorage, MAX_TOOL_RESULT_CHARS,
-                    result, toolName, pc.toolCall.id(), pc.conversationId, pc.workspaceBasePath);
+            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Tool {} returned {} chars{}", toolName, rawLen,
                     result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
             events.add(GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true));
@@ -869,6 +772,7 @@ public class ToolExecutionExecutor {
                         GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true).data());
                 streamTracker.updateRunningTool(pc.conversationId, null);
             }
+            persistToolMessageAsync(pc.conversationId, toolName, result);
             return new ToolResponseMessage.ToolResponse(
                     pc.toolCall.id(), toolName, result != null ? result : "");
         } catch (Exception e) {
@@ -887,9 +791,34 @@ public class ToolExecutionExecutor {
                         GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, reportedError, false).data());
                 streamTracker.updateRunningTool(pc.conversationId, null);
             }
+            persistToolMessageAsync(pc.conversationId, toolName, "");
             return new ToolResponseMessage.ToolResponse(
                     pc.toolCall.id(), toolName, reportedError);
         }
+    }
+
+    /**
+     * 异步保存工具执行结果（role='tool'），不阻塞主流程。
+     * 使用 TOOL_EXECUTOR 虚拟线程池执行，失败仅记录日志。
+     */
+    private void persistToolMessageAsync(String conversationId, String toolName, String result) {
+        if (conversationService == null || conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+        String contentToSave = result != null ? result : "";
+        if (contentToSave.length() > 1000) {
+            contentToSave = contentToSave.substring(0, 1000) + "...";
+        }
+        final String finalContent = contentToSave;
+        CompletableFuture.runAsync(() -> {
+            try {
+                conversationService.saveToolMessage(conversationId, toolName, finalContent);
+                log.debug("[ToolExecutor] Persisted tool message: conversationId={}, toolName={}",
+                        conversationId, toolName);
+            } catch (Exception e) {
+                log.warn("[ToolExecutor] Failed to persist tool message async: {}", e.getMessage());
+            }
+        }, TOOL_EXECUTOR);
     }
 
     // ==================== Guard 评估 ====================
@@ -897,8 +826,11 @@ public class ToolExecutionExecutor {
     private GuardDecision evaluateGuard(AssistantMessage.ToolCall toolCall, String toolName, String arguments,
                                          String conversationId, String agentId,
                                          List<AssistantMessage.ToolCall> allToolCalls, int currentIndex,
-                                         List<GraphEventPublisher.GraphEvent> events, String requesterId) {
-        ToolInvocationContext guardCtx = ToolInvocationContext.of(toolName, arguments, conversationId, agentId);
+                                         List<GraphEventPublisher.GraphEvent> events, String requesterId,
+                                         Long workspaceId, ChatOrigin origin) {
+        boolean fullAccess = workspaceService != null && workspaceService.isProjectFullAccess(workspaceId);
+        ToolInvocationContext guardCtx = buildGuardContext(toolName, arguments, conversationId, agentId,
+            requesterId, workspaceId, origin != null ? origin.workspaceBasePath() : null, fullAccess);
 
         if (toolGuardService != null) {
             GuardEvaluation evaluation = toolGuardService.evaluate(guardCtx);
@@ -911,6 +843,23 @@ public class ToolExecutionExecutor {
             }
 
             if (evaluation.shouldRequireApproval()) {
+                if (fullAccess) {
+                    log.info("[ToolExecutor] Approval bypassed by project full-access mode: tool={}, workspaceId={}",
+                            toolName, workspaceId);
+                    return GuardDecision.allowed();
+                }
+                if (approvalGrantService != null
+                        && approvalGrantService.hasReusableGrant(
+                        requesterId,
+                        conversationId,
+                        workspaceId,
+                        origin != null ? origin.workspaceBasePath() : null,
+                        toolName,
+                        evaluation)) {
+                    log.info("[ToolExecutor] Approval bypassed by reusable grant: tool={}, conversationId={}",
+                            toolName, conversationId);
+                    return GuardDecision.allowed();
+                }
                 List<AssistantMessage.ToolCall> remaining = allToolCalls.subList(currentIndex + 1, allToolCalls.size());
                 String approvalResponse = ToolExecutionGuardHelper.handleToolApproval(
                         toolCall, toolName, arguments, evaluation,
@@ -930,6 +879,11 @@ public class ToolExecutionExecutor {
             }
 
             if (guardResult.needsApproval()) {
+                if (fullAccess) {
+                    log.info("[ToolExecutor] Legacy approval bypassed by project full-access mode: tool={}, workspaceId={}",
+                            toolName, workspaceId);
+                    return GuardDecision.allowed();
+                }
                 List<AssistantMessage.ToolCall> remaining = allToolCalls.subList(currentIndex + 1, allToolCalls.size());
                 String approvalResponse = ToolExecutionGuardHelper.handleToolApprovalLegacy(
                         toolCall, toolName, arguments, guardResult,
@@ -940,6 +894,342 @@ public class ToolExecutionExecutor {
         }
 
         return GuardDecision.allowed();
+    }
+
+    private ToolInvocationContext buildGuardContext(String toolName,
+                                                    String arguments,
+                                                    String conversationId,
+                                                    String agentId,
+                                                    String requesterId,
+                                                    Long workspaceId,
+                                                        String workspaceBasePath,
+                                                    boolean fullAccess) {
+        Long userId = parseUserId(requesterId);
+        String accountRole = resolveAccountRole(requesterId, userId);
+        String workspaceRole = workspaceService != null && userId != null
+                ? workspaceService.getMembershipRoleCached(workspaceId, userId)
+                : null;
+        ToolRuntimeMetadata toolMetadata = resolveToolMetadata(toolName);
+        String workspacePolicyMode = fullAccess
+                ? WorkspaceService.PROJECT_PERMISSION_MODE_FULL
+                : WorkspaceService.PROJECT_PERMISSION_MODE_LIMITED;
+
+        // WP-2: prefer the wired EffectivePolicyResolver (produces provenance diagnostics).
+        // Fall back to legacy inline merge when resolver is not wired.
+        WorkspacePolicy workspacePolicy;
+        java.util.Map<PolicyDimension, EffectivePolicyContract.DimensionProvenance> provenance = null;
+        if (effectivePolicyResolver != null) {
+            try {
+                EffectivePolicyContract.PolicyResolutionResult result =
+                        effectivePolicyResolver.resolveEffectivePolicy(workspaceId, null, null);
+                workspacePolicy = result.effectivePolicy();
+                provenance = result.provenance();
+                // Build template policy for fullAccess passthrough (EffectivePolicyResolver
+                // skips merge when workspace is null — we still want template-only policy).
+                if (fullAccess && workspacePolicy != null) {
+                    workspacePolicy = mergeTemplatePolicy(workspacePolicy, workspaceBasePath, true);
+                }
+            } catch (Exception e) {
+                log.warn("[WP-2] EffectivePolicyResolver failed, falling back to inline merge: {}", e.getMessage());
+                workspacePolicy = buildWorkspacePolicyInline(workspaceId, workspaceBasePath, fullAccess);
+            }
+        } else {
+            workspacePolicy = buildWorkspacePolicyInline(workspaceId, workspaceBasePath, fullAccess);
+        }
+
+        return ToolInvocationContext.of(
+                toolName,
+                Map.of(),
+                arguments,
+                conversationId,
+                agentId,
+                null,
+                requesterId,
+                accountRole,
+                workspaceRole,
+                workspaceId,
+                workspaceBasePath,
+                workspacePolicyMode,
+                workspacePolicy,
+                toolMetadata,
+                provenance
+        );
+    }
+
+    /**
+     * Legacy inline merge — kept as fallback when {@link EffectivePolicyResolver}
+     * is not wired. Identical outcomes to {@link PolicyMergeHelper} for all
+     * non-provenance cases.
+     */
+    private WorkspacePolicy buildWorkspacePolicyInline(Long workspaceId, String workspaceBasePath,
+                                                       boolean fullAccess) {
+        WorkspacePolicy workspacePolicy = workspaceService != null
+                ? workspaceService.resolveWorkspacePolicy(workspaceId)
+                : null;
+        return mergeTemplatePolicy(workspacePolicy, workspaceBasePath, fullAccess);
+    }
+
+    private WorkspacePolicy mergeTemplatePolicy(WorkspacePolicy workspacePolicy,
+                                                String workspaceBasePath,
+                                                boolean fullAccess) {
+        if (fullAccess) {
+            return workspacePolicy;
+        }
+        WorkspacePolicy templatePolicy = parseTemplateWorkspacePolicy(workspaceBasePath);
+        if (templatePolicy == null) {
+            return workspacePolicy;
+        }
+        if (workspacePolicy == null) {
+            return templatePolicy;
+        }
+
+        WorkspacePolicy merged = new WorkspacePolicy();
+        merged.setSandboxMode(moreRestrictiveSandbox(workspacePolicy.getSandboxMode(), templatePolicy.getSandboxMode()));
+        merged.setApprovalPolicy(moreRestrictiveApproval(workspacePolicy.getApprovalPolicy(), templatePolicy.getApprovalPolicy()));
+        merged.setNetworkPolicy(moreRestrictiveNetwork(workspacePolicy.getNetworkPolicy(), templatePolicy.getNetworkPolicy()));
+        merged.setAllowedPaths(mergeAllowedPaths(workspacePolicy.getAllowedPaths(), templatePolicy.getAllowedPaths()));
+        merged.setDeniedPaths(unionLists(workspacePolicy.getDeniedPaths(), templatePolicy.getDeniedPaths()));
+        Map<String, String> riskOverrides = new LinkedHashMap<>();
+        if (workspacePolicy.getRiskOverrides() != null) {
+            riskOverrides.putAll(workspacePolicy.getRiskOverrides());
+        }
+        if (templatePolicy.getRiskOverrides() != null) {
+            riskOverrides.putAll(templatePolicy.getRiskOverrides());
+        }
+        merged.setRiskOverrides(riskOverrides);
+        return merged;
+    }
+
+    private WorkspacePolicy parseTemplateWorkspacePolicy(String workspaceBasePath) {
+        if (templateMetadataJson == null || templateMetadataJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode policyNode = OBJECT_MAPPER.readTree(templateMetadataJson)
+                    .path("template")
+                    .path("defaultWorkspacePolicy");
+            if (!policyNode.isObject()) {
+                return null;
+            }
+            WorkspacePolicy policy = new WorkspacePolicy();
+            policy.setSandboxMode(normalizeSandboxMode(policyNode.path("sandboxMode").asText(null)));
+            policy.setApprovalPolicy(normalizeApprovalPolicy(policyNode.path("approvalPolicy").asText(null)));
+            policy.setNetworkPolicy(normalizeNetworkPolicy(policyNode.path("networkPolicy").asText(null)));
+            policy.setAllowedPaths(readStringArray(policyNode.path("allowedPaths"), workspaceBasePath));
+            policy.setDeniedPaths(readStringArray(policyNode.path("deniedPaths"), workspaceBasePath));
+            policy.setRiskOverrides(readRiskOverrides(policyNode.path("riskOverrides"), policyNode.path("deniedActions")));
+            return policy;
+        } catch (Exception e) {
+            log.warn("[ToolExecutor] Failed to parse template workspace policy: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String normalizeSandboxMode(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT).replace('_', '-')) {
+            case "read-only", "readonly" -> WorkspacePolicy.SANDBOX_READ_ONLY;
+            case "full-access", "full" -> WorkspacePolicy.SANDBOX_FULL_ACCESS;
+            case "workspace-write", "workspace" -> WorkspacePolicy.SANDBOX_WORKSPACE_WRITE;
+            default -> value;
+        };
+    }
+
+    private String normalizeApprovalPolicy(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT).replace('_', '-')) {
+            case "strict" -> WorkspacePolicy.APPROVAL_STRICT;
+            default -> WorkspacePolicy.APPROVAL_DEFAULT;
+        };
+    }
+
+    private String normalizeNetworkPolicy(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT).replace('_', '-')) {
+            case "disabled" -> WorkspacePolicy.NETWORK_DISABLED;
+            case "restricted" -> WorkspacePolicy.NETWORK_RESTRICTED;
+            default -> WorkspacePolicy.NETWORK_INHERIT;
+        };
+    }
+
+    private String moreRestrictiveSandbox(String left, String right) {
+        int leftRank = sandboxRank(left);
+        int rightRank = sandboxRank(right);
+        return leftRank >= rightRank ? left : right;
+    }
+
+    private int sandboxRank(String value) {
+        if (WorkspacePolicy.SANDBOX_READ_ONLY.equalsIgnoreCase(value)) return 3;
+        if (WorkspacePolicy.SANDBOX_WORKSPACE_WRITE.equalsIgnoreCase(value)) return 2;
+        if (WorkspacePolicy.SANDBOX_FULL_ACCESS.equalsIgnoreCase(value)) return 1;
+        return 0;
+    }
+
+    private String moreRestrictiveApproval(String left, String right) {
+        if (WorkspacePolicy.APPROVAL_STRICT.equalsIgnoreCase(left)
+                || WorkspacePolicy.APPROVAL_STRICT.equalsIgnoreCase(right)) {
+            return WorkspacePolicy.APPROVAL_STRICT;
+        }
+        return left != null ? left : right;
+    }
+
+    private String moreRestrictiveNetwork(String left, String right) {
+        int leftRank = networkRank(left);
+        int rightRank = networkRank(right);
+        return leftRank >= rightRank ? left : right;
+    }
+
+    private int networkRank(String value) {
+        if (WorkspacePolicy.NETWORK_DISABLED.equalsIgnoreCase(value)) return 3;
+        if (WorkspacePolicy.NETWORK_RESTRICTED.equalsIgnoreCase(value)) return 2;
+        if (WorkspacePolicy.NETWORK_INHERIT.equalsIgnoreCase(value)) return 1;
+        return 0;
+    }
+
+    private List<String> mergeAllowedPaths(List<String> workspacePaths, List<String> templatePaths) {
+        if (templatePaths != null && !templatePaths.isEmpty()) {
+            return templatePaths;
+        }
+        return workspacePaths;
+    }
+
+    private List<String> unionLists(List<String> left, List<String> right) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (left != null) values.addAll(left);
+        if (right != null) values.addAll(right);
+        return values.isEmpty() ? null : new ArrayList<>(values);
+    }
+
+    private List<String> readStringArray(JsonNode node, String workspaceBasePath) {
+        if (node == null || !node.isArray()) {
+            return null;
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (!item.isValueNode() || item.asText().isBlank()) {
+                continue;
+            }
+            if (item.asText().contains("${workspace.") && (workspaceBasePath == null || workspaceBasePath.isBlank())) {
+                continue;
+            }
+            values.add(resolveWorkspacePlaceholder(item.asText(), workspaceBasePath));
+        }
+        return values.isEmpty() ? null : values;
+    }
+
+    private String resolveWorkspacePlaceholder(String value, String workspaceBasePath) {
+        if (workspaceBasePath == null || workspaceBasePath.isBlank()) {
+            return value;
+        }
+        return value
+                .replace("${workspace.root}", workspaceBasePath)
+                .replace("${workspace.basePath}", workspaceBasePath);
+    }
+
+    private Map<String, String> readRiskOverrides(JsonNode riskNode, JsonNode deniedActionsNode) {
+        Map<String, String> overrides = new LinkedHashMap<>();
+        if (riskNode != null && riskNode.isObject()) {
+            riskNode.fields().forEachRemaining(entry -> {
+                String decision = riskOverrideDecision(entry.getValue());
+                if (decision != null) {
+                    overrides.put(entry.getKey(), decision);
+                }
+            });
+        }
+        if (deniedActionsNode != null && deniedActionsNode.isArray()) {
+            for (JsonNode action : deniedActionsNode) {
+                if (action.isValueNode()) {
+                    addDeniedActionOverride(overrides, action.asText());
+                }
+            }
+        }
+        return overrides.isEmpty() ? null : overrides;
+    }
+
+    private String riskOverrideDecision(JsonNode value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isTextual()) {
+            return value.asText();
+        }
+        if (value.path("requiresApproval").asBoolean(false)) {
+            return "high";
+        }
+        String riskLevel = value.path("riskLevel").asText(null);
+        return riskLevel != null && !riskLevel.isBlank() ? riskLevel : null;
+    }
+
+    private void addDeniedActionOverride(Map<String, String> overrides, String action) {
+        if (action == null) {
+            return;
+        }
+        String normalized = action.trim().toLowerCase(Locale.ROOT);
+        if (normalized.contains("shell")) {
+            overrides.put("execute_shell_command", "block");
+            overrides.put("shell_execute", "block");
+            overrides.put("run_command", "block");
+        }
+        if (normalized.contains("network")) {
+            overrides.put("search", "block");
+            overrides.put("browser_use", "block");
+        }
+        if (normalized.contains("database_mutation")) {
+            overrides.put("execute_sql", "block");
+        }
+    }
+
+    private ToolRuntimeMetadata resolveToolMetadata(String toolName) {
+        ToolCallback callback = toolCallbackMap.get(toolName);
+        boolean concurrencySafe = isConcurrencySafe(toolName);
+        long timeoutMs = getToolTimeoutMs(toolName);
+        if (toolMetadataResolver == null) {
+            return new ToolRuntimeMetadata(
+                    toolName,
+                    vip.mate.tool.metadata.ToolSourceType.UNKNOWN,
+                    false,
+                    !concurrencySafe,
+                    vip.mate.tool.guard.model.GuardSeverity.MEDIUM,
+                    timeoutMs,
+                    false,
+                    concurrencySafe,
+                    isReturnDirect(callback)
+            );
+        }
+        return toolMetadataResolver.resolve(toolName, callback, concurrencySafe, timeoutMs);
+    }
+
+    private Long parseUserId(String requesterId) {
+        if (requesterId == null || requesterId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(requesterId);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String resolveAccountRole(String requesterId, Long userId) {
+        if ("system".equalsIgnoreCase(requesterId)) {
+            return "system";
+        }
+        if (userId == null || authService == null) {
+            return null;
+        }
+        try {
+            UserEntity user = authService.findById(userId);
+            return user != null ? user.getRole() : null;
+        } catch (Exception e) {
+            log.debug("[ToolExecutor] Failed to resolve account role for requester={}: {}", requesterId, e.getMessage());
+            return null;
+        }
     }
 
     // ==================== 辅助方法 ====================
@@ -1023,167 +1313,15 @@ public class ToolExecutionExecutor {
         return approvalResponse;
     }
 
-    /**
-     * Issue #46 — when a tool callback miss happens, check whether the
-     * unrecognized name actually matches an active skill. If it does, return
-     * a precise hint telling the LLM the right invocation pattern instead
-     * of bare "Tool not found: X". Without this, an LLM that called e.g.
-     * {@code RedisOps} as a tool gets no recovery signal and either gives
-     * up or falls back to shell guessing.
-     *
-     * <p>Case-insensitive match because LLMs sometimes change the case of
-     * skill names mid-conversation.
-     */
-    /**
-     * Resolve the LLM-emitted tool name to a registered canonical name.
-     * Tries exact match first (the hot path); on miss, normalizes the input
-     * (camelCase→snake_case, lowercase, strip {@code _tool}/{@code _function}
-     * suffix) and looks up the canonical equivalent. Returns the original
-     * string when no match is found, so the caller's downstream "tool not
-     * found" path still fires.
-     */
-    String resolveToolName(String requested) {
-        if (requested == null || requested.isBlank()) {
-            return requested;
+    private Long resolveWorkspaceId(String conversationId, ChatOrigin origin) {
+        if (origin != null && origin.workspaceId() != null) {
+            return origin.workspaceId();
         }
-        if (toolCallbackMap.containsKey(requested)) {
-            return requested;
-        }
-        String normalized = normalizeToolName(requested);
-        String canonical = normalizedNameLookup.get(normalized);
-        if (canonical != null) {
-            log.info("[ToolExecutor] Tool name normalized: '{}' -> '{}' (via '{}')",
-                    requested, canonical, normalized);
-            return canonical;
-        }
-        return requested;
-    }
-
-    static String normalizeToolName(String name) {
-        if (name == null || name.isBlank()) {
-            return "";
-        }
-        String snake = CAMEL_BOUNDARY.matcher(name).replaceAll("$1_$2");
-        String collapsed = snake.toLowerCase(Locale.ROOT)
-                .replaceAll("[\\s\\-.]+", "_")
-                .replaceAll("_+", "_");
-        if (collapsed.endsWith("_tool")) {
-            collapsed = collapsed.substring(0, collapsed.length() - 5);
-        } else if (collapsed.endsWith("_function")) {
-            collapsed = collapsed.substring(0, collapsed.length() - 9);
-        }
-        return collapsed.replaceAll("^_+|_+$", "");
-    }
-
-    private static Map<String, String> buildNormalizedLookup(Set<String> canonicalNames) {
-        Map<String, String> result = new HashMap<>(canonicalNames.size() * 2);
-        for (String name : canonicalNames) {
-            String norm = normalizeToolName(name);
-            if (norm.isEmpty()) {
-                continue;
-            }
-            String previous = result.putIfAbsent(norm, name);
-            if (previous != null && !previous.equals(name)) {
-                log.warn("[ToolExecutor] Two registered tools normalize to the same key '{}': "
-                        + "'{}' and '{}' — only '{}' will resolve from mangled LLM emissions",
-                        norm, previous, name, previous);
-            }
-        }
-        return Map.copyOf(result);
-    }
-
-    private String skillAwareNotFoundMessage(String toolName) {
-        if (skillRuntimeService != null && toolName != null && !toolName.isBlank()) {
-            try {
-                boolean isSkill = skillRuntimeService.getActiveSkills().stream()
-                        .anyMatch(s -> s.getName() != null && s.getName().equalsIgnoreCase(toolName));
-                if (isSkill) {
-                    return String.format(
-                            "'%s' is a Skill, not a Tool — calling it as a tool fails. "
-                            + "To use it, FIRST call readSkillFile(skillName=\"%s\", filePath=\"SKILL.md\") "
-                            + "to read its instructions, THEN follow what SKILL.md tells you "
-                            + "(typically runSkillScript with a scripts/<file> path).",
-                            toolName, toolName);
-                }
-            } catch (Exception e) {
-                // Don't let a hint-side failure mask the original error.
-                log.debug("[ToolExecutor] skill-aware hint check failed: {}", e.getMessage());
-            }
-        }
-        return "Tool not found: " + toolName;
-    }
-
-    /**
-     * Holder for an auto-redirect outcome: the SKILL.md content (wrapped
-     * with a one-line nudge) that we substitute as the tool response when
-     * the LLM mistakenly calls a skill name as if it were a tool.
-     *
-     * <p>{@code success=true} on the substituted response so the model
-     * doesn't read it as "tool failed, try harder" — semantically we
-     * answered a different question than the one it asked, and we want
-     * the model to follow the redirect rather than thrash.
-     */
-    private record SkillRedirect(String response) {}
-
-    /**
-     * When the LLM calls a skill name as if it were a tool, transparently
-     * fetch its SKILL.md and return that as the tool response. Smaller
-     * models (qwen-turbo et al.) often can't act on a "not a tool — go
-     * read X first" hint; they keep emitting the same wrong call until the
-     * iteration cap. With auto-redirect, the model receives runnable
-     * instructions on the very first attempt and can copy the runSkillScript
-     * shape from SKILL.md verbatim.
-     *
-     * <p>Returns {@code null} if {@code toolName} isn't a registered skill,
-     * if {@code readSkillFile} isn't available in this agent's tool set, or
-     * if the redirect call itself errored — the caller then falls through
-     * to the usual {@code skillAwareNotFoundMessage} hint.
-     */
-    private SkillRedirect tryAutoRedirectSkillCall(String toolName, String originalArgs, ChatOrigin origin) {
-        if (skillRuntimeService == null || toolName == null || toolName.isBlank()) return null;
-        try {
-            boolean isSkill = skillRuntimeService.getActiveSkills().stream()
-                    .anyMatch(s -> s.getName() != null && s.getName().equalsIgnoreCase(toolName));
-            if (!isSkill) return null;
-        } catch (Exception e) {
-            log.debug("[ToolExecutor] auto-redirect skill lookup failed: {}", e.getMessage());
+        if (conversationService == null || conversationId == null || conversationId.isBlank()) {
             return null;
         }
-
-        ToolCallback readSkillFile = toolCallbackMap.get("readSkillFile");
-        if (readSkillFile == null) {
-            log.debug("[ToolExecutor] readSkillFile not bound to this agent — cannot auto-redirect '{}'", toolName);
-            return null;
-        }
-
-        String redirectArgs = "{\"skillName\":\""
-                + jsonStringEscape(toolName)
-                + "\",\"filePath\":\"SKILL.md\"}";
-        String skillMd;
-        try {
-            ToolContext ctx = (origin != null ? origin : ChatOrigin.EMPTY).toToolContext();
-            skillMd = readSkillFile.call(redirectArgs, ctx);
-        } catch (Exception e) {
-            log.warn("[ToolExecutor] Auto-redirect readSkillFile failed for '{}': {}", toolName, e.getMessage());
-            return null;
-        }
-
-        log.info("[ToolExecutor] Auto-redirected skill-as-tool call '{}' → readSkillFile (returned {} chars)",
-                toolName, skillMd != null ? skillMd.length() : 0);
-
-        String safeArgs = originalArgs == null || originalArgs.isBlank() ? "{}" : originalArgs;
-        String response = String.format(
-                "[auto-redirect] You called '%s' as a tool, but it's a Skill (documentation package). "
-                + "Its SKILL.md is loaded below — read the script invocation example, then call "
-                + "`runSkillScript(skillName=\"%s\", scriptPath=\"scripts/<file from SKILL.md>\", args=[...])` "
-                + "to actually run it. Your original payload was: %s%n%n---%n%s",
-                toolName, toolName, safeArgs, skillMd == null ? "" : skillMd);
-        return new SkillRedirect(response);
-    }
-
-    /** Minimal JSON string escaping for the synthetic readSkillFile arg payload. */
-    private static String jsonStringEscape(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+        var conversation = conversationService.getConversation(conversationId);
+        return conversation != null ? conversation.getWorkspaceId() : null;
     }
 
     // ==================== 内部数据类 ====================
@@ -1197,26 +1335,7 @@ public class ToolExecutionExecutor {
             String conversationId,
             String requesterId,
             String workspaceBasePath,
-            ChatOrigin origin,
-            /**
-             * Shared reference (one per execute() invocation) where each
-             * concurrent {@code executeSingleTool} merges a {@link SourceEvidenceLedger}
-             * built from the **raw** tool result, before the spill/truncate
-             * pipeline (Layer 2/Layer 1) shrinks the response that finally
-             * reaches the LLM.
-             *
-             * <p>Why the raw stage: a 30 KB grep output may carry the only
-             * mention of {@code ObservationNode.java}; once {@code truncateToolResult}
-             * head/tail-compacts to 4 KB that line is typically dropped. If the
-             * ledger is built from the compacted response (the old behaviour
-             * in {@code ActionNode}), the answer's later citation of
-             * {@code ObservationNode} gets flagged as evidence-insufficient
-             * even though the model did see the file in its tool result.
-             *
-             * <p>Atomic merge via {@code AtomicReference.accumulateAndGet}
-             * because parallel batches run on {@code TOOL_EXECUTOR}.
-             */
-            java.util.concurrent.atomic.AtomicReference<SourceEvidenceLedger> rawEvidenceCollector
+            ChatOrigin origin
     ) {}
 
     private record ApprovalBarrier(String pendingId, String toolName) {}
@@ -1241,6 +1360,17 @@ public class ToolExecutionExecutor {
         }
     }
 
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties,
+            resultStorage, concurrencyRegistry, workspaceService, conversationService, null, null, null, null, null);
+    }
+
     /**
      * 工具执行结果
      */
@@ -1260,16 +1390,7 @@ public class ToolExecutionExecutor {
              * in this batch. Non-empty list ⇒ graph must short-circuit to
              * FinalAnswerNode without re-entering the LLM.
              */
-            List<DirectToolOutput> directOutputs,
-            /**
-             * Source evidence accumulated from the RAW (pre-spill, pre-truncate)
-             * tool results in this batch. ActionNode merges this into the
-             * graph-level ledger instead of re-parsing the spill-compacted
-             * {@link #responses} — that compaction routinely drops the line
-             * mentioning a path the model later cites, which would surface
-             * as a false-positive evidence_insufficient.
-             */
-            SourceEvidenceLedger rawEvidenceLedger
+            List<DirectToolOutput> directOutputs
     ) {
         /** Backwards-compatible constructor for callers that don't track direct outputs. */
         public ToolExecutionResult(List<ToolResponseMessage.ToolResponse> responses,
@@ -1277,76 +1398,11 @@ public class ToolExecutionExecutor {
                                     boolean awaitingApproval,
                                     String pendingId,
                                     String barrierToolName) {
-            this(responses, events, awaitingApproval, pendingId, barrierToolName,
-                    List.of(), SourceEvidenceLedger.empty());
-        }
-
-        /** Bridge for callers that pass directOutputs but predate the raw-ledger field. */
-        public ToolExecutionResult(List<ToolResponseMessage.ToolResponse> responses,
-                                    List<GraphEventPublisher.GraphEvent> events,
-                                    boolean awaitingApproval,
-                                    String pendingId,
-                                    String barrierToolName,
-                                    List<DirectToolOutput> directOutputs) {
-            this(responses, events, awaitingApproval, pendingId, barrierToolName,
-                    directOutputs, SourceEvidenceLedger.empty());
+            this(responses, events, awaitingApproval, pendingId, barrierToolName, List.of());
         }
 
         public boolean hasDirectOutputs() {
             return directOutputs != null && !directOutputs.isEmpty();
         }
-    }
-
-    /**
-     * RFC-03 Lane A2 — outcome of {@link #capToolCalls(List, int)}. Holds the
-     * (possibly trimmed) effective list, any synthesized truncation responses
-     * that should be appended verbatim to the result, and a boolean flag so
-     * the caller can decide whether to emit an audit event.
-     */
-    record CappedToolCalls(
-            List<AssistantMessage.ToolCall> effective,
-            List<ToolResponseMessage.ToolResponse> truncatedResponses,
-            boolean wasTruncated
-    ) {}
-
-    /**
-     * RFC-03 Lane A2 — pure helper used at the top of {@link #execute}.
-     *
-     * <p>Returns the input untouched when {@code calls.size() <= maxPerResponse}.
-     * Otherwise:
-     * <ul>
-     *   <li>{@link CappedToolCalls#effective} = first {@code maxPerResponse} calls.</li>
-     *   <li>{@link CappedToolCalls#truncatedResponses} = one synthetic
-     *       {@link ToolResponseMessage.ToolResponse} per dropped call,
-     *       so the LLM gets a paired tool response on its next turn instead
-     *       of hanging on missing replies (some providers reject the request
-     *       entirely if any tool_call lacks a response).</li>
-     *   <li>{@link CappedToolCalls#wasTruncated} = true.</li>
-     * </ul>
-     *
-     * <p>Package-private so {@code ToolExecutionExecutorCapToolCallsTest}
-     * can drive every branch without booting a Spring context.
-     */
-    static CappedToolCalls capToolCalls(List<AssistantMessage.ToolCall> calls, int maxPerResponse) {
-        if (calls == null || calls.size() <= maxPerResponse) {
-            return new CappedToolCalls(
-                    calls == null ? List.of() : calls,
-                    List.of(),
-                    false);
-        }
-        List<ToolResponseMessage.ToolResponse> truncated = new ArrayList<>(calls.size() - maxPerResponse);
-        for (int i = maxPerResponse; i < calls.size(); i++) {
-            AssistantMessage.ToolCall dropped = calls.get(i);
-            truncated.add(new ToolResponseMessage.ToolResponse(
-                    dropped.id(),
-                    dropped.name(),
-                    "[truncated] tool_call dropped: model returned " + calls.size()
-                            + " calls in one response but executor cap is " + maxPerResponse
-                            + "; please reissue the most-important calls first"));
-        }
-        return new CappedToolCalls(
-                calls.subList(0, maxPerResponse),
-                truncated,
-                true);
     }
 }

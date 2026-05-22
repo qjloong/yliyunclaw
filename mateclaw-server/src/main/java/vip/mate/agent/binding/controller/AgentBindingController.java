@@ -46,7 +46,7 @@ public class AgentBindingController {
 
     @Operation(summary = "批量设置 Agent 的 Skill 绑定")
     @PutMapping("/skills")
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     public R<Void> setSkills(@PathVariable Long agentId, @RequestBody List<Long> skillIds,
                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyAgentWorkspace(agentId, workspaceId);
@@ -59,7 +59,7 @@ public class AgentBindingController {
 
     @Operation(summary = "绑定单个 Skill")
     @PostMapping("/skills/{skillId}")
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     public R<AgentSkillBinding> bindSkill(@PathVariable Long agentId, @PathVariable Long skillId,
                                            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyAgentWorkspace(agentId, workspaceId);
@@ -70,7 +70,7 @@ public class AgentBindingController {
 
     @Operation(summary = "解绑单个 Skill")
     @DeleteMapping("/skills/{skillId}")
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     public R<Void> unbindSkill(@PathVariable Long agentId, @PathVariable Long skillId,
                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyAgentWorkspace(agentId, workspaceId);
@@ -92,7 +92,7 @@ public class AgentBindingController {
 
     @Operation(summary = "批量设置 Agent 的 Tool 绑定")
     @PutMapping("/tools")
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     public R<Void> setTools(@PathVariable Long agentId, @RequestBody List<String> toolNames,
                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyAgentWorkspace(agentId, workspaceId);
@@ -117,7 +117,7 @@ public class AgentBindingController {
 
     @Operation(summary = "批量设置 Agent 的偏好 Provider 顺序（替换模式）")
     @PutMapping("/provider-preferences")
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     public R<Void> setProviderPreferences(
             @PathVariable Long agentId,
             @RequestBody List<String> providerIds,

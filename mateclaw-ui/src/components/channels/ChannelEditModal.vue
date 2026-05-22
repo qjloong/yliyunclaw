@@ -39,58 +39,12 @@
           </div>
           <div class="form-group">
             <label class="form-label">{{ t('channels.fields.bindAgent') }}</label>
-            <!-- Custom dropdown so SkillIcon renders pi:* glyphs; native
-                 <select><option> can't host the component. Mirrors the
-                 ChannelOnboardingWizard step-3 pattern. -->
-            <div class="agent-select" :class="{ open: agentDropdownOpen }">
-              <button
-                type="button"
-                class="agent-select-trigger"
-                @click="agentDropdownOpen = !agentDropdownOpen"
-              >
-                <span class="agent-select-trigger__icon" :style="{ color: agentIconColor(selectedAgent?.icon) }">
-                  <SkillIcon :value="selectedAgent?.icon" :size="20" :fallback="'🤖'" />
-                </span>
-                <span class="agent-select-trigger__name">{{
-                  selectedAgent?.name || t('channels.placeholders.selectAgent')
-                }}</span>
-                <svg
-                  class="agent-select-trigger__arrow"
-                  :class="{ open: agentDropdownOpen }"
-                  width="12" height="12" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2"
-                ><polyline points="6 9 12 15 18 9"/></svg>
-              </button>
-              <Transition name="fade">
-                <div
-                  v-if="agentDropdownOpen"
-                  class="agent-dropdown-backdrop"
-                  @click="agentDropdownOpen = false"
-                ></div>
-              </Transition>
-              <Transition name="agent-dropdown">
-                <div v-if="agentDropdownOpen" class="agent-dropdown">
-                  <div
-                    v-for="a in agents"
-                    :key="a.id"
-                    class="agent-dropdown-item"
-                    :class="{ active: String(a.id) === String(form.agentId) }"
-                    @click="onSelectAgent(a)"
-                  >
-                    <span class="agent-dropdown-item__icon" :style="{ color: agentIconColor(a.icon) }">
-                      <SkillIcon :value="a.icon" :size="18" :fallback="'🤖'" />
-                    </span>
-                    <span class="agent-dropdown-item__name">{{ a.name }}</span>
-                    <span v-if="String(a.id) === String(form.agentId)" class="agent-dropdown-item__check">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                    </span>
-                  </div>
-                  <div v-if="agents.length === 0" class="agent-dropdown-empty">
-                    {{ t('chat.loadingAgents') }}
-                  </div>
-                </div>
-              </Transition>
-            </div>
+            <select v-model="form.agentId" class="form-input">
+              <option :value="null">{{ t('channels.placeholders.selectAgent') }}</option>
+              <option v-for="agent in agents" :key="agent.id" :value="agent.id">
+                {{ plainTextIcon(agent.icon, '🤖') }} {{ agent.name }}
+              </option>
+            </select>
           </div>
         </div>
 
@@ -470,8 +424,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { CHANNEL_FIELD_DEFS } from '@/types'
-import { copyToClipboard } from '@/utils/clipboard'
 import type { Agent, Channel, ChannelFieldDef } from '@/types'
+import { plainTextIcon } from '@/composables/usePixelarticons'
 import {
   buildConfigJson,
   defaultAccessControl,
@@ -487,8 +441,6 @@ import { useWeixinQrcodePoll } from '@/composables/channels/useWeixinQrcodePoll'
 import { useWecomBotAuth } from '@/composables/channels/useWecomBotAuth'
 import { useFeishuAppRegister } from '@/composables/channels/useFeishuAppRegister'
 import { useDingTalkAppRegister } from '@/composables/channels/useDingTalkAppRegister'
-import SkillIcon from '@/components/common/SkillIcon.vue'
-import { agentIconColor } from '@/utils/agentIconColor'
 
 interface Props {
   modelValue: boolean
@@ -537,20 +489,6 @@ const rawConfigJson = ref('')
 const showAdvanced = ref(false)
 const accessControl = ref<AccessControlValue>(defaultAccessControl())
 const renderConfig = ref<RenderConfigValue>(defaultRenderConfig())
-
-// ========== Custom agent dropdown ==========
-// Native <select><option> can't render <SkillIcon> for pi:* glyphs;
-// mirror the ChatConsole.vue / ChannelOnboardingWizard.vue pattern.
-const agentDropdownOpen = ref(false)
-const selectedAgent = computed<Agent | null>(() => {
-  const id = form.value.agentId
-  if (id == null) return null
-  return props.agents.find(a => String(a.id) === String(id)) ?? null
-})
-function onSelectAgent(a: Agent) {
-  form.value.agentId = a.id as any
-  agentDropdownOpen.value = false
-}
 
 // ========== Auth composables ==========
 
@@ -691,7 +629,7 @@ const copyLabel = ref(t('channels.webhook.copy'))
 
 async function copyWebhookUrl() {
   try {
-    await copyToClipboard(webhookUrl.value)
+    await navigator.clipboard.writeText(webhookUrl.value)
     copyLabel.value = t('channels.webhook.copied')
     setTimeout(() => { copyLabel.value = t('channels.webhook.copy') }, 2000)
   } catch {
@@ -701,7 +639,7 @@ async function copyWebhookUrl() {
 
 async function copyText(text: string) {
   try {
-    await copyToClipboard(text)
+    await navigator.clipboard.writeText(text)
     ElMessage.success(t('common.copied'))
   } catch {
     ElMessage.warning(t('channels.webhook.copyFailed'))
@@ -732,59 +670,6 @@ function initForCreate() {
   configTab.value = 'form'
   showAdvanced.value = false
   initDefaultFieldValues()
-  // Pre-fill description with the i18n type-level fallback so the new
-  // channel card never lands on the list page with an empty middle area.
-  // The user can keep, edit, or clear it before saving.
-  applyTypeDescriptionFallback(true)
-}
-
-/**
- * Set {@code form.description} to the type-level i18n fallback when
- * appropriate. Called on mount and whenever {@code channelType} changes
- * (create flow only — never overrides an editing row).
- *
- * @param force when {@code true}, overwrite an empty / auto-filled
- *              description regardless. We treat ANY description that
- *              matches one of the known type fallbacks as "auto", so
- *              switching from dingtalk → wecom in the wizard updates
- *              the placeholder cleanly. A description the user typed
- *              themselves never matches and is preserved.
- */
-function applyTypeDescriptionFallback(force = false) {
-  if (props.editingChannel) return  // never touch user data on edit
-  const type = form.value.channelType
-  if (!type) return
-  const candidate = t(`channels.cardDesc.typeFallback.${type}` as any)
-  // vue-i18n returns the key itself when missing → leave description alone.
-  const haveTranslation = candidate && candidate !== `channels.cardDesc.typeFallback.${type}`
-  if (!haveTranslation) return
-  const current = (form.value.description || '').trim()
-  if (force && !current) {
-    form.value.description = candidate
-    return
-  }
-  // Switching channel types — update only if the description is still one
-  // of the auto-filled fallbacks (user hasn't typed their own).
-  if (current && isAutoTypeFallback(current)) {
-    form.value.description = candidate
-  } else if (!current) {
-    form.value.description = candidate
-  }
-}
-
-/** True when the given string equals any of the known channel-type
- *  fallback i18n strings — used to detect "user hasn't customized this". */
-function isAutoTypeFallback(text: string): boolean {
-  const trimmed = text.trim()
-  // Iterate the known channel types we ship i18n for. List mirrors
-  // CHANNEL_TYPE_OPTIONS but we keep a local copy to avoid coupling.
-  const known = ['web', 'dingtalk', 'wecom', 'weixin', 'feishu', 'telegram',
-                 'slack', 'discord', 'qq', 'matrix', 'qqbot', 'yuanbao']
-  for (const k of known) {
-    const s = t(`channels.cardDesc.typeFallback.${k}` as any)
-    if (s && s === trimmed) return true
-  }
-  return false
 }
 
 function initDefaultFieldValues() {
@@ -808,8 +693,6 @@ function onChannelTypeChange() {
   visibleFields.value = {}
   weixin.reset()
   initDefaultFieldValues()
-  // Refresh the auto-filled description if the user hasn't customized it.
-  applyTypeDescriptionFallback(false)
 }
 
 function switchTab(tab: 'form' | 'json') {
@@ -1018,70 +901,4 @@ function save() {
 
 .json-hint { font-size: 12px; color: var(--mc-text-tertiary); margin: 0 0 8px; }
 .json-editor { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; font-size: 13px; line-height: 1.5; tab-size: 2; }
-
-/* ===== Agent custom dropdown (mirrors ChatConsole.vue / wizard pattern) =====
-   Native <select><option> can't host <SkillIcon> for pi:* glyphs.
-   z-index has to clear the modal-overlay (1000). */
-.agent-select { position: relative; }
-.agent-select-trigger {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--mc-border);
-  border-radius: 10px;
-  font-size: 14px;
-  color: var(--mc-text-primary);
-  background: var(--mc-bg-elevated);
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s;
-  box-sizing: border-box;
-}
-.agent-select-trigger:hover { border-color: var(--mc-primary); }
-.agent-select.open .agent-select-trigger { border-color: var(--mc-primary); box-shadow: 0 0 0 3px rgba(217,119,87,0.12); }
-.agent-select-trigger__icon { font-size: 18px; line-height: 1; flex-shrink: 0; display: inline-flex; }
-.agent-select-trigger__name { flex: 1; text-align: left; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agent-select-trigger__arrow { flex-shrink: 0; color: var(--mc-text-tertiary); transition: transform 0.2s; }
-.agent-select-trigger__arrow.open { transform: rotate(180deg); }
-
-.agent-dropdown-backdrop { position: fixed; inset: 0; z-index: 1099; }
-.agent-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  z-index: 1100;
-  background: var(--mc-bg-elevated);
-  border: 1px solid var(--mc-border);
-  border-radius: 12px;
-  padding: 6px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-  max-height: 280px;
-  overflow-y: auto;
-}
-.agent-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.agent-dropdown-item:hover { background: var(--mc-bg-sunken); }
-.agent-dropdown-item.active { background: var(--mc-primary-bg); }
-.agent-dropdown-item__icon { font-size: 20px; line-height: 1; flex-shrink: 0; display: inline-flex; }
-.agent-dropdown-item__name { flex: 1; font-size: 14px; font-weight: 500; color: var(--mc-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agent-dropdown-item__check { flex-shrink: 0; color: var(--mc-primary); }
-.agent-dropdown-empty { padding: 16px; text-align: center; font-size: 13px; color: var(--mc-text-tertiary); }
-
-.agent-dropdown-enter-active { transition: all 0.15s ease-out; }
-.agent-dropdown-leave-active { transition: all 0.1s ease-in; }
-.agent-dropdown-enter-from { opacity: 0; transform: translateY(-6px) scale(0.97); }
-.agent-dropdown-leave-to { opacity: 0; transform: translateY(-4px) scale(0.98); }
-
-.fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

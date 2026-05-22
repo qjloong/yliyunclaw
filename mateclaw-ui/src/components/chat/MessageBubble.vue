@@ -23,26 +23,10 @@
           <div class="segments-view">
             <!-- 计划步骤面板（始终显示在 segments 之上） -->
             <PlanStepsPanel v-if="planMeta" :plan="planMeta" :is-generating="isGenerating" />
-            <template v-for="iter in groupedIterations" :key="iter.key">
-              <!-- Iteration interrupted before any output landed — surface a chip
-                   so the user knows the agent moved on instead of silently
-                   skipping a turn. -->
-              <div v-if="iter.empty" class="iter-empty-chip">
-                <el-icon><WarningFilled /></el-icon>
-                <span>{{ $t('chat.iterationEmpty', { index: iter.index + 1 }) }}</span>
-              </div>
-              <template v-else>
-                <ThinkingSegment v-for="t in iter.thinkings" :key="t.id" :segment="t" />
-                <ToolCallSegment v-for="tool in iter.tools" :key="tool.id" :segment="tool" />
-                <template v-for="c in iter.contents" :key="c.id">
-                  <div v-if="c.repetitionWarning" class="repetition-warning">
-                    <el-icon><WarningFilled /></el-icon>
-                    <span class="repetition-warning__text">{{ $t('chat.contentRepetitionWarning') }}</span>
-                    <span v-if="c.truncatedChars" class="repetition-warning__meta">({{ c.truncatedChars }} chars)</span>
-                  </div>
-                  <ContentSegment :segment="c" :show-cursor="showCursor && c.status === 'running'" />
-                </template>
-              </template>
+            <template v-for="seg in segments">
+              <ThinkingSegment v-if="seg.type === 'thinking'" :key="seg.id" :segment="seg" />
+              <ToolCallSegment v-if="seg.type === 'tool_call'" :key="seg.id" :segment="seg" />
+              <ContentSegment v-if="seg.type === 'content'" :key="seg.id" :segment="seg" :show-cursor="showCursor && seg.status === 'running'" />
             </template>
           </div>
         </template>
@@ -93,21 +77,27 @@
 
               <!-- 工具调用列表 -->
               <div v-if="toolCallsMeta.length" class="tool-calls">
-                <div
+                <details
                   v-for="(tc, i) in toolCallsMeta"
                   :key="i"
                   class="tool-call"
-                  :class="{ 'tool-call--running': tc.status === 'running', 'tool-call--awaiting': tc.status === 'awaiting_approval', 'tool-call--error': tc.status === 'completed' && tc.success === false }"
+                  :class="{ 'tool-call--running': tc.status === 'running', 'tool-call--awaiting': tc.status === 'awaiting_approval', 'tool-call--error': tc.status === 'completed' && tc.success === false, 'tool-call--expandable': hasToolResult(tc.result) }"
+                  :open="tc.status === 'running'"
                 >
-                  <span class="tool-call__status">
-                    <el-icon v-if="tc.status === 'running'" class="spin"><Loading /></el-icon>
-                    <el-icon v-else-if="tc.status === 'awaiting_approval'" class="tc-icon--warning"><WarningFilled /></el-icon>
-                    <el-icon v-else-if="tc.success !== false" class="tc-icon--success"><Select /></el-icon>
-                    <el-icon v-else class="tc-icon--error"><CloseBold /></el-icon>
-                  </span>
-                  <span class="tool-call__name">{{ getToolLabel(tc.name) }}</span>
-                  <span class="tool-call__args" v-if="tc.arguments">{{ truncateArgs(tc.arguments) }}</span>
-                </div>
+                  <summary class="tool-call__summary">
+                    <span class="tool-call__status">
+                      <el-icon v-if="tc.status === 'running'" class="spin"><Loading /></el-icon>
+                      <el-icon v-else-if="tc.status === 'awaiting_approval'" class="tc-icon--warning"><WarningFilled /></el-icon>
+                      <el-icon v-else-if="tc.success !== false" class="tc-icon--success"><Select /></el-icon>
+                      <el-icon v-else class="tc-icon--error"><CloseBold /></el-icon>
+                    </span>
+                    <span class="tool-call__name">{{ getToolLabel(tc.name) }}</span>
+                    <span class="tool-call__args" v-if="tc.arguments">{{ truncateArgs(tc.arguments) }}</span>
+                    <span v-if="hasToolResult(tc.result)" class="tool-call__result-hint">{{ t('chat.viewResult') }}</span>
+                    <el-icon v-if="hasToolResult(tc.result)" class="tool-call__arrow"><ArrowDown /></el-icon>
+                  </summary>
+                  <pre v-if="hasToolResult(tc.result)" class="tool-call__result">{{ formatToolResult(tc.result) }}</pre>
+                </details>
               </div>
 
               <div v-if="!toolCallsMeta.length && !planMeta" class="execution-empty">
@@ -121,22 +111,49 @@
         <BrowserTimeline v-if="browserActionsMeta.length" :actions="browserActionsMeta" />
 
         <!-- 工具审批状态（极简一行，操作在输入栏） -->
-        <div v-if="pendingApproval" class="approval-inline">
-          <el-icon class="approval-inline__icon"><WarningFilled /></el-icon>
-          <span v-if="pendingApproval.status === 'pending_approval'" class="approval-inline__text">
-            {{ $t('chat.approvalWaiting') }} <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
-          </span>
-          <span v-else-if="pendingApproval.status === 'approved'" class="approval-inline__text approval-inline--approved">
-            {{ $t('chat.approved') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
-          </span>
-          <span v-else class="approval-inline__text approval-inline--denied">
-            {{ $t('chat.denied') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
-          </span>
+        <div v-if="pendingApproval" class="approval-inline" :class="[approvalSeverityClass, `is-${pendingApproval.status}`]">
+          <div class="approval-inline__header">
+            <el-icon class="approval-inline__icon"><WarningFilled /></el-icon>
+            <span v-if="pendingApproval.status === 'pending_approval'" class="approval-inline__text">
+              {{ $t('chat.approvalWaiting') }} <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
+            </span>
+            <span v-else-if="pendingApproval.status === 'approved'" class="approval-inline__text approval-inline--approved">
+              {{ $t('chat.approved') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
+            </span>
+            <span v-else class="approval-inline__text approval-inline--denied">
+              {{ $t('chat.denied') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
+            </span>
+            <span v-if="pendingApproval.maxSeverity" class="approval-inline__severity">{{ pendingApproval.maxSeverity }}</span>
+          </div>
+
+          <div v-if="pendingApproval.summary" class="approval-inline__summary">
+            <span class="approval-inline__label">{{ t('chat.approvalSummaryLabel') }}</span>
+            <span>{{ pendingApproval.summary }}</span>
+          </div>
+
+          <div v-if="approvalWorkspaceBoundaryHint" class="approval-inline__summary approval-inline__summary--muted">
+            <span class="approval-inline__label">{{ t('chat.approvalBoundaryLabel') }}</span>
+            <span>{{ approvalWorkspaceBoundaryHint }}</span>
+          </div>
+
+          <ul v-if="approvalFindings.length" class="approval-inline__findings">
+            <li v-for="(finding, index) in approvalFindings" :key="`${finding.ruleId}-${index}`" class="approval-inline__finding">
+              <div class="approval-inline__finding-head">
+                <span class="approval-inline__finding-title">{{ finding.title || finding.ruleId }}</span>
+                <span v-if="finding.severity" class="approval-inline__finding-severity">{{ finding.severity }}</span>
+              </div>
+              <div v-if="finding.description" class="approval-inline__finding-desc">{{ finding.description }}</div>
+              <div v-if="finding.context" class="approval-inline__finding-context">{{ finding.context }}</div>
+              <div v-if="finding.remediation" class="approval-inline__finding-remediation">
+                {{ t('chat.approvalRecoveryLabel') }} {{ finding.remediation }}
+              </div>
+            </li>
+          </ul>
         </div>
 
         <!-- 主要内容 -->
         <div
-          v-if="displayContent"
+          v-if="teacherResultSections.length || displayContent"
           class="msg-content"
           :class="{ 'with-cursor': showCursor }"
         >
@@ -147,7 +164,36 @@
           -->
           <UserMessageContent v-if="role === 'user'" :content="displayContent" />
           <template v-else>
-            <div class="markdown-body" v-html="renderedContent"></div>
+            <div v-if="teacherResultSections.length" class="teacher-result">
+              <section
+                v-for="section in teacherResultSections"
+                :key="section.key"
+                class="teacher-result__section"
+                :class="{ 'is-primary': section.key === 'questions' }"
+              >
+                <details :open="section.key === 'questions' || section.key === 'plan'" class="teacher-result__details">
+                  <summary class="teacher-result__summary">
+                    <span class="teacher-result__title">{{ section.title }}</span>
+                    <span class="teacher-result__actions">
+                      <button class="teacher-result__action" type="button" @click.stop.prevent="copyTeacherSection(section)">
+                        复制
+                      </button>
+                      <button class="teacher-result__action" type="button" @click.stop.prevent="downloadTeacherSection(section)">
+                        保存
+                      </button>
+                    </span>
+                  </summary>
+                  <div class="teacher-result__body markdown-body" v-html="renderMarkdown(section.content)"></div>
+                </details>
+              </section>
+              <div v-if="showTeacherExportActions" class="teacher-result__export">
+                <button type="button" @click="downloadTeacherPaper('questions')">导出仅试题版</button>
+                <button type="button" @click="downloadTeacherPaper('full')">导出完整版</button>
+                <button type="button" :disabled="teacherExportingMode === 'questions'" @click="exportTeacherWord('questions')">导出 Word（仅试题）</button>
+                <button type="button" :disabled="teacherExportingMode === 'full'" @click="exportTeacherWord('full')">导出 Word（完整版）</button>
+              </div>
+            </div>
+            <div v-else class="markdown-body" v-html="renderedContent"></div>
             <TypingCursor v-if="showCursor" :typing="isGenerating" />
           </template>
         </div>
@@ -163,6 +209,11 @@
         <div v-if="parseErrorText" class="parse-error-card">
           <el-icon class="parse-error-card__icon"><WarningFilled /></el-icon>
           <span class="parse-error-card__text">{{ parseErrorText }}</span>
+        </div>
+
+        <div v-else-if="showEmptyAssistantResult" class="empty-result-card">
+          <el-icon class="empty-result-card__icon"><WarningFilled /></el-icon>
+          <span class="empty-result-card__text">{{ t('chat.emptyAssistantResult') }}</span>
         </div>
 
         <!-- 错误卡片 -->
@@ -184,72 +235,99 @@
 
         </template><!-- /传统合并渲染模式 -->
 
-        <!--
-          INCOMPLETE banner: graph emitted finishReason=incomplete after
-          the thinking-only soft cap stopped the stream.
-          Lives outside the segmented/traditional fork so both rendering
-          modes show it. Click "regenerate" reuses the existing emit path
-          that the error-card already relies on.
-        -->
-        <div v-if="isIncomplete" class="incomplete-card">
-          <div class="incomplete-card__header">
-            <el-icon class="incomplete-card__icon"><WarningFilled /></el-icon>
-            <span class="incomplete-card__title">{{ $t('chat.incompleteTitle') }}</span>
-          </div>
-          <p class="incomplete-card__description">{{ $t('chat.incompleteDescription') }}</p>
-          <div class="incomplete-card__footer">
-            <button class="incomplete-card__retry" type="button" @click="$emit('regenerate')">
-              <el-icon><RefreshRight /></el-icon>
-              {{ $t('chat.incompleteRetry') }}
-            </button>
-          </div>
-        </div>
+        <div v-if="showReviewPanel" class="review-section">
+          <button class="review-toggle" type="button" @click="reviewExpanded = !reviewExpanded">
+            <span class="review-toggle__indicator">
+              <el-icon><Document /></el-icon>
+            </span>
+            <span class="review-toggle__label">{{ t('chat.reviewTitle') }}</span>
+            <span class="review-toggle__count">{{ t('chat.reviewItemsCount', { count: reviewDisplayCount }) }}</span>
+            <span class="review-toggle__arrow" :class="{ expanded: reviewExpanded }">
+              <el-icon><ArrowDown /></el-icon>
+            </span>
+          </button>
 
-        <!--
-          EVIDENCE_INSUFFICIENT banner (info color, not warning). Run completed
-          fully — the answer text is preserved above; the model just cited
-          source files / classes it didn't actually open. Without an explicit
-          card the trailing "[证据不足] …" line reads like a mid-answer cut.
-          No regenerate button: the user typically wants to either accept
-          the gap or follow up asking the model to read the listed files.
-        -->
-        <div v-if="isEvidenceInsufficient" class="evidence-card">
-          <div class="evidence-card__header">
-            <el-icon class="evidence-card__icon"><InfoFilled /></el-icon>
-            <span class="evidence-card__title">{{ $t('chat.evidenceTitle') }}</span>
-          </div>
-          <p class="evidence-card__description">{{ $t('chat.evidenceDescription') }}</p>
-        </div>
+          <Transition name="thinking-slide">
+            <div v-if="reviewExpanded" class="review-content">
+              <div v-if="reviewSummary?.files?.length" class="review-block">
+                <div class="review-block__title">{{ t('chat.reviewChangedFiles') }}</div>
+                <div class="review-file-list">
+                  <details v-for="file in reviewSummary.files" :key="`review-${file.path}`" class="review-file-row">
+                    <summary class="review-file-row__summary">
+                      <span class="review-file-item__badge" :class="`is-${file.changeType}`">
+                        {{ getChangeTypeLabel(file.changeType) }}
+                      </span>
+                      <span class="review-file-row__path">{{ normalizeFilePath(file.path) }}</span>
+                      <span class="review-file-row__meta-inline">{{ getReviewFileInlineMeta(file) }}</span>
+                    </summary>
+                    <div class="review-file-row__body">
+                      <div class="review-file-item__meta">
+                        <span>{{ getToolLabel(file.toolName) }}</span>
+                        <span v-if="file.bytesWritten">{{ t('chat.reviewBytesWritten', { count: file.bytesWritten }) }}</span>
+                        <span v-else-if="file.replacements">{{ t('chat.reviewReplacements', { count: file.replacements }) }}</span>
+                      </div>
+                      <div v-if="file.summary" class="review-file-item__summary">{{ file.summary }}</div>
+                    </div>
+                  </details>
+                </div>
+              </div>
 
-        <!--
-          feedback_event card: recovery affordances for turns that ended
-          in a non-transient error. Backend's NodeStreamingChatHelper
-          handles transient TLS / IO retries silently; this card only
-          appears for the residue (auth, billing, model-not-found, raw
-          parse failures, etc.) that no amount of retry can fix without
-          user input. Buttons are data-driven from the event's `actions`
-          array so the backend can narrow the offering per error type
-          without a frontend release.
-        -->
-        <div v-if="feedbackInfo" class="feedback-card">
-          <div class="feedback-card__header">
-            <el-icon class="feedback-card__icon"><WarningFilled /></el-icon>
-            <span class="feedback-card__title">{{ $t('chat.feedback.title') }}</span>
-          </div>
-          <p class="feedback-card__description">{{ $t('chat.feedback.description') }}</p>
-          <div class="feedback-card__actions">
-            <button
-              v-for="action in feedbackInfo.actions"
-              :key="action"
-              class="feedback-card__btn"
-              :class="`feedback-card__btn--${action}`"
-              type="button"
-              @click="handleFeedbackAction(action)"
-            >
-              <el-icon v-if="action === 'retry' || action === 'regenerate'"><RefreshRight /></el-icon>
-              {{ feedbackActionLabel(action) }}
-            </button>
-          </div>
+              <div v-if="reviewValidationItems.length" class="review-block">
+                <div class="review-block__title">
+                  {{ t('chat.reviewValidationTitle') }}
+                  <span class="review-block__count">{{ t('chat.reviewItemsCount', { count: reviewValidationItems.length }) }}</span>
+                </div>
+                <div class="review-file-list">
+                  <details v-for="item in reviewValidationItems" :key="`validation-${item.toolName}-${item.command}`" class="review-file-row">
+                    <summary class="review-file-row__summary">
+                      <span class="review-file-item__badge" :class="`is-${getReviewValidationTone(item)}`">
+                        {{ getReviewValidationStatusLabel(item) }}
+                      </span>
+                      <span class="review-file-row__path">{{ item.command }}</span>
+                      <span class="review-file-row__meta-inline">{{ getReviewValidationInlineMeta(item) }}</span>
+                    </summary>
+                    <div class="review-file-row__body">
+                      <div class="review-file-item__meta">
+                        <span>{{ getToolLabel(item.toolName) }}</span>
+                        <span v-if="typeof item.exitCode === 'number'">exit {{ item.exitCode }}</span>
+                      </div>
+                      <div v-if="item.result" class="review-file-item__summary">{{ item.result }}</div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+
+              <div v-if="projectReviewFiles.length" class="review-block">
+                <div class="review-block__title">
+                  {{ t('chat.reviewProjectFiles') }}
+                  <span class="review-block__count">{{ t('chat.reviewChangedFilesCount', { count: projectReviewFiles.length }) }}</span>
+                </div>
+                <div v-if="projectChangeStats.length" class="review-stats">
+                  <span v-for="item in projectChangeStats" :key="item.type" class="review-stats__item" :class="`is-${item.type}`">
+                    <span class="review-stats__label">{{ getChangeTypeLabel(item.type) }}</span>
+                    <span class="review-stats__value">{{ item.count }}</span>
+                  </span>
+                </div>
+                <div class="review-project-list">
+                  <span v-for="file in projectReviewFiles" :key="`project-${file.path}`" class="review-project-pill">
+                    <span class="review-project-pill__status" :class="`is-${file.changeType}`"></span>
+                    <span class="review-project-pill__badge" :class="`is-${file.changeType}`">{{ getChangeTypeLabel(file.changeType) }}</span>
+                    <span class="review-project-pill__path">{{ normalizeFilePath(file.path) }}</span>
+                  </span>
+                </div>
+              </div>
+
+              <div v-if="checkpointCapability" class="review-block">
+                <div class="review-block__title">{{ t('chat.reviewCheckpointTitle') }}</div>
+                <div class="review-checkpoint" :class="{ 'is-supported': checkpointCapability.supported, 'is-unsupported': !checkpointCapability.supported }">
+                  <span class="review-checkpoint__badge">
+                    {{ checkpointCapability.supported ? t('chat.reviewCheckpointSupported') : t('chat.reviewCheckpointUnavailable') }}
+                  </span>
+                  <span v-if="checkpointCapability.reason" class="review-checkpoint__reason">{{ checkpointCapability.reason }}</span>
+                </div>
+              </div>
+            </div>
+          </Transition>
         </div>
 
         <!-- 附件列表 -->
@@ -279,37 +357,6 @@
               playsinline
             />
             <span class="message-attachment-video__name">{{ attachment.name }}</span>
-          </div>
-          <div
-            v-for="attachment in audioAttachments"
-            :key="'audio-' + attachment.storedName"
-            class="message-attachment-audio"
-          >
-            <audio
-              :src="getDisplayUrl(attachment)"
-              controls
-              preload="metadata"
-            />
-            <span class="message-attachment-audio__name">{{ attachment.name }}</span>
-          </div>
-          <!-- 3D model preview via @google/model-viewer Web Component
-               (registered globally in src/main.ts; renders &lt;model-viewer&gt;
-               as a custom HTML element). -->
-          <div
-            v-for="attachment in model3dAttachments"
-            :key="'model3d-' + attachment.storedName"
-            class="message-attachment-model3d"
-          >
-            <model-viewer
-              :src="getDisplayUrl(attachment)"
-              camera-controls
-              auto-rotate
-              shadow-intensity="1"
-              exposure="1"
-              alt="Generated 3D model"
-              class="message-attachment-model3d__viewer"
-            />
-            <span class="message-attachment-model3d__name">{{ attachment.name }}</span>
           </div>
           <button
             v-for="attachment in fileAttachments"
@@ -368,18 +415,6 @@
           >
             <el-icon><RefreshRight /></el-icon>
           </button>
-          <!-- Reply model attribution (assistant only) -->
-          <span
-            v-if="role === 'assistant' && replyModel"
-            class="action-model"
-            :title="replyModelTitle"
-          >{{ replyModel }}</span>
-          <!-- Multimodal sidecar routing badge (assistant only, when sidecar fired) -->
-          <span
-            v-if="role === 'assistant' && routingBadge"
-            class="action-routing"
-            :title="routingBadge.tooltip"
-          >🔀 {{ routingBadge.label }}</span>
           <!-- 时间戳（inline） -->
           <span class="action-time">{{ formattedTime }}</span>
         </div>
@@ -396,7 +431,6 @@ import {
   CloseBold,
   CopyDocument,
   Document,
-  InfoFilled,
   Loading,
   Microphone,
   Opportunity,
@@ -409,8 +443,7 @@ import {
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
 import { useToolLabel } from '@/composables/useToolLabel'
-import { http } from '@/api'
-import { copyToClipboard } from '@/utils/clipboard'
+import { conversationApi, fetchAuthenticatedBlob, http } from '@/api'
 import TypingCursor from './TypingCursor.vue'
 import BrowserTimeline from './BrowserTimeline.vue'
 import ToolCallSegment from './ToolCallSegment.vue'
@@ -418,17 +451,19 @@ import ThinkingSegment from './ThinkingSegment.vue'
 import ContentSegment from './ContentSegment.vue'
 import PlanStepsPanel from './PlanStepsPanel.vue'
 import UserMessageContent from './UserMessageContent.vue'
+import type { GuardFinding } from '@/types'
 import type { BrowserAction } from './BrowserTimeline.vue'
-import type { Message, MessageSegment, ChatAttachment, ToolCallMeta, PlanMeta } from '@/types'
+import type { CheckpointCapability, FileChangeRecord, Message, MessageSegment, ChatAttachment, ToolCallMeta, PlanMeta, ProjectChangeRecord, ReviewSummary, ReviewValidationRecord } from '@/types'
 import type { ChatErrorInfo } from '@/types/chatError'
 
 const { renderMarkdown } = useMarkdownRenderer()
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const { getToolLabel } = useToolLabel()
-const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, loadAllModels, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
+const { blobUrls, loadAllImages, loadAllVideos, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {
   message: Message
+  conversationMessages?: Message[]
   isLast?: boolean
   assistantIcon?: string
   userIcon?: string
@@ -436,6 +471,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  conversationMessages: () => [],
   isLast: false,
   assistantIcon: '🤖',
   userIcon: 'U',
@@ -569,9 +605,268 @@ const isApprovalPlaceholder = (text: string) => {
     || text.includes('[等待审批]')
 }
 
+function normalizeMultilineText(text: string) {
+  return String(text || '').replace(/\r\n/g, '\n').trim()
+}
+
+function tryParseJsonText(text: string) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+function parseMessageMetadataValue(raw: unknown) {
+  if (!raw) return {} as any
+  if (typeof raw === 'string') {
+    try {
+      let parsed = JSON.parse(raw)
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed) } catch { /* ignore */ }
+      }
+      return parsed
+    } catch {
+      return {}
+    }
+  }
+  return raw
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function formatToolResult(result: unknown) {
+  if (result === null || result === undefined) return ''
+  if (typeof result === 'string') {
+    const trimmed = normalizeMultilineText(result)
+    if (!trimmed) return ''
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2)
+    } catch {
+      return trimmed
+    }
+  }
+  if (typeof result === 'object') {
+    try {
+      return JSON.stringify(result, null, 2)
+    } catch {
+      return String(result)
+    }
+  }
+  return String(result)
+}
+
+function hasToolResult(result: unknown) {
+  return formatToolResult(result).length > 0
+}
+
+function hasToolPayloadShape(value: unknown) {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return Array.isArray(record.pages)
+    || Array.isArray(record.kbIds)
+    || typeof record.kbId === 'number'
+    || typeof record.requestedCount === 'number'
+    || typeof record.matchCount === 'number'
+    || typeof record.query === 'string'
+ }
+
+function isStructuredToolPayload(text: string) {
+  const normalized = normalizeMultilineText(text)
+  if (!normalized) return false
+  const parsed = tryParseJsonText(normalized)
+  if (parsed !== undefined) {
+    return hasToolPayloadShape(parsed)
+      || (typeof parsed === 'object' && parsed !== null)
+      || Array.isArray(parsed)
+  }
+  if ((normalized.startsWith('{') && normalized.endsWith('}')) || (normalized.startsWith('[') && normalized.endsWith(']'))) {
+    return true
+  }
+  const lineCount = normalized.split('\n').length
+  return normalized.length >= 120 && lineCount >= 4 && /[{}\[\]"]/.test(normalized)
+}
+
+function buildToolPayloadCandidates(toolResults: unknown[]) {
+  const candidates = new Set<string>()
+
+  for (const result of toolResults) {
+    if (result === null || result === undefined) continue
+    if (typeof result === 'string') {
+      const raw = normalizeMultilineText(result)
+      if (raw && isStructuredToolPayload(raw)) {
+        candidates.add(raw)
+      }
+      const parsed = tryParseJsonText(raw)
+      if (parsed !== undefined) {
+        candidates.add(normalizeMultilineText(JSON.stringify(parsed)))
+        candidates.add(normalizeMultilineText(JSON.stringify(parsed, null, 2)))
+      }
+      continue
+    }
+    if (typeof result === 'object') {
+      candidates.add(normalizeMultilineText(JSON.stringify(result)))
+      candidates.add(normalizeMultilineText(JSON.stringify(result, null, 2)))
+    }
+  }
+
+  return [...candidates].filter(candidate => candidate && isStructuredToolPayload(candidate))
+}
+
+function extractLeadingJsonBlock(text: string): { raw: string; endIndex: number } | null {
+  const source = String(text || '')
+  const startIndex = source.search(/\S/)
+  if (startIndex < 0) return null
+  const opening = source[startIndex]
+  const closing = opening === '{' ? '}' : opening === '[' ? ']' : ''
+  if (!closing) return null
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let index = startIndex; index < source.length; index++) {
+    const char = source[index]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+
+    if (char === opening) {
+      depth++
+      continue
+    }
+
+    if (char === closing) {
+      depth--
+      if (depth === 0) {
+        return {
+          raw: source.slice(startIndex, index + 1),
+          endIndex: index + 1,
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function stripLeadingToolPayloads(content: string, candidates: string[]) {
+  let cleaned = String(content || '').replace(/\r\n/g, '\n')
+  for (let round = 0; round < 3; round++) {
+    const block = extractLeadingJsonBlock(cleaned)
+    if (!block) break
+    const normalizedBlock = normalizeMultilineText(block.raw)
+    const parsedBlock = tryParseJsonText(block.raw)
+    const shouldStrip = candidates.includes(normalizedBlock) || hasToolPayloadShape(parsedBlock)
+    if (!shouldStrip) break
+    cleaned = cleaned.slice(block.endIndex).replace(/^\s*\n*/, '')
+  }
+  return cleaned
+}
+
+function stripDuplicatedToolPayloads(content: string, toolResults: unknown[]) {
+  let cleaned = String(content || '').replace(/\r\n/g, '\n')
+  if (!cleaned) return ''
+
+  const candidates = buildToolPayloadCandidates(toolResults).sort((a, b) => b.length - a.length)
+
+  if (!candidates.length) {
+    return normalizeMultilineText(cleaned)
+  }
+
+  cleaned = stripLeadingToolPayloads(cleaned, candidates)
+
+  for (const candidate of candidates) {
+    const compact = normalizeMultilineText(candidate)
+    if (!compact) continue
+    const exactBlock = new RegExp(`(?:^|\\n{2,})${escapeRegExp(compact)}(?=\\n{2,}|$)`, 'g')
+    cleaned = cleaned.replace(exactBlock, '\n\n')
+    if (cleaned.includes(compact)) cleaned = cleaned.replace(compact, '')
+  }
+
+  return cleaned.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function normalizeComparisonText(content: string) {
+  return normalizeMultilineText(String(content || ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function preferCanonicalAssistantText(content: string, stepResults: Array<{ result?: string; status?: string }> | undefined, generating: boolean) {
+  const cleaned = String(content || '').trim()
+  if (!cleaned || generating || !Array.isArray(stepResults) || !stepResults.length) {
+    return cleaned
+  }
+
+  const normalizedContent = normalizeComparisonText(stripTeacherWorkflowComments(cleaned))
+  if (!normalizedContent) {
+    return cleaned
+  }
+
+  const candidates = stepResults
+    .filter(item => item?.result && (!item.status || item.status === 'completed'))
+    .map(item => String(item.result || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeComparisonText(stripTeacherWorkflowComments(candidate))
+    if (!normalizedCandidate || normalizedCandidate.length < 40) continue
+
+    if (normalizedContent === normalizedCandidate) {
+      return candidate
+    }
+
+    const isPrefixMatch = normalizedContent.startsWith(normalizedCandidate)
+    const isEmbeddedMatch = normalizedContent.includes(normalizedCandidate)
+    const hasSignificantTail = normalizedContent.length > normalizedCandidate.length + 60
+    const hasNoticeableExpansion = normalizedContent.length >= Math.round(normalizedCandidate.length * 1.15)
+
+    if ((isPrefixMatch || isEmbeddedMatch) && hasSignificantTail && hasNoticeableExpansion) {
+      return candidate
+    }
+  }
+
+  return cleaned
+}
+
 const displayContent = computed(() => {
   const textPart = props.message.contentParts?.find(p => p.type === 'text')
-  const text = textPart?.text || props.message.content || ''
+  const rawText = textPart?.text || props.message.content || ''
+  const metadata = parseMessageMetadataValue(props.message.metadata)
+  const planStepResults = Array.isArray(metadata?.plan?.stepResults)
+    ? metadata.plan.stepResults
+    : []
+  const toolResults = [
+    ...(Array.isArray(metadata?.toolCalls) ? metadata.toolCalls.map((tc: ToolCallMeta) => tc.result) : []),
+    ...(Array.isArray(metadata?.segments)
+      ? metadata.segments
+          .filter((segment: MessageSegment) => segment.type === 'tool_call')
+          .map((segment: MessageSegment) => segment.toolResult)
+      : []),
+  ]
+  const sanitizedText = role.value === 'assistant'
+    ? stripDuplicatedToolPayloads(rawText, toolResults)
+    : rawText
+  const canonicalText = role.value === 'assistant'
+    ? preferCanonicalAssistantText(sanitizedText, planStepResults, isGenerating.value)
+    : sanitizedText
+  const text = stripTeacherWorkflowComments(canonicalText)
   if (isGenerating.value && !text) return ''
   // 过滤审批占位文本 — 这些消息由审批面板展示，不应作为正文显示
   if (text && isApprovalPlaceholder(text)) return ''
@@ -579,6 +874,354 @@ const displayContent = computed(() => {
   if (status.value === 'failed' && errorInfo.value && text.startsWith('[错误]')) return ''
   return text
 })
+
+interface TeacherResultSection {
+  key: 'plan' | 'questions' | 'answers' | 'scoringRubric' | 'qualityReview' | 'sources'
+  title: string
+  content: string
+}
+
+const teacherSectionOrder: TeacherResultSection['key'][] = ['plan', 'questions', 'answers', 'scoringRubric', 'qualityReview', 'sources']
+const teacherSectionTitles: Record<TeacherResultSection['key'], string> = {
+  plan: '命题方案',
+  questions: '试题',
+  answers: '参考答案',
+  scoringRubric: '采分点',
+  qualityReview: '命题质量审核',
+  sources: '来源依据',
+}
+
+function stripTeacherWorkflowComments(text: string) {
+  return String(text || '').replace(/<!--\s*teacher_exam_plan_state:[\s\S]*?-->/gi, '').trim()
+}
+
+function normalizeTeacherHeading(value: string) {
+  return value
+    .replace(/^[\s\d一二三四五六七八九十百零]+[、.．）)]\s*/, '')
+    .replace(/^第[\d一二三四五六七八九十百零]+[章节部分篇]\s*/, '')
+    .replace(/[：:]/g, '')
+    .trim()
+}
+
+function teacherSectionKey(title: string): TeacherResultSection['key'] | null {
+  const normalized = normalizeTeacherHeading(title)
+  if (/命题方案|出题方案|出题说明|命题说明/.test(normalized)) return 'plan'
+  if (/^试题$|试题内容|题目|练习题|试卷|正式试题/.test(normalized)) return 'questions'
+  if (/参考答案|答案解析|答案/.test(normalized)) return 'answers'
+  if (/采分点|评分标准|评分细则|rubric/i.test(normalized)) return 'scoringRubric'
+  if (/命题质量审核|质量审核|审核/.test(normalized)) return 'qualityReview'
+  if (/来源依据|来源|依据|grounding/i.test(normalized)) return 'sources'
+  return null
+}
+
+function normalizeTeacherHeadingSyntax(text: string) {
+  return String(text || '').replace(
+    /^([^\n#*][^\n]{0,60}?)\n([=-]{3,})\s*$/gm,
+    (fullMatch: string, title: string) => {
+      if (!teacherSectionKey(title)) return fullMatch
+      return `## ${title.trim()}`
+    }
+  )
+}
+
+function splitTeacherAnswerRubricContent(content: string) {
+  const source = String(content || '').trim()
+  if (!source) {
+    return { answers: '', scoringRubric: '' }
+  }
+
+  const questionBlocks = source.split(/\n(?=###\s+第\s*\d+\s*题|###\s*第\s*\d+\s*题)/g)
+  const answerBlocks: string[] = []
+  const rubricBlocks: string[] = []
+
+  for (const rawBlock of questionBlocks) {
+    const block = rawBlock.trim()
+    if (!block) continue
+    const lines = block.split('\n')
+    const heading = lines[0] || ''
+    const body = lines.slice(1).join('\n').trim()
+    if (!body) continue
+
+    const rubricMatch = body.match(/(?:^|\n)\*\*(?:采分点|评分标准|评分细则)\*\*[：:]?([\s\S]*)$/)
+    const answerBody = rubricMatch
+      ? body.slice(0, rubricMatch.index).trim()
+      : body
+    const rubricBody = rubricMatch
+      ? String(rubricMatch[1] || '').trim()
+      : ''
+
+    if (answerBody) {
+      answerBlocks.push([heading, answerBody].filter(Boolean).join('\n'))
+    }
+    if (rubricBody) {
+      rubricBlocks.push([heading, `**采分点**：`, rubricBody].filter(Boolean).join('\n'))
+    }
+  }
+
+  return {
+    answers: answerBlocks.join('\n\n---\n\n').trim(),
+    scoringRubric: rubricBlocks.join('\n\n---\n\n').trim(),
+  }
+}
+
+function normalizeTeacherSectionContent(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map(item => typeof item === 'string' ? item : JSON.stringify(item, null, 2)).join('\n\n')
+  }
+  if (value && typeof value === 'object') return JSON.stringify(value, null, 2)
+  return String(value || '').trim()
+}
+
+function parseTeacherJsonSections(text: string): TeacherResultSection[] {
+  const trimmed = text.trim()
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  const candidate = fenced?.[1] || trimmed
+  const start = candidate.indexOf('{')
+  const end = candidate.lastIndexOf('}')
+  if (start < 0 || end <= start) return []
+  try {
+    const parsed = JSON.parse(candidate.slice(start, end + 1))
+    const sections: TeacherResultSection[] = []
+    for (const key of teacherSectionOrder) {
+      const content = normalizeTeacherSectionContent(parsed[key])
+      if (!content) continue
+      sections.push({ key, title: teacherSectionTitles[key], content })
+    }
+    return sections
+  } catch {
+    return []
+  }
+}
+
+function normalizeTeacherSections(sections: TeacherResultSection[]) {
+  const merged = new Map<TeacherResultSection['key'], TeacherResultSection>()
+  for (const section of sections) {
+    const existing = merged.get(section.key)
+    if (existing) {
+      existing.content = `${existing.content}\n\n${section.content}`.trim()
+    } else {
+      merged.set(section.key, {
+        ...section,
+        title: teacherSectionTitles[section.key] || section.title,
+      })
+    }
+  }
+  const values = [...merged.values()]
+  const uniqueKeys = new Set(values.map(section => section.key))
+  if (!uniqueKeys.has('questions') && !uniqueKeys.has('plan')) return []
+  return values.sort((a, b) => teacherSectionOrder.indexOf(a.key) - teacherSectionOrder.indexOf(b.key))
+}
+
+function buildTeacherSectionsFromMatches(source: string, matches: RegExpMatchArray[]) {
+  const sections: TeacherResultSection[] = []
+  for (let index = 0; index < matches.length; index++) {
+    const match = matches[index]
+    const rawTitle = match[1].trim()
+    const normalizedTitle = normalizeTeacherHeading(rawTitle)
+    const start = (match.index || 0) + match[0].length
+    const end = index + 1 < matches.length ? matches[index + 1].index || source.length : source.length
+    const content = source.slice(start, end).trim()
+    if (!content) continue
+
+    if (/参考答案.*采分点|采分点.*参考答案/.test(normalizedTitle)) {
+      const split = splitTeacherAnswerRubricContent(content)
+      if (split.answers) {
+        sections.push({ key: 'answers', title: teacherSectionTitles.answers, content: split.answers })
+      }
+      if (split.scoringRubric) {
+        sections.push({ key: 'scoringRubric', title: teacherSectionTitles.scoringRubric, content: split.scoringRubric })
+      }
+      if (!split.answers && !split.scoringRubric) {
+        sections.push({ key: 'answers', title: teacherSectionTitles.answers, content })
+      }
+      continue
+    }
+
+    const key = teacherSectionKey(normalizedTitle)
+    if (!key) continue
+    sections.push({
+      key,
+      title: rawTitle,
+      content,
+    })
+  }
+  return normalizeTeacherSections(sections)
+}
+
+function parseTeacherSections(text: string): TeacherResultSection[] {
+  const source = normalizeTeacherHeadingSyntax(stripTeacherWorkflowComments(text))
+  if (!source) return []
+  const jsonSections = parseTeacherJsonSections(source)
+  if (jsonSections.length) return normalizeTeacherSections(jsonSections)
+  const headingPattern = /^(?:#{1,4}\s*|\*\*)\s*((?:第[\d一二三四五六七八九十百零]+[章节部分篇]\s*)?(?:[\d一二三四五六七八九十百零]+[、.．）)]\s*)?(?:命题方案(?:（待确认）|\(待确认\))?|出题方案|出题说明|命题说明|试题内容|正式试题|试题|题目|练习题|试卷|参考答案(?:与采分点)?|答案解析|答案|采分点|评分标准|评分细则|命题质量审核|质量审核|来源依据|来源|依据))\s*(?:\*\*)?\s*[:：]?\s*$/gm
+  const matches = [...source.matchAll(headingPattern)]
+  if (!matches.length) return []
+  return buildTeacherSectionsFromMatches(source, matches)
+}
+
+const teacherResultSource = computed(() => {
+  if (role.value !== 'assistant') return ''
+
+  const candidates: string[] = []
+  const metadata = parseMessageMetadataValue(props.message.metadata)
+
+  const stepResults = Array.isArray(metadata?.plan?.stepResults)
+    ? metadata.plan.stepResults
+    : []
+  for (const item of stepResults) {
+    if (item?.result) {
+      candidates.push(item.result)
+    }
+  }
+
+  if (displayContent.value) {
+    candidates.push(displayContent.value)
+  }
+
+  for (const candidate of candidates) {
+    const sections = parseTeacherSections(candidate)
+    if (sections.some(section => section.key === 'questions')) {
+      return candidate
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (parseTeacherSections(candidate).length > 0) {
+      return candidate
+    }
+  }
+
+  return ''
+})
+
+function scoreTeacherSections(sections: TeacherResultSection[]) {
+  if (!sections.length) return 0
+  return sections.length * 10000 + sections.reduce((total, section) => total + (section.content?.length || 0), 0)
+}
+
+const teacherResultSectionsRaw = computed(() => {
+  if (role.value !== 'assistant' || !teacherResultSource.value) return []
+  return parseTeacherSections(teacherResultSource.value)
+})
+
+const teacherResultSectionsCache = ref<TeacherResultSection[]>([])
+
+watch(
+  [
+    () => props.message.id,
+    teacherResultSectionsRaw,
+    status,
+  ],
+  ([messageId, sections, messageStatus], [prevMessageId]) => {
+    if (messageId !== prevMessageId) {
+      teacherResultSectionsCache.value = Array.isArray(sections) ? [...sections] : []
+      return
+    }
+
+    if (!Array.isArray(sections) || !sections.length) {
+      return
+    }
+
+    const nextScore = scoreTeacherSections(sections)
+    const cachedScore = scoreTeacherSections(teacherResultSectionsCache.value)
+    const shouldReplace = messageStatus === 'completed'
+      || messageStatus === 'failed'
+      || messageStatus === 'stopped'
+      || messageStatus === 'interrupted'
+      || nextScore >= cachedScore
+
+    if (shouldReplace) {
+      teacherResultSectionsCache.value = [...sections]
+    }
+  },
+  { immediate: true }
+)
+
+const teacherResultSections = computed(() => {
+  return teacherResultSectionsCache.value
+})
+
+const showTeacherExportActions = computed(() => {
+  return teacherResultSections.value.length > 0 && status.value === 'completed' && !isGenerating.value
+})
+
+const teacherExportingMode = ref<'questions' | 'full' | null>(null)
+
+function copyTeacherSection(section: TeacherResultSection) {
+  void copyTextToClipboard(`## ${section.title}\n\n${section.content}`)
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function downloadTeacherSection(section: TeacherResultSection) {
+  downloadTextFile(`${section.title}.md`, `## ${section.title}\n\n${section.content}\n`)
+}
+
+function buildTeacherPaperContent(mode: 'questions' | 'full') {
+  const hasQuestions = teacherResultSections.value.some(section => section.key === 'questions')
+  const sections = mode === 'questions'
+    ? teacherResultSections.value.filter(section => section.key === 'questions' || (!hasQuestions && section.key === 'plan'))
+    : teacherResultSections.value
+  return sections.map(section => `## ${section.title}\n\n${section.content}`).join('\n\n')
+}
+
+function downloadTeacherPaper(mode: 'questions' | 'full') {
+  const content = buildTeacherPaperContent(mode)
+  downloadTextFile(mode === 'questions' ? '试题版.md' : '完整版.md', `${content}\n`)
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+async function exportTeacherWord(mode: 'questions' | 'full') {
+  const content = buildTeacherPaperContent(mode)
+  if (!content.trim()) {
+    ElMessage.warning('暂无可导出的试题内容')
+    return
+  }
+  teacherExportingMode.value = mode
+  try {
+    const response: any = await conversationApi.exportTeacherPaper(props.message.conversationId, {
+      markdown: `${content}\n`,
+      filename: mode === 'questions' ? '试题版' : '完整版',
+      format: 'docx',
+      pageSize: 'A4',
+    })
+    const data = response?.data || response
+    if (!data?.downloadUrl) {
+      throw new Error('missing download url')
+    }
+    const blob = await fetchAuthenticatedBlob(data.downloadUrl)
+    triggerBlobDownload(blob, data.fileName || (mode === 'questions' ? '试题版.docx' : '完整版.docx'))
+    if (data.savedPath) {
+      ElMessage.success(`Word 已导出，并保存到 ${data.savedPath}`)
+    } else {
+      ElMessage.success('Word 已导出')
+    }
+  } catch (error: any) {
+    ElMessage.error(`Word 导出失败：${error?.message || error || 'unknown error'}`)
+  } finally {
+    teacherExportingMode.value = null
+  }
+}
 
 // --- parse_error detection ---
 const parseErrorText = computed(() => {
@@ -595,6 +1238,20 @@ const showLoadingIndicator = computed(() => {
   return isGenerating.value && !displayContent.value
 })
 
+const showEmptyAssistantResult = computed(() => {
+  if (role.value !== 'assistant') return false
+  if (isGenerating.value) return false
+  if (status.value !== 'completed') return false
+  if (displayContent.value) return false
+  if (parseErrorText.value) return false
+  if (attachments.value.length > 0) return false
+  if (showThinkingPanel.value) return false
+  if (showExecutionPanel.value) return false
+  if (showReviewPanel.value) return false
+  if (useSegmentedView.value && segments.value.length > 0) return false
+  return true
+})
+
 
 // --- 操作栏 ---
 const showActions = computed(() => {
@@ -605,14 +1262,51 @@ const showActions = computed(() => {
 const copyState = ref<'idle' | 'copied'>('idle')
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 
-function copyMessage() {
+async function copyTextToClipboard(text: string) {
+  const normalized = String(text || '')
+  if (!normalized) {
+    return false
+  }
+
+  const fallbackCopy = () => {
+    const textarea = document.createElement('textarea')
+    textarea.value = normalized
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.top = '-9999px'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    textarea.setSelectionRange(0, textarea.value.length)
+    const copied = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    return copied
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(normalized)
+      return true
+    }
+  } catch {
+    // Fall through to the legacy copy path.
+  }
+
+  return fallbackCopy()
+}
+
+async function copyMessage() {
   const text = displayContent.value || props.message.content || ''
   if (!text) return
-  copyToClipboard(text).then(() => {
-    copyState.value = 'copied'
-    if (copyTimer) clearTimeout(copyTimer)
-    copyTimer = setTimeout(() => { copyState.value = 'idle' }, 2000)
-  }).catch(() => {})
+  const copied = await copyTextToClipboard(text)
+  if (!copied) {
+    ElMessage.warning('复制失败，请检查浏览器权限')
+    return
+  }
+  copyState.value = 'copied'
+  if (copyTimer) clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyState.value = 'idle' }, 2000)
 }
 
 // --- TTS 朗读 ---
@@ -636,16 +1330,12 @@ async function handleTts() {
 
   ttsState.value = 'loading'
   try {
-    const res: any = await http.post('/tts/synthesize', {
+    const result: any = await http.post('/tts/synthesize', {
       conversationId,
       text,
     })
-    if (res.data?.success && res.data?.audioUrl) {
-      // 通过认证 fetch 获取音频 blob
-      const audioRes = await fetch(res.data.audioUrl, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
-      })
-      const blob = await audioRes.blob()
+    if (result?.success && result?.audioUrl) {
+      const blob = await fetchAuthenticatedBlob(result.audioUrl)
       const blobUrl = URL.createObjectURL(blob)
       ttsAudio = new Audio(blobUrl)
       ttsAudio.onended = () => {
@@ -662,9 +1352,11 @@ async function handleTts() {
       await ttsAudio.play()
     } else {
       ttsState.value = 'idle'
+      ElMessage.warning(result?.message || '朗读失败：当前未返回可播放音频')
     }
-  } catch {
+  } catch (error) {
     ttsState.value = 'idle'
+    ElMessage.warning(typeof error === 'string' ? error : '朗读失败，请检查 TTS 配置')
   }
 }
 
@@ -675,148 +1367,28 @@ onBeforeUnmount(() => {
 })
 
 // --- 附件 ---
-// MessageContentPart media (image/audio/video produced by generation tools) live
-// in `contentParts` rather than `attachments`. Synthesize virtual attachment
-// entries so the existing render + auth-blob loader works for them too.
-//
-// Dedup against `props.message.attachments` by URL — user-uploaded images often
-// land in BOTH lists (the upload endpoint registers them as ChatAttachment AND
-// the message persistence echoes them back as a `type: 'image'` MessageContentPart).
-// Without this guard each user image shows twice in the bubble.
-const mediaPartAttachments = computed<ChatAttachment[]>(() => {
-  const parts = (props.message as any).contentParts as Array<any> | undefined
-  if (!parts || !parts.length) return []
-  const existingUrls = new Set(
-    (props.message.attachments || []).map(a => a.url).filter(Boolean)
-  )
-  const out: ChatAttachment[] = []
-  const seen = new Set<string>()
-  for (const p of parts) {
-    if (!p || !p.fileUrl) continue
-    if (p.type !== 'image' && p.type !== 'audio' && p.type !== 'video' && p.type !== 'model3d') continue
-    if (existingUrls.has(p.fileUrl) || seen.has(p.fileUrl)) continue
-    seen.add(p.fileUrl)
-    const fileName = p.fileName || p.fileUrl.split('/').pop() || `${p.type}-${out.length}`
-    const ct = p.contentType
-        || (p.type === 'image' ? 'image/png'
-            : p.type === 'audio' ? 'audio/mpeg'
-            : p.type === 'video' ? 'video/mp4'
-            : 'model/gltf-binary')
-    out.push({
-      name: fileName,
-      size: 0,
-      url: p.fileUrl,
-      storedName: fileName,
-      path: p.fileUrl,
-      contentType: ct,
-    })
-  }
-  return out
-})
-
-const attachments = computed(() => [
-  ...(props.message.attachments || []),
-  ...mediaPartAttachments.value,
-])
+const attachments = computed(() => props.message.attachments || [])
 const imageAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('image/')))
 const videoAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('video/')))
-const audioAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('audio/')))
-const model3dAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('model/')))
 const fileAttachments = computed(() => attachments.value.filter(a =>
-  !a.contentType?.startsWith('image/')
-    && !a.contentType?.startsWith('video/')
-    && !a.contentType?.startsWith('audio/')
-    && !a.contentType?.startsWith('model/')
+  !a.contentType?.startsWith('image/') && !a.contentType?.startsWith('video/')
 ))
 
-// 增量加载图片/视频/音频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
+// 增量加载图片/视频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
 watch(imageAttachments, (atts) => {
   if (atts.length > 0) loadAllImages(atts)
 }, { immediate: true })
 watch(videoAttachments, (atts) => {
   if (atts.length > 0) loadAllVideos(atts)
 }, { immediate: true })
-watch(audioAttachments, (atts) => {
-  if (atts.length > 0) loadAllAudios(atts)
-}, { immediate: true })
-// 3D models also need the auth-blob loader — <model-viewer src> doesn't carry
-// the Authorization header any more than <img>/<audio> do.
-watch(model3dAttachments, (atts) => {
-  if (atts.length > 0) loadAllModels(atts)
-}, { immediate: true })
 
 // --- 时间 ---
 const formattedTime = computed(() => {
-  const createTime = props.message.createTime
-  if (!createTime) return ''
-
-  const date = new Date(createTime)
-  if (Number.isNaN(date.getTime())) return ''
-
-  const now = new Date()
-
-  const sameDay = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-
-  const currentLocale = locale.value
-
-  const time = date.toLocaleTimeString(currentLocale, {
+  if (!props.message.createTime) return ''
+  return new Date(props.message.createTime).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
   })
-
-  if (sameDay(date, now)) return time
-
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-
-  if (sameDay(date, yesterday)) {
-    return `${t('security.activity.yesterday')} ${time}`
-  }
-
-  return date.toLocaleString(currentLocale, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-})
-
-// Reply model attribution: shows which model produced the assistant message.
-// Empty for streaming (server only emits runtimeModel after persistence) and
-// historical messages prior to MessageVO carrying the field.
-const replyModel = computed(() => props.message.runtimeModel || '')
-const replyModelTitle = computed(() => {
-  const provider = props.message.runtimeProvider
-  const base = t('chat.replyModel', { model: replyModel.value })
-  return provider ? `${base} (${provider})` : base
-})
-
-// Multimodal routing badge: rendered only when a sidecar actually fired this
-// turn (strategy=sidecar, sidecarModel populated). Skipped for the legacy
-// "primary handled it natively" case so non-routed turns stay clean.
-const routingBadge = computed(() => {
-  const r = props.message.metadata?.routing
-  if (!r || r.strategy !== 'sidecar' || !r.sidecarModel) return null
-  // Count routed attachments by required modality. We summarize as "1 image"
-  // / "2 images" rather than naming each file to keep the chip compact.
-  const required = r.requiredModalities || []
-  const kind = required.includes('VISION')
-    ? t('chat.routing.kind.image')
-    : required.includes('VIDEO')
-      ? t('chat.routing.kind.video')
-      : t('chat.routing.kind.media')
-  const label = `${r.sidecarModel} (${kind})`
-  const tooltip = t('chat.routing.tooltip', {
-    primary: replyModel.value || '?',
-    sidecar: r.sidecarModel,
-    sidecarProvider: r.sidecarProvider || '',
-    kind,
-  })
-  return { label, tooltip }
 })
 
 const formatFileSize = (size: number) => {
@@ -829,22 +1401,160 @@ const formatFileSize = (size: number) => {
 
 // --- 执行过程面板 ---
 const executionExpanded = ref(false)
+const reviewExpanded = ref(false)
 
 // --- 分段式渲染（Claude Code 风格） ---
 const parsedMetadata = computed(() => {
-  const raw = props.message.metadata
-  if (!raw) return {} as any
-  if (typeof raw === 'string') {
-    try {
-      let parsed = JSON.parse(raw)
-      // 处理双重 JSON 编码（DB 中 metadata 是字符串，Jackson 序列化时可能再次转义）
-      if (typeof parsed === 'string') {
-        try { parsed = JSON.parse(parsed) } catch { /* ignore */ }
-      }
-      return parsed
-    } catch { return {} }
+  return parseMessageMetadataValue(props.message.metadata)
+})
+
+const normalizeFilePath = (path: string) => path?.replace(/\\/g, '/') || ''
+
+const getChangeTypeLabel = (changeType?: string) => {
+  switch (changeType) {
+    case 'added':
+      return t('chat.reviewAdded')
+    case 'deleted':
+      return t('chat.reviewDeleted')
+    case 'renamed':
+      return t('chat.reviewRenamed')
+    case 'untracked':
+      return t('chat.reviewUntracked')
+    default:
+      return t('chat.reviewModified')
   }
-  return raw
+}
+
+const reviewSummary = computed<ReviewSummary | undefined>(() => {
+  const summary = parsedMetadata.value?.reviewSummary
+  const hasFiles = Array.isArray(summary?.files) && summary.files.length > 0
+  const hasValidations = Array.isArray(summary?.validations) && summary.validations.length > 0
+  const hasProjectSnapshot = Array.isArray(summary?.projectChangedFiles) && summary.projectChangedFiles.length > 0
+  const hasCheckpoint = !!summary?.checkpointCapability
+  if (!summary || (!hasFiles && !hasValidations && !hasProjectSnapshot && !hasCheckpoint)) {
+    return undefined
+  }
+  return summary
+})
+
+const checkpointCapability = computed<CheckpointCapability | undefined>(() => reviewSummary.value?.checkpointCapability)
+
+const reviewValidationItems = computed<ReviewValidationRecord[]>(() => {
+  const items = reviewSummary.value?.validations
+  return Array.isArray(items) ? items : []
+})
+
+const reviewDisplayCount = computed(() => {
+  const fileCount = reviewSummary.value?.totalFiles || 0
+  if (fileCount > 0) {
+    return fileCount
+  }
+  if (reviewValidationItems.value.length > 0) {
+    return reviewValidationItems.value.length
+  }
+  return projectReviewFiles.value.length
+})
+
+const projectReviewFiles = computed<Array<ProjectChangeRecord | FileChangeRecord>>(() => {
+  const serverSnapshot = Array.isArray(reviewSummary.value?.projectChangedFiles)
+    ? reviewSummary.value!.projectChangedFiles!
+    : []
+  if (serverSnapshot.length > 0) {
+    return [...serverSnapshot].sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
+  }
+
+  const latestByPath = new Map<string, FileChangeRecord>()
+  for (const msg of props.conversationMessages || []) {
+    if (msg.role !== 'assistant') continue
+    const metadata = typeof msg.metadata === 'string'
+      ? (() => {
+          try {
+            let parsed = JSON.parse(msg.metadata)
+            if (typeof parsed === 'string') parsed = JSON.parse(parsed)
+            return parsed
+          } catch {
+            return {}
+          }
+        })()
+      : (msg.metadata || {})
+    const files = Array.isArray(metadata?.reviewSummary?.files) ? metadata.reviewSummary.files : []
+    for (const file of files) {
+      if (!file?.path) continue
+      latestByPath.set(file.path, file)
+    }
+  }
+  return Array.from(latestByPath.values())
+    .sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
+})
+
+const projectChangeStats = computed<Array<{ type: string; count: number }>>(() => {
+  const counts = new Map<string, number>()
+  for (const file of projectReviewFiles.value) {
+    const type = file.changeType || 'modified'
+    counts.set(type, (counts.get(type) || 0) + 1)
+  }
+  return Array.from(counts.entries())
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => {
+      const order = ['added', 'modified', 'deleted', 'renamed', 'untracked']
+      return order.indexOf(a.type) - order.indexOf(b.type)
+    })
+})
+
+function getReviewFileInlineMeta(file: FileChangeRecord) {
+  if (file.bytesWritten) return t('chat.reviewBytesWritten', { count: file.bytesWritten })
+  if (file.replacements) return t('chat.reviewReplacements', { count: file.replacements })
+  return getToolLabel(file.toolName)
+}
+
+function getReviewValidationTone(item: ReviewValidationRecord) {
+  switch (item.status) {
+    case 'passed':
+    case 'approved':
+    case 'completed':
+      return 'success'
+    case 'failed':
+    case 'denied':
+      return 'danger'
+    default:
+      return 'warning'
+  }
+}
+
+function getReviewValidationStatusLabel(item: ReviewValidationRecord) {
+  switch (item.status) {
+    case 'passed':
+      return t('chat.reviewValidationPassed')
+    case 'failed':
+      return t('chat.reviewValidationFailed')
+    case 'running':
+      return t('chat.reviewValidationRunning')
+    case 'pending':
+      return t('chat.reviewValidationPending')
+    case 'approved':
+      return t('chat.reviewValidationApproved')
+    case 'denied':
+      return t('chat.reviewValidationDenied')
+    default:
+      return t('chat.reviewValidationCompleted')
+  }
+}
+
+function getReviewValidationInlineMeta(item: ReviewValidationRecord) {
+  if (typeof item.exitCode === 'number') {
+    return `exit ${item.exitCode}`
+  }
+  return getToolLabel(item.toolName)
+}
+
+const showReviewPanel = computed(() => {
+  return role.value === 'assistant'
+    && (
+      !!reviewSummary.value?.files?.length
+      || reviewValidationItems.value.length > 0
+      || !!checkpointCapability.value
+      || (props.isLast && projectReviewFiles.value.length > 0)
+    )
 })
 
 const segments = computed<MessageSegment[]>(() => {
@@ -861,13 +1571,7 @@ const segments = computed<MessageSegment[]>(() => {
     if (!hasThinking) {
       const thinkingPart = props.message.contentParts?.find(p => p.type === 'thinking')
       if (thinkingPart?.text) {
-        // Tag with iterationIndex=0 so groupedIterations puts it in the FIRST
-        // iteration's thinking bucket instead of the default-zero bucket
-        // colliding with later iteration content. Without this, the fallback
-        // thinking renders below the answer for any conversation that has
-        // multi-iteration RFC-22 segments tagged elsewhere.
-        const firstIter = segs.find(s => typeof s.iterationIndex === 'number')?.iterationIndex ?? 0
-        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text, iterationIndex: firstIter })
+        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text })
       }
     }
 
@@ -919,136 +1623,11 @@ const segments = computed<MessageSegment[]>(() => {
 })
 
 /** 是否使用分段模式渲染（有 segments 数据且包含多个分段） */
-const useSegmentedView = computed(() => segments.value.length > 1)
-
-/**
- * Group segments by iterationIndex so each ReAct iteration renders as its own
- * thinking/tool-calls/content cluster. Falls back to a single ungrouped bucket
- * for legacy messages (no iterationIndex tagged) so historical conversations
- * keep rendering as before — including the existing "single-thinking reorder"
- * normalization done in the `segments` computed above.
- */
-const groupedIterations = computed(() => {
-  const segs = segments.value || []
-  const anyTagged = segs.some(s => typeof s.iterationIndex === 'number')
-  if (!anyTagged) {
-    return [{
-      key: 'all',
-      index: 0,
-      empty: false,
-      thinkings: segs.filter(s => s.type === 'thinking'),
-      tools: segs.filter(s => s.type === 'tool_call'),
-      contents: segs.filter(s => s.type === 'content'),
-    }]
-  }
-  const buckets = new Map<number, { thinkings: MessageSegment[]; tools: MessageSegment[]; contents: MessageSegment[] }>()
-  for (const s of segs) {
-    const idx = s.iterationIndex ?? 0
-    if (!buckets.has(idx)) buckets.set(idx, { thinkings: [], tools: [], contents: [] })
-    const b = buckets.get(idx)!
-    if (s.type === 'thinking') b.thinkings.push(s)
-    else if (s.type === 'tool_call') b.tools.push(s)
-    else if (s.type === 'content') b.contents.push(s)
-  }
-  return [...buckets.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([index, b]) => ({
-      key: `iter-${index}`,
-      index,
-      empty: b.thinkings.length === 0 && b.tools.length === 0 && b.contents.length === 0,
-      ...b,
-    }))
-})
+const useSegmentedView = computed(() => segments.value.length > 1 && teacherResultSections.value.length === 0)
 
 const toolCallsMeta = computed<ToolCallMeta[]>(() => {
   return parsedMetadata.value?.toolCalls || []
 })
-
-/**
- * True when the assistant turn was auto-truncated by the backend's
- * thinking-only soft-cap and ended in INCOMPLETE.
- * Surfaced as a banner with a "continue / regenerate" affordance so the
- * user knows the answer ended early on purpose, not silently skipped.
- *
- * Reads `metadata.finishReason` set by the graph's FinalAnswerNode via
- * the finish_reason GraphEvent → StreamDelta → accumulator pipeline.
- */
-const isIncomplete = computed<boolean>(() => {
-  if (props.message.role !== 'assistant') return false
-  return parsedMetadata.value?.finishReason === 'incomplete'
-})
-
-/**
- * True when the graph completed normally but {@code SourceEvidenceLedger}
- * found unsupported references. The visible answer is full and persisted;
- * the trailing "[证据不足] …" line just lists which file/class citations
- * were never confirmed by an actual tool result. Without this banner the
- * user often misreads that single line as a mid-answer cut.
- */
-const isEvidenceInsufficient = computed<boolean>(() => {
-  if (props.message.role !== 'assistant') return false
-  return parsedMetadata.value?.finishReason === 'evidence_insufficient'
-})
-
-/**
- * Recovery-affordance payload from the graph's feedback_event. Populated
- * for assistant turns that ended in a non-transient error (after the
- * helper's TLS / IO retry loop has already given up). Shape mirrors
- * GraphEventPublisher.feedback: { errorType, errorMessage, actions }.
- *
- * <p>Surfaces a card with buttons for each action: "retry" and
- * "regenerate" both replay the last user message; "report" copies the
- * error details for a bug report. The card sits right under the red
- * "[错误] …" content so users see the recovery options inline rather
- * than having to retype the whole prompt.
- */
-interface FeedbackInfo {
-  errorType: string
-  errorMessage: string
-  actions: string[]
-  timestamp?: number
-}
-const feedbackInfo = computed<FeedbackInfo | undefined>(() => {
-  if (props.message.role !== 'assistant') return undefined
-  const raw = parsedMetadata.value?.feedbackEvent as FeedbackInfo | undefined
-  if (!raw || !Array.isArray(raw.actions) || raw.actions.length === 0) return undefined
-  return raw
-})
-
-function handleFeedbackAction(action: string) {
-  if (action === 'retry' || action === 'regenerate') {
-    emit('regenerate')
-    return
-  }
-  if (action === 'report') {
-    // Copy error details for a bug report. Lower-friction than a modal
-    // and works offline; users paste the result into wherever they file
-    // issues. Uses the clipboard helper with execCommand fallback for
-    // non-HTTPS contexts (e.g. internal IPs without TLS).
-    const lines = [
-      `Error type: ${feedbackInfo.value?.errorType || 'UNKNOWN'}`,
-      `Message: ${feedbackInfo.value?.errorMessage || ''}`,
-      `Conversation: ${(props.message as any).conversationId || ''}`,
-      `Message id: ${(props.message as any).id || ''}`,
-      `Timestamp: ${new Date(feedbackInfo.value?.timestamp || Date.now()).toISOString()}`,
-    ].join('\n')
-    copyToClipboard(lines).then(() => {
-      ElMessage.success(t('chat.feedback.reportCopied'))
-    }).catch(() => {
-      console.error('[feedback_event] copy failed:\n' + lines)
-      ElMessage.error(t('chat.feedback.reportFailed'))
-    })
-  }
-}
-
-function feedbackActionLabel(action: string): string {
-  // Action labels go through i18n so the same data-driven button list
-  // renders correctly in zh-CN / en-US. Falls back to the raw action
-  // key if a future backend introduces a label we haven't translated.
-  const key = `chat.feedback.${action}`
-  const localized = t(key)
-  return localized === key ? action : localized
-}
 
 const browserActionsMeta = computed<BrowserAction[]>(() => {
   return parsedMetadata.value?.browserActions || []
@@ -1090,6 +1669,94 @@ const approvalSeverityClass = computed(() => {
   const sev = pendingApproval.value?.maxSeverity?.toLowerCase()
   if (!sev) return ''
   return 'approval-severity-' + sev
+})
+
+type ApprovalFindingView = {
+  ruleId: string
+  title: string
+  severity?: string
+  description?: string
+  remediation?: string
+  context?: string
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+}
+
+function formatWorkspacePolicyContext(finding: GuardFinding): string {
+  const metadata = finding.metadata || {}
+  const policy = metadata.workspacePolicy || {}
+  const allowedPaths = asStringList(policy.allowedPaths)
+  const deniedPaths = asStringList(policy.deniedPaths)
+  const parts: string[] = []
+
+  if (finding.ruleId === 'WORKSPACE_DENIED_PATH' && finding.snippet) {
+    parts.push(`${finding.snippet} ∈ deniedPaths`)
+  } else if (finding.ruleId === 'WORKSPACE_ALLOWED_PATH_MISS') {
+    if (allowedPaths.length) {
+      parts.push(`${t('chat.approvalAllowedPathsLabel')}: ${allowedPaths.slice(0, 3).join(', ')}`)
+      if (allowedPaths.length > 3) {
+        parts[parts.length - 1] += ` +${allowedPaths.length - 3}`
+      }
+    }
+    if (finding.snippet) {
+      parts.push(`${t('chat.approvalAttemptedPathLabel')}: ${finding.snippet}`)
+    }
+  } else if (finding.ruleId === 'WORKSPACE_SANDBOX_READ_ONLY' && policy.sandboxMode) {
+    parts.push(`sandboxMode=${policy.sandboxMode}`)
+  } else if (finding.ruleId === 'WORKSPACE_NETWORK_POLICY' && finding.matchedPattern) {
+    parts.push(`networkPolicy=${finding.matchedPattern}`)
+  } else if (finding.ruleId === 'WORKSPACE_APPROVAL_STRICT' && policy.approvalPolicy) {
+    parts.push(`approvalPolicy=${policy.approvalPolicy}`)
+  }
+
+  if (!parts.length && deniedPaths.length && finding.ruleId === 'WORKSPACE_DENIED_PATH') {
+    parts.push(`${t('chat.approvalDeniedPathsLabel')}: ${deniedPaths.slice(0, 3).join(', ')}`)
+  }
+
+  if (!parts.length && metadata.workspaceBasePath) {
+    parts.push(`${t('chat.approvalWorkspaceRootLabel')}: ${String(metadata.workspaceBasePath)}`)
+  }
+  return parts.join(' · ')
+}
+
+const approvalFindings = computed<ApprovalFindingView[]>(() => {
+  const findings = pendingApproval.value?.findings || []
+  return findings.slice(0, 3).map((finding: GuardFinding) => ({
+    ruleId: finding.ruleId,
+    title: finding.title,
+    severity: finding.severity,
+    description: finding.description,
+    remediation: finding.remediation,
+    context: formatWorkspacePolicyContext(finding),
+  }))
+})
+
+const approvalWorkspaceBoundaryHint = computed(() => {
+  const findings = pendingApproval.value?.findings || []
+  const workspaceFinding = findings.find((finding: GuardFinding) =>
+    finding.ruleId?.startsWith('WORKSPACE_') || finding.category === 'PATH_TRAVERSAL'
+  )
+  if (!workspaceFinding) {
+    return ''
+  }
+  const metadata = workspaceFinding.metadata || {}
+  const workspaceRoot = metadata.workspaceBasePath ? String(metadata.workspaceBasePath) : ''
+  const policy = metadata.workspacePolicy || {}
+  const hints: string[] = []
+  if (workspaceRoot) {
+    hints.push(`${t('chat.approvalWorkspaceRootLabel')}: ${workspaceRoot}`)
+  }
+  if (policy.sandboxMode) {
+    hints.push(`sandbox=${policy.sandboxMode}`)
+  }
+  if (policy.approvalPolicy) {
+    hints.push(`approval=${policy.approvalPolicy}`)
+  }
+  return hints.join(' · ')
 })
 
 const executionPhaseLabel = computed(() => {
@@ -1137,6 +1804,12 @@ watch(pendingApproval, (approval) => {
   }
 })
 
+watch(reviewSummary, (summary) => {
+  if (summary?.files?.length && props.isLast) {
+    reviewExpanded.value = true
+  }
+})
+
 // 生成结束后自动折叠（但审批等待中不折叠）
 watch(isGenerating, (generating) => {
   if (!generating && executionExpanded.value && !pendingApproval.value) {
@@ -1152,43 +1825,6 @@ watch(isGenerating, (generating) => {
   flex-direction: column;
   gap: 2px;
   padding: 4px 0;
-}
-
-/* Iteration "no output" chip (interrupted iteration). */
-.iter-empty-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  align-self: flex-start;
-  padding: 4px 10px;
-  margin: 4px 0;
-  font-size: 12px;
-  color: var(--mc-text-tertiary, #94a3b8);
-  background: var(--mc-bg-elevated, #f8fafc);
-  border: 1px dashed var(--mc-border, #e2e8f0);
-  border-radius: 12px;
-}
-
-/* Inline informational banner shown when the backend trimmed a repetitive
-   tail off a content segment. Amber, not red — this is informational. */
-.repetition-warning {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  margin: 6px 0 2px;
-  font-size: 12px;
-  color: #92400e;
-  background: rgba(245, 158, 11, 0.08);
-  border-left: 3px solid var(--mc-warning, #f59e0b);
-  border-radius: 4px;
-}
-.repetition-warning__text {
-  flex: 1;
-}
-.repetition-warning__meta {
-  color: var(--mc-text-tertiary, #94a3b8);
-  font-size: 11px;
 }
 
 .message-wrapper {
@@ -1456,13 +2092,14 @@ watch(isGenerating, (generating) => {
 }
 
 .tool-call {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   padding: 4px 8px;
   border-radius: 6px;
   font-size: 12px;
   background: var(--mc-bg-elevated, #f8fafc);
+}
+
+.tool-call[open] {
+  padding-bottom: 8px;
 }
 
 .tool-call--running {
@@ -1475,6 +2112,22 @@ watch(isGenerating, (generating) => {
 
 .tool-call--error {
   background: rgba(239, 68, 68, 0.06);
+}
+
+.tool-call__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: default;
+}
+
+.tool-call__summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-call--expandable .tool-call__summary {
+  cursor: pointer;
 }
 
 .tool-call__status {
@@ -1499,12 +2152,419 @@ watch(isGenerating, (generating) => {
   flex: 1;
 }
 
+.tool-call__result-hint {
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.tool-call__arrow {
+  color: var(--mc-text-tertiary, #94a3b8);
+  transition: transform 0.2s ease;
+}
+
+.tool-call[open] .tool-call__arrow {
+  transform: rotate(180deg);
+}
+
+.tool-call__result {
+  margin: 8px 0 0 24px;
+  padding: 8px 10px;
+  background: var(--mc-bg-sunken, #f1f5f9);
+  border-radius: 6px;
+  border: 1px solid var(--mc-border-light, rgba(148, 163, 184, 0.18));
+  color: var(--mc-text-secondary, #475569);
+  font-family: var(--mc-font-mono, 'SF Mono', 'Menlo', 'Consolas', monospace);
+  line-height: 1.5;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* plan-steps 样式已迁移到 PlanStepsPanel.vue 组件 */
 
 .execution-empty {
   font-size: 12px;
   color: var(--mc-text-tertiary, #94a3b8);
   padding: 4px 0;
+}
+
+/* ==================== Review 面板 ==================== */
+.review-section {
+  margin-bottom: 12px;
+}
+
+.review-toggle {
+  width: 100%;
+  border: 0;
+  background: color-mix(in srgb, var(--mc-primary, #D97757) 5%, var(--mc-bg-elevated, #fff));
+  border-radius: 10px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mc-text-secondary, #475569);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.review-toggle:hover {
+  background: color-mix(in srgb, var(--mc-primary, #D97757) 9%, var(--mc-bg-elevated, #fff));
+}
+
+.review-toggle__indicator {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--mc-primary, #D97757);
+  flex-shrink: 0;
+}
+
+.review-toggle__label {
+  font-weight: 600;
+  flex: 1;
+  text-align: left;
+}
+
+.review-toggle__count {
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.review-toggle__arrow {
+  display: flex;
+  align-items: center;
+  color: var(--mc-text-tertiary, #94a3b8);
+  transition: transform 0.2s ease;
+}
+
+.review-toggle__arrow.expanded {
+  transform: rotate(180deg);
+}
+
+.review-content {
+  padding: 10px 14px 6px;
+  margin-top: 8px;
+  border-left: 2px solid rgba(217, 119, 87, 0.2);
+  margin-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-block__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-secondary, #64748b);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.review-block__count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.review-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-file-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--mc-bg-elevated, #f8fafc);
+  border: 1px solid var(--mc-border-light, rgba(148, 163, 184, 0.18));
+}
+
+.review-file-item__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.review-file-item__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.review-file-item__badge.is-added {
+  color: var(--mc-success, #10b981);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.review-file-item__badge.is-modified {
+  color: var(--mc-primary, #D97757);
+  background: rgba(217, 119, 87, 0.1);
+}
+
+.review-file-item__badge.is-success {
+  color: var(--mc-success, #10b981);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.review-file-item__badge.is-danger {
+  color: var(--mc-danger, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.review-file-item__badge.is-warning {
+  color: var(--mc-warning, #f59e0b);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.review-file-item__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mc-text-primary, #1e293b);
+  font-family: var(--mc-font-mono, 'SF Mono', 'Menlo', 'Consolas', monospace);
+  font-size: 12px;
+}
+
+.review-file-item__meta {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.review-file-item__summary {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--mc-text-secondary, #64748b);
+  line-height: 1.5;
+}
+
+.review-project-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-stats__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--mc-border-light, rgba(148, 163, 184, 0.18));
+  background: var(--mc-bg-elevated, #f8fafc);
+}
+
+.review-stats__label {
+  color: var(--mc-text-secondary, #64748b);
+}
+
+.review-stats__value {
+  min-width: 18px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--mc-text-primary, #1e293b);
+}
+
+.review-stats__item.is-added {
+  border-color: rgba(16, 185, 129, 0.18);
+}
+
+.review-stats__item.is-modified {
+  border-color: rgba(217, 119, 87, 0.18);
+}
+
+.review-stats__item.is-deleted {
+  border-color: rgba(239, 68, 68, 0.18);
+}
+
+.review-stats__item.is-renamed {
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.review-stats__item.is-untracked {
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+.review-project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--mc-bg-muted, #f9f7f5);
+  font-size: 12px;
+  color: var(--mc-text-secondary, #64748b);
+  max-width: 100%;
+}
+
+.review-project-pill__status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mc-text-tertiary, #94a3b8);
+}
+
+.review-project-pill__status.is-added {
+  background: var(--mc-success, #10b981);
+}
+
+.review-project-pill__status.is-modified {
+  background: var(--mc-primary, #D97757);
+}
+
+.review-project-pill__status.is-deleted {
+  background: var(--mc-danger, #ef4444);
+}
+
+.review-project-pill__status.is-renamed {
+  background: var(--mc-warning, #f59e0b);
+}
+
+.review-project-pill__status.is-untracked {
+  background: var(--mc-text-tertiary, #94a3b8);
+}
+
+.review-project-pill__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.review-project-pill__badge.is-added {
+  color: var(--mc-success, #10b981);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.review-project-pill__badge.is-modified {
+  color: var(--mc-primary, #D97757);
+  background: rgba(217, 119, 87, 0.1);
+}
+
+.review-project-pill__badge.is-deleted {
+  color: var(--mc-danger, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.review-project-pill__badge.is-renamed {
+  color: var(--mc-warning, #f59e0b);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.review-project-pill__badge.is-untracked {
+  color: var(--mc-text-secondary, #64748b);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.review-project-pill__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mc-font-mono, 'SF Mono', 'Menlo', 'Consolas', monospace);
+}
+
+.review-file-row {
+  border: 1px solid var(--mc-border-light, rgba(148, 163, 184, 0.18));
+  border-radius: 10px;
+  background: var(--mc-bg-elevated, #f8fafc);
+}
+
+.review-file-row__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.review-file-row__summary::-webkit-details-marker {
+  display: none;
+}
+
+.review-file-row__path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mc-font-mono, 'SF Mono', 'Menlo', 'Consolas', monospace);
+  font-size: 12px;
+  color: var(--mc-text-primary, #1e293b);
+}
+
+.review-file-row__meta-inline {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.review-file-row__body {
+  padding: 0 10px 10px;
+}
+
+.review-checkpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--mc-bg-elevated, #f8fafc);
+  border: 1px solid var(--mc-border-light, rgba(148, 163, 184, 0.18));
+}
+
+.review-checkpoint__badge {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.review-checkpoint.is-supported .review-checkpoint__badge {
+  color: var(--mc-success, #10b981);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.review-checkpoint.is-unsupported .review-checkpoint__badge {
+  color: var(--mc-warning, #f59e0b);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.review-checkpoint__reason {
+  font-size: 12px;
+  color: var(--mc-text-secondary, #64748b);
+  line-height: 1.5;
 }
 
 .spin {
@@ -1541,23 +2601,127 @@ watch(isGenerating, (generating) => {
   word-break: break-word;
 }
 
+.empty-result-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+.empty-result-card__icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.empty-result-card__text {
+  word-break: break-word;
+}
+
 /* ==================== 审批面板 ==================== */
 /* 极简审批状态（一行式） */
 .approval-inline {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding: 8px 12px;
   margin-bottom: 8px;
   font-size: 13px;
   color: var(--mc-text-secondary, #64748b);
   background: var(--mc-bg-muted, #f9f7f5);
   border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.18);
+}
+
+.approval-inline__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.approval-inline__severity {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
 }
 
 .approval-inline__icon {
   color: var(--mc-warning, #f59e0b);
   flex-shrink: 0;
+}
+
+.approval-inline__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.approval-inline__summary--muted {
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.approval-inline__label {
+  font-weight: 600;
+  color: var(--mc-text-primary, #334155);
+}
+
+.approval-inline__findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.approval-inline__finding {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.approval-inline__finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-inline__finding-title {
+  font-weight: 600;
+  color: var(--mc-text-primary, #334155);
+}
+
+.approval-inline__finding-severity {
+  margin-left: auto;
+  color: var(--mc-text-tertiary, #94a3b8);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.approval-inline__finding-desc,
+.approval-inline__finding-context,
+.approval-inline__finding-remediation {
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.approval-inline__finding-context {
+  color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.approval-inline__finding-remediation {
+  color: var(--mc-text-secondary, #64748b);
 }
 
 .approval-inline__text code {
@@ -1582,7 +2746,105 @@ watch(isGenerating, (generating) => {
   color: var(--mc-danger, #ef4444);
 }
 
+.approval-inline.is-approved {
+  border-color: rgba(16, 185, 129, 0.18);
+}
+
+.approval-inline.is-denied {
+  border-color: rgba(239, 68, 68, 0.18);
+}
+
+.approval-severity-critical .approval-inline__severity {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+}
+
+.approval-severity-high .approval-inline__severity {
+  background: rgba(249, 115, 22, 0.14);
+  color: #c2410c;
+}
+
 /* ==================== 操作栏 ==================== */
+.teacher-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.teacher-result__section {
+  border: 1px solid var(--mc-border-light, #e2e8f0);
+  border-radius: 8px;
+  background: var(--mc-bg-elevated, #f8fafc);
+  overflow: hidden;
+}
+
+.teacher-result__section.is-primary {
+  border-color: color-mix(in srgb, var(--mc-primary, #D97757) 28%, transparent);
+  background: color-mix(in srgb, var(--mc-primary, #D97757) 10%, var(--mc-bg-elevated, #f8fafc));
+}
+
+.teacher-result__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 650;
+  color: var(--mc-text-primary, #1e293b);
+}
+
+.teacher-result__summary::-webkit-details-marker {
+  display: none;
+}
+
+.teacher-result__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teacher-result__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.teacher-result__action,
+.teacher-result__export button {
+  border: 1px solid var(--mc-border-light, #dbe3ef);
+  background: var(--mc-bg-elevated, #f8fafc);
+  color: var(--mc-text-secondary, #475569);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.teacher-result__action:hover,
+.teacher-result__export button:hover {
+  border-color: color-mix(in srgb, var(--mc-primary, #D97757) 42%, transparent);
+  background: color-mix(in srgb, var(--mc-primary, #D97757) 12%, var(--mc-bg-elevated, #f8fafc));
+  color: var(--mc-primary, #D97757);
+}
+
+.teacher-result__body {
+  border-top: 1px solid var(--mc-border-light, #e2e8f0);
+  padding: 12px;
+  background: var(--mc-bg-elevated, #f8fafc);
+}
+
+.teacher-result__export {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .msg-actions {
   display: flex;
   align-items: center;
@@ -1642,31 +2904,6 @@ watch(isGenerating, (generating) => {
   color: var(--mc-text-tertiary, #94a3b8);
   margin-left: 4px;
   user-select: none;
-}
-
-.action-model {
-  font-size: 11px;
-  color: var(--mc-text-secondary, #64748b);
-  margin-left: 4px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--mc-fill-2, rgba(100, 116, 139, 0.08));
-  font-family: var(--mc-mono-font, ui-monospace, "SF Mono", Menlo, monospace);
-  user-select: text;
-  white-space: nowrap;
-}
-
-.action-routing {
-  font-size: 11px;
-  color: var(--mc-primary, #d96d46);
-  margin-left: 4px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--mc-primary-bg, rgba(217, 109, 70, 0.1));
-  font-family: var(--mc-mono-font, ui-monospace, "SF Mono", Menlo, monospace);
-  user-select: text;
-  white-space: nowrap;
-  font-weight: 500;
 }
 
 /* ==================== 主内容区域 ==================== */
@@ -1765,183 +3002,6 @@ watch(isGenerating, (generating) => {
   border-color: color-mix(in srgb, var(--mc-danger) 50%, transparent);
 }
 
-/* ==================== INCOMPLETE 截断卡片（重复检测 / thinking-only 软上限） ==================== */
-.incomplete-card {
-  margin-top: 8px;
-  padding: 12px 16px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--mc-warning, #d97706) 8%, var(--mc-bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 30%, transparent);
-  font-size: 13px;
-  max-width: 480px;
-  line-height: 1.5;
-}
-
-.incomplete-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.incomplete-card__icon {
-  flex-shrink: 0;
-  color: var(--mc-warning, #d97706);
-}
-
-.incomplete-card__title {
-  font-weight: 600;
-  color: var(--mc-warning, #d97706);
-  font-size: 14px;
-}
-
-.incomplete-card__description {
-  margin: 4px 0 8px;
-  color: var(--mc-text-primary);
-  font-size: 13px;
-  opacity: 0.85;
-}
-
-.incomplete-card__footer {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.incomplete-card__retry {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 35%, transparent);
-  background: color-mix(in srgb, var(--mc-warning, #d97706) 10%, var(--mc-bg-elevated));
-  color: var(--mc-warning, #d97706);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-
-.incomplete-card__retry:hover {
-  background: color-mix(in srgb, var(--mc-warning, #d97706) 18%, var(--mc-bg-elevated));
-  border-color: color-mix(in srgb, var(--mc-warning, #d97706) 55%, transparent);
-}
-
-/* ==================== EVIDENCE_INSUFFICIENT 提示卡（info 调，非警告） ==================== */
-.evidence-card {
-  margin-top: 8px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--mc-info, #0891b2) 6%, var(--mc-bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--mc-info, #0891b2) 25%, transparent);
-  font-size: 12.5px;
-  max-width: 480px;
-  line-height: 1.5;
-}
-
-.evidence-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.evidence-card__icon {
-  flex-shrink: 0;
-  color: var(--mc-info, #0891b2);
-}
-
-.evidence-card__title {
-  font-weight: 600;
-  color: var(--mc-info, #0891b2);
-  font-size: 13.5px;
-}
-
-.evidence-card__description {
-  margin: 4px 0 0;
-  color: var(--mc-text-primary);
-  font-size: 12.5px;
-  opacity: 0.85;
-}
-
-/* ==================== feedback_event recovery card (ERROR_FALLBACK) ==================== */
-.feedback-card {
-  margin-top: 8px;
-  padding: 12px 16px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--mc-danger, #dc2626) 8%, var(--mc-bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--mc-danger, #dc2626) 30%, transparent);
-  font-size: 13px;
-  max-width: 480px;
-  line-height: 1.5;
-}
-
-.feedback-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.feedback-card__icon {
-  flex-shrink: 0;
-  color: var(--mc-danger, #dc2626);
-}
-
-.feedback-card__title {
-  font-weight: 600;
-  color: var(--mc-danger, #dc2626);
-  font-size: 14px;
-}
-
-.feedback-card__description {
-  margin: 4px 0 8px;
-  color: var(--mc-text-primary);
-  font-size: 13px;
-  opacity: 0.85;
-}
-
-.feedback-card__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.feedback-card__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--mc-danger, #dc2626) 35%, transparent);
-  background: color-mix(in srgb, var(--mc-danger, #dc2626) 10%, var(--mc-bg-elevated));
-  color: var(--mc-danger, #dc2626);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-
-.feedback-card__btn:hover {
-  background: color-mix(in srgb, var(--mc-danger, #dc2626) 18%, var(--mc-bg-elevated));
-  border-color: color-mix(in srgb, var(--mc-danger, #dc2626) 55%, transparent);
-}
-
-/* Report button is secondary action — muted neutral palette so the
-   primary "retry" stays visually emphasized. */
-.feedback-card__btn--report {
-  border-color: var(--mc-border);
-  background: var(--mc-bg-elevated);
-  color: var(--mc-text-secondary);
-}
-
-.feedback-card__btn--report:hover {
-  background: var(--mc-bg-sunken);
-  border-color: var(--mc-border-strong, var(--mc-border));
-  color: var(--mc-text-primary);
-}
-
 /* ==================== 附件 ==================== */
 .message-attachments {
   display: flex;
@@ -1985,54 +3045,6 @@ watch(isGenerating, (generating) => {
 }
 
 .message-attachment-video__name {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  opacity: 0.76;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.message-attachment-audio {
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.message-attachment-audio audio {
-  width: 100%;
-  max-width: 400px;
-  display: block;
-}
-
-.message-attachment-audio__name {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  opacity: 0.76;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.message-attachment-model3d {
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--bg-soft, #f5f5f5);
-}
-
-.message-attachment-model3d__viewer {
-  width: 100%;
-  max-width: 480px;
-  height: 360px;
-  display: block;
-  border-radius: 12px;
-  /* model-viewer renders nothing until the .glb finishes loading;
-     keep the box sized so layout doesn't jump. */
-  background: linear-gradient(135deg, #fafafa, #ececec);
-}
-
-.message-attachment-model3d__name {
   display: block;
   margin-top: 4px;
   font-size: 12px;
@@ -2230,125 +3242,25 @@ watch(isGenerating, (generating) => {
 /* ===== Mermaid block ===== */
 .markdown-body :deep(.mermaid-block) {
   margin: 14px 0;
+  padding: 16px;
   border-radius: 12px;
   background: var(--mc-mermaid-bg, #f8fafc);
   border: 1px solid var(--mc-mermaid-border, #e2e8f0);
-  overflow: hidden;
-}
-.markdown-body :deep(.mermaid-block__header) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 38px;
-  padding: 0 14px;
-  background: var(--mc-code-header-bg);
-  border-bottom: 1px solid var(--mc-mermaid-border, #e2e8f0);
-  font-size: 12px;
-  line-height: 1;
-  color: var(--mc-code-lang-color);
-  /* Prevent the header label/buttons from being swept into a text selection
-     that starts in the surrounding markdown — the highlighted-grey selection
-     band would otherwise extend across the whole header row. */
-  user-select: none;
-  -webkit-user-select: none;
-}
-.markdown-body :deep(.mermaid-block__lang) {
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-.markdown-body :deep(.mermaid-block__actions) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.markdown-body :deep(.mermaid-block__download) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--mc-code-copy-color);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.markdown-body :deep(.mermaid-block__download:hover) {
-  background: var(--mc-code-copy-hover-bg);
-  color: var(--mc-code-copy-hover-color);
-}
-/* Pin EVERY icon inside the header to 14×14. Without this, DOMPurify can
-   normalise away the `width="14" height="14"` attrs from the markdown HTML,
-   leaving the SVG to fall back to the UA default 300×150. The button is
-   inline-flex so it grows to fit the icon, and `:hover` then paints a
-   gigantic grey rectangle (which is what user issue #67's follow-up screen-
-   shot showed). Same defence-in-depth as `.code-block__header svg`. */
-.markdown-body :deep(.mermaid-block__header svg) {
-  width: 14px !important;
-  height: 14px !important;
-  flex-shrink: 0;
-  display: inline-block;
-  vertical-align: middle;
-}
-.markdown-body :deep(.mermaid-block__header > *) {
-  flex-shrink: 0;
-  min-width: 0;
-}
-.markdown-body :deep(.mermaid-block__body) {
-  padding: 16px;
   text-align: center;
   overflow-x: auto;
-  /* Reserve a stable height so the box doesn't collapse to 0px before the
-     SVG paints — keeps layout stable across the streaming cache-miss →
-     render cycle. */
-  min-height: 96px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
-.markdown-body :deep(.mermaid-block__body svg) {
+.markdown-body :deep(.mermaid-block svg) {
   max-width: 100%;
   height: auto;
 }
-.markdown-body :deep(.mermaid-block.mermaid-error .mermaid-block__body) {
+.markdown-body :deep(.mermaid-block.mermaid-error) {
   background: #fef2f2;
+  border-color: #fecaca;
   color: #b91c1c;
   text-align: left;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   white-space: pre-wrap;
-  display: block;
-}
-/* Streaming placeholder: three pulsing dots inside the empty body. The dots
-   render the same DOM string on every v-html update (stable innerHTML) so
-   the box stops "shaking" during streaming. Once the async render fires
-   after stream end, this gets replaced with the actual SVG. */
-.markdown-body :deep(.mermaid-block__loader) {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-.markdown-body :deep(.mermaid-block__loader-dot) {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--mc-mermaid-border, #cbd5e1);
-  animation: mc-mermaid-pulse 1.4s ease-in-out infinite;
-}
-.markdown-body :deep(.mermaid-block__loader-dot:nth-child(2)) {
-  animation-delay: 0.2s;
-}
-.markdown-body :deep(.mermaid-block__loader-dot:nth-child(3)) {
-  animation-delay: 0.4s;
-}
-@keyframes mc-mermaid-pulse {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
-  40% { opacity: 1; transform: scale(1); }
-}
-.markdown-body :deep(.mermaid-block__download.is-flash) {
-  background: var(--mc-warning-bg, rgba(255, 159, 67, 0.15));
-  color: var(--mc-warning, #f59e0b);
 }
 
 /* ===== KaTeX inline / block ===== */

@@ -35,7 +35,6 @@ public class WikiRelationController {
     private final HybridRetriever hybridRetriever;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
-    private final WikiEmbeddingService embeddingService;
 
     // ==================== RFC-029: Relations ====================
 
@@ -105,14 +104,11 @@ public class WikiRelationController {
                 .filter(j -> "running".equals(j.getStatus()))
                 .count();
 
-        WikiEmbeddingService.EmbeddingDrift drift = embeddingService.describeDrift(kbId);
-
         return Map.of(
                 "pageCount", pageCount,
                 "enrichedPageCount", enrichedCount,
                 "failedJobCount", failedJobCount,
-                "runningJobCount", runningJobCount,
-                "embeddingDrift", drift
+                "runningJobCount", runningJobCount
         );
     }
 

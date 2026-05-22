@@ -157,6 +157,10 @@ CREATE TABLE IF NOT EXISTS mate_conversation (
     last_active_time DATETIME,
     stream_status    VARCHAR(16)  NOT NULL DEFAULT 'idle',
     workspace_id     BIGINT       NOT NULL DEFAULT 1,
+    working_directory VARCHAR(1024),
+    runtime_mode     VARCHAR(32)  DEFAULT 'default',
+    runtime_provider_id VARCHAR(64),
+    runtime_model_name VARCHAR(128),
     create_time      DATETIME     NOT NULL,
     update_time      DATETIME     NOT NULL,
     deleted          INT          NOT NULL DEFAULT 0

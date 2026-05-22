@@ -78,7 +78,7 @@ public final class ToolExecutionGuardHelper {
         log.info("[GuardHelper] Approval pending created: pendingId={}, tool={}, findings={}",
                 pendingId, toolName, evaluation.hasFindings() ? evaluation.findings().size() : 0);
 
-        return "[APPROVAL_PENDING] tool=" + toolName + " awaiting user decision";
+        return "[APPROVAL_PENDING] 已为工具 " + toolName + " 发起审批，等待用户决定。批准后应继续执行当前步骤；若用户不批准，应改用可直接访问的资料或现有知识库推进任务。";
     }
 
     /**
@@ -118,7 +118,7 @@ public final class ToolExecutionGuardHelper {
 
         events.add(GraphEventPublisher.toolApprovalRequested(pendingId, toolName, arguments, guardResult.reason()));
 
-        return "[APPROVAL_PENDING] tool=" + toolName + " awaiting user decision";
+        return "[APPROVAL_PENDING] 已为工具 " + toolName + " 发起审批，等待用户决定。批准后应继续执行当前步骤；若用户不批准，应改用可直接访问的资料或现有知识库推进任务。";
     }
 
     // ==================== 序列化工具 ====================

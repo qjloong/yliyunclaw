@@ -42,6 +42,9 @@ public class AuthService {
     @Value("${mateclaw.jwt.renewal-threshold:7200000}")
     private long renewalThreshold;
 
+    @Value("${mateclaw.workspace.invite-expiration:604800000}")
+    private long workspaceInviteExpiration;
+
     /**
      * 登录
      */
@@ -186,6 +189,36 @@ public class AuthService {
      */
     public UserEntity findById(Long userId) {
         return userMapper.selectById(userId);
+    }
+
+    public long getWorkspaceInviteExpiration() {
+        return workspaceInviteExpiration;
+    }
+
+    public String generateWorkspaceInviteToken(Long inviteId, Long workspaceId, String role, Long invitedByUserId, long expirationMs) {
+        return Jwts.builder()
+                .subject("workspace-invite")
+                .claim("purpose", "workspace_invite")
+                .claim("inviteId", inviteId)
+                .claim("workspaceId", workspaceId)
+                .claim("role", role)
+                .claim("invitedBy", invitedByUserId)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + expirationMs))
+                .signWith(getSignKey())
+                .compact();
+    }
+
+    public Claims parseWorkspaceInviteTokenClaims(String token) {
+        Claims claims = parseClaims(token);
+        if (claims == null) {
+            return null;
+        }
+        Object purpose = claims.get("purpose");
+        if (!"workspace_invite".equals(String.valueOf(purpose))) {
+            return null;
+        }
+        return claims;
     }
 
     private String generateToken(UserEntity user) {

@@ -2,8 +2,11 @@ package vip.mate.workspace.conversation.vo;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import org.springframework.util.StringUtils;
 import vip.mate.workspace.conversation.model.ConversationEntity;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 
 /**
@@ -45,6 +48,21 @@ public class ConversationVO extends ConversationEntity {
      */
     private String source;
 
+    /** 工作区名称 */
+    private String workspaceName;
+
+    /** 工作区根目录 */
+    private String workspaceBasePath;
+
+    /** 当前生效的 project 目录（为空时等于 workspaceBasePath） */
+    private String effectiveProjectPath;
+
+    /** 相对 workspace 根目录的 project 路径；根目录时为空 */
+    private String projectRelativePath;
+
+    /** 是否直接运行在 workspace 根目录 */
+    private Boolean usingWorkspaceRoot;
+
     /**
      * 工厂方法：从实体构建 VO，补充 agentName/agentIcon/status
      *
@@ -53,7 +71,8 @@ public class ConversationVO extends ConversationEntity {
      * @param agentIcon   关联 Agent 图标（可为 null）
      * @return ConversationVO
      */
-    public static ConversationVO from(ConversationEntity entity, String agentName, String agentIcon) {
+    public static ConversationVO from(ConversationEntity entity, String agentName, String agentIcon,
+                                      String workspaceName, String workspaceBasePath) {
         ConversationVO vo = new ConversationVO();
         // 复制实体字段
         vo.setId(entity.getId());
@@ -66,6 +85,18 @@ public class ConversationVO extends ConversationEntity {
         vo.setLastActiveTime(entity.getLastActiveTime());
         vo.setCreateTime(entity.getCreateTime());
         vo.setUpdateTime(entity.getUpdateTime());
+        vo.setWorkingDirectory(entity.getWorkingDirectory());
+        vo.setRuntimeMode(entity.getRuntimeMode());
+        vo.setRuntimeProviderId(entity.getRuntimeProviderId());
+        vo.setRuntimeModelName(entity.getRuntimeModelName());
+        vo.setWorkspaceName(workspaceName);
+        vo.setWorkspaceBasePath(workspaceBasePath);
+        String effectiveProjectPath = StringUtils.hasText(entity.getWorkingDirectory())
+            ? entity.getWorkingDirectory()
+            : workspaceBasePath;
+        vo.setEffectiveProjectPath(effectiveProjectPath);
+        vo.setProjectRelativePath(resolveProjectRelativePath(workspaceBasePath, effectiveProjectPath));
+        vo.setUsingWorkspaceRoot(!StringUtils.hasText(vo.getProjectRelativePath()));
         // 补充关联字段
         vo.setAgentName(agentName != null ? agentName : "未知 Agent");
         vo.setAgentIcon(agentIcon != null ? agentIcon : "🤖");
@@ -84,16 +115,26 @@ public class ConversationVO extends ConversationEntity {
         return vo;
     }
 
+    private static String resolveProjectRelativePath(String workspaceBasePath, String effectiveProjectPath) {
+        if (!StringUtils.hasText(workspaceBasePath) || !StringUtils.hasText(effectiveProjectPath)) {
+            return null;
+        }
+        try {
+            Path root = Paths.get(workspaceBasePath).toAbsolutePath().normalize();
+            Path effective = Paths.get(effectiveProjectPath).toAbsolutePath().normalize();
+            if (root.equals(effective)) {
+                return null;
+            }
+            if (effective.startsWith(root)) {
+                return root.relativize(effective).toString();
+            }
+        } catch (Exception ignored) {
+        }
+        return effectiveProjectPath;
+    }
+
     private static String extractSource(String conversationId) {
         if (conversationId == null) return "web";
-        // Underscore-prefixed cron buckets — use the cron icon for both.
-        // tasks_<wsId> is the unified per-workspace cron output conversation
-        // (CronConversationResolver.resolve for web-origin jobs). cron_<id>
-        // is the legacy per-job orphan kept as the IM-cron fallback when
-        // no channel session exists yet.
-        if (conversationId.startsWith("tasks_") || conversationId.startsWith("cron_")) {
-            return "cron";
-        }
         int colonIdx = conversationId.indexOf(':');
         if (colonIdx <= 0) return "web";
         String prefix = conversationId.substring(0, colonIdx);

@@ -1,8 +1,6 @@
 <template>
   <el-config-provider :locale="elementLocale">
     <router-view />
-    <!-- Mounted once at the app root so mcConfirm() can pop a dialog
-         from anywhere without each caller wiring its own host. -->
     <McConfirmHost />
   </el-config-provider>
 </template>

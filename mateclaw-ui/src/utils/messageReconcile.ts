@@ -44,6 +44,14 @@ export function messageRichness(msg: Message): number {
   const tcs = Array.isArray(meta.toolCalls) ? meta.toolCalls : []
   score += tcs.length * 40
 
+  const reviewFiles = Array.isArray(meta.reviewSummary?.files) ? meta.reviewSummary.files : []
+  score += reviewFiles.length * 90
+  const reviewValidations = Array.isArray(meta.reviewSummary?.validations) ? meta.reviewSummary.validations : []
+  score += reviewValidations.length * 60
+  const projectChangedFiles = Array.isArray(meta.reviewSummary?.projectChangedFiles) ? meta.reviewSummary.projectChangedFiles : []
+  score += projectChangedFiles.length * 70
+  if (meta.reviewSummary?.checkpointCapability) score += 40
+
   // contentParts 中的 thinking / tool_call
   const parts = Array.isArray(msg.contentParts) ? msg.contentParts : []
   if (parts.some(p => p.type === 'thinking')) score += 120
@@ -115,6 +123,26 @@ function mergeMetadata(localMetaRaw: any, fetchedMetaRaw: any): Record<string, a
     merged.toolCalls = localToolCalls
   } else if (fetchedToolCalls.length > 0) {
     merged.toolCalls = fetchedToolCalls
+  }
+
+  const localReviewFiles = Array.isArray(localMeta.reviewSummary?.files) ? localMeta.reviewSummary.files : []
+  const fetchedReviewFiles = Array.isArray(fetchedMeta.reviewSummary?.files) ? fetchedMeta.reviewSummary.files : []
+  const localReviewValidations = Array.isArray(localMeta.reviewSummary?.validations) ? localMeta.reviewSummary.validations : []
+  const fetchedReviewValidations = Array.isArray(fetchedMeta.reviewSummary?.validations) ? fetchedMeta.reviewSummary.validations : []
+  const localProjectChangedFiles = Array.isArray(localMeta.reviewSummary?.projectChangedFiles)
+    ? localMeta.reviewSummary.projectChangedFiles
+    : []
+  const fetchedProjectChangedFiles = Array.isArray(fetchedMeta.reviewSummary?.projectChangedFiles)
+    ? fetchedMeta.reviewSummary.projectChangedFiles
+    : []
+  const localCheckpointCapability = localMeta.reviewSummary?.checkpointCapability
+  const fetchedCheckpointCapability = fetchedMeta.reviewSummary?.checkpointCapability
+  const localReviewScore = localReviewFiles.length * 10 + localReviewValidations.length * 7 + localProjectChangedFiles.length * 8 + (localCheckpointCapability ? 1 : 0)
+  const fetchedReviewScore = fetchedReviewFiles.length * 10 + fetchedReviewValidations.length * 7 + fetchedProjectChangedFiles.length * 8 + (fetchedCheckpointCapability ? 1 : 0)
+  if (localReviewScore > fetchedReviewScore) {
+    merged.reviewSummary = localMeta.reviewSummary
+  } else if (fetchedReviewScore > 0) {
+    merged.reviewSummary = fetchedMeta.reviewSummary
   }
 
   // pendingApproval：前端已决/过期状态不被后端的 pending 状态回退

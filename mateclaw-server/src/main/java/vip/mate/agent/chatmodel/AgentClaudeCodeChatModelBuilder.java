@@ -26,7 +26,7 @@ import vip.mate.llm.model.ModelProviderEntity;
  *
  * <p>Sends Anthropic Messages API requests authenticated with the user's
  * Claude Code OAuth subscription token instead of an API key — letting users
- * with a Claude Pro/Max plan run MateClaw against their existing entitlement.
+ * with a Claude Pro/Max plan run MateY Against their existing entitlement.
  *
  * <h2>How OAuth changes the wire format</h2>
  * <ol>
@@ -96,7 +96,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         String accessToken = oauthService.getValidToken();
 
         // 2) Build the Anthropic API client wired with OAuth headers.
-        AnthropicApi api = buildOauthAnthropicApi(accessToken, model.getRequestTimeoutSeconds());
+        AnthropicApi api = buildOauthAnthropicApi(accessToken);
 
         // 3) Reuse the canonical Anthropic options builder — same Claude 4.7
         //    sampling-params handling, thinking-budget mapping, prompt cache.
@@ -122,15 +122,6 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
      * can verify header composition without spinning up a chat model.
      */
     AnthropicApi buildOauthAnthropicApi(String accessToken) {
-        return buildOauthAnthropicApi(accessToken, null);
-    }
-
-    /**
-     * RFC-03 Lane B1 overload — same OAuth-stamped Anthropic client, with a
-     * per-model read-timeout override threaded through to the underlying
-     * RestClient + WebClient timeouts.
-     */
-    AnthropicApi buildOauthAnthropicApi(String accessToken, Integer readTimeoutOverride) {
         String authHeader = apiHeaders.bearerAuth(accessToken);
         String userAgent = apiHeaders.userAgent();
         String xApp = apiHeaders.xApp();
@@ -144,7 +135,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         // rate-limited harder than spec'd. Reference: openclaw
         // anthropic-transport-stream.ts:567-574.
         RestClient.Builder restClientBuilder = AgentAnthropicChatModelBuilder.applyHttpTimeouts(
-                        restClientBuilderProvider.getIfAvailable(RestClient::builder), readTimeoutOverride)
+                        restClientBuilderProvider.getIfAvailable(RestClient::builder))
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
                 .defaultHeader(HttpHeaders.ACCEPT, "application/json")
@@ -161,8 +152,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
                 // staring at SDK internals.
                 .requestInterceptor(new RateLimitDiagnosticInterceptor());
 
-        WebClient.Builder webClientBuilder = AgentAnthropicChatModelBuilder.applyHttpTimeoutsToWebClient(
-                        webClientBuilderProvider.getIfAvailable(WebClient::builder), readTimeoutOverride)
+        WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
                 .defaultHeader(HttpHeaders.ACCEPT, "application/json")

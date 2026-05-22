@@ -34,49 +34,34 @@
               <div class="model-group-header">
                 <span class="model-group-header__name">{{ group.provider.name }}</span>
                 <span v-if="group.provider.isLocal" class="model-group-header__badge model-group-header__badge--local">Local</span>
-                <!-- Liveness dot — UNPROBED = grey, COOLDOWN = amber, LIVE = none.
-                     v2 R3: when showAllStates, also surface UNCONFIGURED / REMOVED chips
-                     so the user can see what's wrong without leaving chat. -->
+                <!-- RFC-073: liveness dot. UNPROBED = grey (still booting),
+                     COOLDOWN = amber (transient backoff). LIVE has no dot. -->
                 <span
                   v-if="group.provider.liveness === 'UNPROBED'"
                   class="model-group-header__dot model-group-header__dot--unprobed"
-                  :title="$t('provider.status.unprobed')"
+                  :title="$t('chat.modelLivenessUnprobed')"
                 ></span>
                 <span
                   v-else-if="group.provider.liveness === 'COOLDOWN'"
                   class="model-group-header__dot model-group-header__dot--cooldown"
-                  :title="$t('provider.status.cooldown', { s: cooldownSeconds(group.provider) })"
+                  :title="$t('chat.modelLivenessCooldown', { seconds: cooldownSeconds(group.provider) })"
                 ></span>
-                <span
-                  v-if="group.provider.liveness === 'UNCONFIGURED'"
-                  class="model-group-header__chip model-group-header__chip--warn"
-                >{{ $t('provider.status.unconfigured') }}</span>
-                <span
-                  v-else-if="group.provider.liveness === 'REMOVED'"
-                  class="model-group-header__chip model-group-header__chip--err"
-                >{{ $t('provider.status.removed') }}</span>
-                <span
-                  v-else-if="group.provider.liveness === 'COOLDOWN'"
-                  class="model-group-header__chip model-group-header__chip--info"
-                >{{ $t('provider.status.cooldown', { s: cooldownSeconds(group.provider) }) }}</span>
-                <button
-                  v-if="!isSelectable(group.provider)"
-                  class="model-group-header__fix"
-                  @click.stop="emitNavigateFix(group.provider)"
-                  type="button"
-                >{{ $t('chat.promptAction.fixThis') }}</button>
               </div>
               <div
                 v-for="item in group.models"
                 :key="item.value"
                 class="model-dropdown-item"
-                :class="{
-                  active: item.value === activeValue,
-                  dimmed: !isSelectable(group.provider),
-                }"
-                @click="onItemClick(group.provider, item.value)"
+                :class="{ active: item.value === activeValue, dimmed: group.provider.liveness === 'COOLDOWN' || group.provider.liveness === 'UNPROBED' }"
+                @click="handleSelect(item.value)"
               >
-                <span class="model-dropdown-item__name">{{ item.name }}</span>
+                <span class="model-dropdown-item__main">
+                  <span class="model-dropdown-item__name">{{ item.name }}</span>
+                  <span
+                    v-if="item.supportsVision"
+                    class="model-dropdown-item__badge"
+                    :title="$t('chat.modelVisionBadgeTitle')"
+                  >{{ $t('chat.modelVisionBadge') }}</span>
+                </span>
                 <svg v-if="item.value === activeValue" class="model-dropdown-item__check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
               </div>
             </template>
@@ -88,7 +73,7 @@
                    state. Push them into Settings/Models with the drawer
                    pre-opened via ?addProvider=1. -->
               <template v-if="query.trim() === '' && groups.length === 0">
-                {{ emptyHint || $t('chat.noProvidersConfigured') }}
+                {{ $t('chat.noProvidersConfigured') }}
                 <RouterLink class="model-empty__cta" to="/settings/models?addProvider=1" @click="open = false">
                   {{ $t('chat.goConfigure') }}
                 </RouterLink>
@@ -116,6 +101,7 @@ interface ModelItem {
   value: string
   name: string
   id: string
+  supportsVision?: boolean
 }
 
 interface ModelGroup {
@@ -128,19 +114,10 @@ const props = defineProps<{
   activeValue: string
   activeLabel: string
   saving?: boolean
-  /**
-   * v2 R3: when true, render UNCONFIGURED / REMOVED rows too (dimmed, with
-   * status chip + Fix button) so users see what's wrong without leaving chat.
-   * Defaults to false to keep the legacy filtered behavior for any other call site.
-   */
-  showAllStates?: boolean
-  /** Optional override for the empty-state text. */
-  emptyHint?: string
 }>()
 
 const emit = defineEmits<{
   select: [value: string]
-  'navigate-fix': [provider: ProviderInfo]
 }>()
 
 const open = ref(false)
@@ -174,18 +151,11 @@ function toggle() {
 }
 
 // 按 provider 分组，云端在前，本地在后
-// v2 R3: when showAllStates is true, keep UNCONFIGURED/REMOVED visible (dimmed +
-// status chip + Fix button) so the user can act in-place. Default behavior
-// (showAllStates=false) preserves the original filter for non-popup contexts.
+// RFC-073: 仅过滤 UNCONFIGURED / REMOVED；UNPROBED + COOLDOWN 仍显示但视觉上区分。
 function isHidden(p: ProviderInfo): boolean {
-  if (props.showAllStates) return false
+  // 旧后端不返回 liveness 时退回 available 行为，避免渐进升级期间 UI 全空。
   if (!p.liveness) return !p.available
   return p.liveness === 'UNCONFIGURED' || p.liveness === 'REMOVED'
-}
-
-function isSelectable(p: ProviderInfo): boolean {
-  if (!p.liveness) return p.available === true
-  return p.liveness === 'LIVE' || p.liveness === 'COOLDOWN'
 }
 
 const groups = computed<ModelGroup[]>(() => {
@@ -195,19 +165,7 @@ const groups = computed<ModelGroup[]>(() => {
   for (const provider of props.providers) {
     if (isHidden(provider)) continue
     const allModels = [...(provider.models || []), ...(provider.extraModels || [])]
-    // When showAllStates is on we still want UNCONFIGURED rows to appear even
-    // if they have no models — synthesize one placeholder so the header chip +
-    // Fix button render. Otherwise (legacy call site) skip empty groups.
-    if (allModels.length === 0) {
-      if (!props.showAllStates) continue
-      const group: ModelGroup = {
-        provider,
-        models: [],
-      }
-      if (provider.isLocal) local.push(group)
-      else cloud.push(group)
-      continue
-    }
+    if (allModels.length === 0) continue
 
     const group: ModelGroup = {
       provider,
@@ -215,6 +173,7 @@ const groups = computed<ModelGroup[]>(() => {
         value: `${provider.id}::${m.id}`,
         name: m.name || m.id,
         id: m.id,
+        supportsVision: m.supportsVision,
       })),
     }
 
@@ -261,25 +220,6 @@ function handleSelect(value: string) {
   open.value = false
   query.value = ''
   emit('select', value)
-}
-
-/**
- * v2 R3: a row is selectable iff its provider can serve a request now (LIVE) or
- * is just throttled (COOLDOWN — backend lets the request go and the chain
- * walker handles fallback). UNCONFIGURED / REMOVED / UNPROBED need user action,
- * so clicking those routes to the Fix flow instead of trying to switch.
- */
-function onItemClick(provider: ProviderInfo, value: string) {
-  if (isSelectable(provider)) {
-    handleSelect(value)
-  } else {
-    emitNavigateFix(provider)
-  }
-}
-
-function emitNavigateFix(provider: ProviderInfo) {
-  open.value = false
-  emit('navigate-fix', provider)
 }
 
 // 打开时聚焦搜索框 + 滚动到当前选中项
@@ -454,52 +394,6 @@ watch(open, async (isOpen) => {
   50% { opacity: 1; }
 }
 
-/* Liveness status chips — surfaced when ModelSelector is in show-all-states mode. */
-.model-group-header__chip {
-  display: inline-flex;
-  align-items: center;
-  height: 16px;
-  padding: 0 6px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-.model-group-header__chip--warn {
-  background: rgba(245, 158, 11, 0.15);
-  color: #b45309;
-}
-.model-group-header__chip--err {
-  background: rgba(239, 68, 68, 0.15);
-  color: #b91c1c;
-}
-.model-group-header__chip--info {
-  background: rgba(59, 130, 246, 0.15);
-  color: #1d4ed8;
-}
-.dark .model-group-header__chip--warn { color: #fbbf24; }
-.dark .model-group-header__chip--err  { color: #fca5a5; }
-.dark .model-group-header__chip--info { color: #93c5fd; }
-
-.model-group-header__fix {
-  margin-left: auto;
-  height: 18px;
-  padding: 0 8px;
-  border-radius: 4px;
-  border: 1px solid var(--mc-border);
-  background: transparent;
-  color: var(--mc-text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.model-group-header__fix:hover {
-  background: var(--mc-primary);
-  color: #fff;
-  border-color: var(--mc-primary);
-}
-
 /* ---- Items ---- */
 
 .model-dropdown-item {
@@ -529,12 +423,36 @@ watch(open, async (isOpen) => {
   opacity: 0.85;
 }
 
+.model-dropdown-item__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .model-dropdown-item__name {
   font-size: 13px;
   color: var(--mc-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-dropdown-item__badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.08);
+  color: #3b82f6;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .model-dropdown-item__check {

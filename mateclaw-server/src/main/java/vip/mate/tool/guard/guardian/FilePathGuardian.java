@@ -53,6 +53,9 @@ public class FilePathGuardian implements ToolGuardGuardian {
     /** 已知文件工具的路径参数名（必须与 @ToolParam 声明的 JSON 键名一致） */
     private static final Map<String, String> TOOL_FILE_PARAMS = Map.of(
             "read_file", "filePath",
+            "list_directory", "directoryPath",
+            "index_directory_materials", "directoryPath",
+            "filter_directory_materials", "directoryPath",
             "write_file", "filePath",
             "edit_file", "filePath",
             "file_read", "file_path",

@@ -37,6 +37,11 @@ public class SystemSettingService {
     private static final String IMAGE_PROVIDER_KEY = "imageProvider";
     private static final String IMAGE_FALLBACK_ENABLED_KEY = "imageFallbackEnabled";
 
+    // 3D 模型生成配置 keys
+    private static final String MODEL3D_ENABLED_KEY = "model3dEnabled";
+    private static final String MODEL3D_PROVIDER_KEY = "model3dProvider";
+    private static final String MODEL3D_FALLBACK_ENABLED_KEY = "model3dFallbackEnabled";
+
     // TTS 配置 keys
     private static final String TTS_ENABLED_KEY = "ttsEnabled";
     private static final String TTS_PROVIDER_KEY = "ttsProvider";
@@ -49,24 +54,11 @@ public class SystemSettingService {
     private static final String STT_ENABLED_KEY = "sttEnabled";
     private static final String STT_PROVIDER_KEY = "sttProvider";
     private static final String STT_FALLBACK_ENABLED_KEY = "sttFallbackEnabled";
-    // Issue #76: let the OpenAI STT provider point at any OpenAI-compat endpoint.
-    private static final String STT_OPENAI_COMPAT_PROVIDER_ID_KEY = "sttOpenAiCompatProviderId";
-    private static final String STT_OPENAI_COMPAT_MODEL_KEY = "sttOpenAiCompatModel";
 
     // 音乐生成配置 keys
     private static final String MUSIC_ENABLED_KEY = "musicEnabled";
     private static final String MUSIC_PROVIDER_KEY = "musicProvider";
     private static final String MUSIC_FALLBACK_ENABLED_KEY = "musicFallbackEnabled";
-
-    // 3D 模型生成配置 keys
-    private static final String MODEL3D_ENABLED_KEY = "model3dEnabled";
-    private static final String MODEL3D_PROVIDER_KEY = "model3dProvider";
-    private static final String MODEL3D_FALLBACK_ENABLED_KEY = "model3dFallbackEnabled";
-
-    // Multimodal sidecar routing keys (id values; references mate_model_config.id)
-    private static final String DEFAULT_VISION_MODEL_KEY = "default.vision_model";
-    private static final String DEFAULT_VIDEO_MODEL_KEY = "default.video_model";
-
     private static final String ZHIPU_API_KEY_KEY = "zhipuApiKey";
     private static final String ZHIPU_BASE_URL_KEY = "zhipuBaseUrl";
     private static final String FAL_API_KEY_KEY = "falApiKey";
@@ -74,7 +66,6 @@ public class SystemSettingService {
     private static final String KLING_SECRET_KEY_KEY = "klingSecretKey";
     private static final String RUNWAY_API_KEY_KEY = "runwayApiKey";
     private static final String MINIMAX_API_KEY_KEY = "minimaxApiKey";
-    private static final String MINIMAX_REGION_KEY = "minimaxRegion";
 
     private final SystemSettingMapper systemSettingMapper;
 
@@ -121,12 +112,16 @@ public class SystemSettingService {
         dto.setKlingSecretKeyMasked(maskApiKey(getValue(KLING_SECRET_KEY_KEY, "")));
         dto.setRunwayApiKeyMasked(maskApiKey(getValue(RUNWAY_API_KEY_KEY, "")));
         dto.setMinimaxApiKeyMasked(maskApiKey(getValue(MINIMAX_API_KEY_KEY, "")));
-        dto.setMinimaxRegion(getValue(MINIMAX_REGION_KEY, "global"));
 
         // 图片生成配置
         dto.setImageEnabled(Boolean.parseBoolean(getValue(IMAGE_ENABLED_KEY, "false")));
         dto.setImageProvider(getValue(IMAGE_PROVIDER_KEY, "auto"));
         dto.setImageFallbackEnabled(Boolean.parseBoolean(getValue(IMAGE_FALLBACK_ENABLED_KEY, "true")));
+
+        // 3D 模型生成配置
+        dto.setModel3dEnabled(Boolean.parseBoolean(getValue(MODEL3D_ENABLED_KEY, "false")));
+        dto.setModel3dProvider(getValue(MODEL3D_PROVIDER_KEY, "auto"));
+        dto.setModel3dFallbackEnabled(Boolean.parseBoolean(getValue(MODEL3D_FALLBACK_ENABLED_KEY, "true")));
 
         // TTS 配置
         dto.setTtsEnabled(Boolean.parseBoolean(getValue(TTS_ENABLED_KEY, "false")));
@@ -141,34 +136,12 @@ public class SystemSettingService {
         dto.setSttEnabled(Boolean.parseBoolean(getValue(STT_ENABLED_KEY, "false")));
         dto.setSttProvider(getValue(STT_PROVIDER_KEY, "auto"));
         dto.setSttFallbackEnabled(Boolean.parseBoolean(getValue(STT_FALLBACK_ENABLED_KEY, "true")));
-        // Issue #76: default to "openai" so upgrades behave identically to the
-        // old hard-coded path; users can swap to any OpenAI-compat provider row.
-        dto.setSttOpenAiCompatProviderId(getValue(STT_OPENAI_COMPAT_PROVIDER_ID_KEY, "openai"));
-        dto.setSttOpenAiCompatModel(getValue(STT_OPENAI_COMPAT_MODEL_KEY, "whisper-1"));
 
         // 音乐生成配置
         dto.setMusicEnabled(Boolean.parseBoolean(getValue(MUSIC_ENABLED_KEY, "false")));
         dto.setMusicProvider(getValue(MUSIC_PROVIDER_KEY, "auto"));
         dto.setMusicFallbackEnabled(Boolean.parseBoolean(getValue(MUSIC_FALLBACK_ENABLED_KEY, "true")));
-
-        // 3D 模型生成配置
-        dto.setModel3dEnabled(Boolean.parseBoolean(getValue(MODEL3D_ENABLED_KEY, "false")));
-        dto.setModel3dProvider(getValue(MODEL3D_PROVIDER_KEY, "auto"));
-        dto.setModel3dFallbackEnabled(Boolean.parseBoolean(getValue(MODEL3D_FALLBACK_ENABLED_KEY, "true")));
-
-        // Multimodal sidecar routing — empty string means "not configured"
-        dto.setDefaultVisionModelId(parseIdOrNull(getValue(DEFAULT_VISION_MODEL_KEY, "")));
-        dto.setDefaultVideoModelId(parseIdOrNull(getValue(DEFAULT_VIDEO_MODEL_KEY, "")));
         return dto;
-    }
-
-    private Long parseIdOrNull(String value) {
-        if (value == null || value.isBlank()) return null;
-        try {
-            return Long.parseLong(value.trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
     }
 
     /**
@@ -274,9 +247,6 @@ public class SystemSettingService {
         if (dto.getMinimaxApiKey() != null && !dto.getMinimaxApiKey().isBlank()) {
             saveValue(MINIMAX_API_KEY_KEY, dto.getMinimaxApiKey(), "MiniMax API Key");
         }
-        if (dto.getMinimaxRegion() != null && !dto.getMinimaxRegion().isBlank()) {
-            saveValue(MINIMAX_REGION_KEY, dto.getMinimaxRegion(), "MiniMax API 区域 (global / cn)");
-        }
 
         // 图片生成配置
         if (dto.getImageEnabled() != null) {
@@ -287,6 +257,17 @@ public class SystemSettingService {
         }
         if (dto.getImageFallbackEnabled() != null) {
             saveValue(IMAGE_FALLBACK_ENABLED_KEY, String.valueOf(dto.getImageFallbackEnabled()), "图片 Provider 级 Fallback");
+        }
+
+        // 3D 模型生成配置
+        if (dto.getModel3dEnabled() != null) {
+            saveValue(MODEL3D_ENABLED_KEY, String.valueOf(dto.getModel3dEnabled()), "是否启用 3D 模型生成");
+        }
+        if (dto.getModel3dProvider() != null) {
+            saveValue(MODEL3D_PROVIDER_KEY, dto.getModel3dProvider(), "3D 模型生成首选 Provider");
+        }
+        if (dto.getModel3dFallbackEnabled() != null) {
+            saveValue(MODEL3D_FALLBACK_ENABLED_KEY, String.valueOf(dto.getModel3dFallbackEnabled()), "3D 模型 Provider 级 Fallback");
         }
 
         // TTS 配置
@@ -319,15 +300,6 @@ public class SystemSettingService {
         if (dto.getSttFallbackEnabled() != null) {
             saveValue(STT_FALLBACK_ENABLED_KEY, String.valueOf(dto.getSttFallbackEnabled()), "STT Provider 级 Fallback");
         }
-        // Issue #76: persist the OpenAI-compatible STT routing target.
-        if (dto.getSttOpenAiCompatProviderId() != null) {
-            saveValue(STT_OPENAI_COMPAT_PROVIDER_ID_KEY, dto.getSttOpenAiCompatProviderId(),
-                    "OpenAI-compat STT 凭证来源 provider id");
-        }
-        if (dto.getSttOpenAiCompatModel() != null) {
-            saveValue(STT_OPENAI_COMPAT_MODEL_KEY, dto.getSttOpenAiCompatModel(),
-                    "OpenAI-compat STT 模型名");
-        }
 
         // 音乐生成配置
         if (dto.getMusicEnabled() != null) {
@@ -339,60 +311,6 @@ public class SystemSettingService {
         if (dto.getMusicFallbackEnabled() != null) {
             saveValue(MUSIC_FALLBACK_ENABLED_KEY, String.valueOf(dto.getMusicFallbackEnabled()), "音乐 Provider 级 Fallback");
         }
-
-        // 3D 模型生成配置
-        if (dto.getModel3dEnabled() != null) {
-            saveValue(MODEL3D_ENABLED_KEY, String.valueOf(dto.getModel3dEnabled()), "是否启用 3D 模型生成");
-        }
-        if (dto.getModel3dProvider() != null) {
-            saveValue(MODEL3D_PROVIDER_KEY, dto.getModel3dProvider(), "3D 模型生成首选 Provider");
-        }
-        if (dto.getModel3dFallbackEnabled() != null) {
-            saveValue(MODEL3D_FALLBACK_ENABLED_KEY, String.valueOf(dto.getModel3dFallbackEnabled()), "3D Provider 级 Fallback");
-        }
-
-        // Multimodal sidecar routing — guarded with null check, matching the
-        // pattern used for music / 3D / image / video / tts / stt blocks
-        // above. The bulk PUT /settings is used by every settings page (System,
-        // Music, Video, Image, Stt, Tts, Model3D), each sending a partial
-        // payload that omits sidecar fields. Without this guard, saving any
-        // unrelated setting would silently write "" into the sidecar keys
-        // (Long? defaultVisionModelId deserializes to null when absent), which
-        // wiped users' configured vision/video models the moment they touched
-        // an unrelated settings page. Explicit clearing via the sidecar UI now
-        // routes through {@link #updateSidecarSettings} instead.
-        if (dto.getDefaultVisionModelId() != null) {
-            saveValue(DEFAULT_VISION_MODEL_KEY,
-                    String.valueOf(dto.getDefaultVisionModelId()),
-                    "Default vision-capable model id (mate_model_config.id) for sidecar routing");
-        }
-        if (dto.getDefaultVideoModelId() != null) {
-            saveValue(DEFAULT_VIDEO_MODEL_KEY,
-                    String.valueOf(dto.getDefaultVideoModelId()),
-                    "Default video-capable model id (mate_model_config.id) for sidecar routing");
-        }
-        return getSettings();
-    }
-
-    /**
-     * Dedicated update path for the multimodal sidecar configuration.
-     * <p>
-     * This endpoint is the ONLY place vision/video model ids can be written
-     * unconditionally — null is treated as an explicit "clear" and writes
-     * an empty string (parse-back returns null). The bulk
-     * {@link #saveSettings} now guards both keys with non-null checks so
-     * unrelated settings pages can't accidentally clobber sidecar config.
-     * <p>
-     * Both fields are always written so a single API call can independently
-     * assign / clear either modality.
-     */
-    public SystemSettingsDTO updateSidecarSettings(Long visionModelId, Long videoModelId) {
-        saveValue(DEFAULT_VISION_MODEL_KEY,
-                visionModelId == null ? "" : String.valueOf(visionModelId),
-                "Default vision-capable model id (mate_model_config.id) for sidecar routing");
-        saveValue(DEFAULT_VIDEO_MODEL_KEY,
-                videoModelId == null ? "" : String.valueOf(videoModelId),
-                "Default video-capable model id (mate_model_config.id) for sidecar routing");
         return getSettings();
     }
 

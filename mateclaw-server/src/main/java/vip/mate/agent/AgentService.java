@@ -3,15 +3,12 @@ package vip.mate.agent;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.context.ChatOriginHolder;
-import vip.mate.agent.event.AgentLifecycleEvent;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.exception.MateClawException;
@@ -20,6 +17,7 @@ import vip.mate.memory.MemoryProperties;
 import vip.mate.memory.lifecycle.MemoryLifecycleMediator;
 import vip.mate.memory.lifecycle.TurnContext;
 import vip.mate.memory.service.MemoryRecallTracker;
+import vip.mate.workspace.conversation.ConversationService;
 
 import java.util.List;
 import java.util.Map;
@@ -46,18 +44,14 @@ public class AgentService {
     private final MemoryLifecycleMediator lifecycleMediator;
     private final MemoryProperties memoryProperties;
 
-    /** Field-injected publisher for agent_lifecycle trigger events; the
-     *  trigger module's bridge listens and forwards into ingest. */
-    @Autowired(required = false)
-    private ApplicationEventPublisher events;
-
-    /** 运行时 Agent 实例缓存（agentId -> BaseAgent） */
-    private final Map<Long, BaseAgent> agentInstances = new ConcurrentHashMap<>();
+    /** 运行时 Agent 实例缓存（agentId:runtimeMode -> BaseAgent） */
+    private final Map<String, BaseAgent> agentInstances = new ConcurrentHashMap<>();
 
     // ==================== CRUD ====================
 
     public List<AgentEntity> listAgents() {
         return agentMapper.selectList(new LambdaQueryWrapper<AgentEntity>()
+                .and(wrapper -> wrapper.isNull(AgentEntity::getDeleted).or().eq(AgentEntity::getDeleted, 0))
                 .orderByDesc(AgentEntity::getCreateTime));
     }
 
@@ -65,29 +59,30 @@ public class AgentService {
      * 按工作区列出 Agent
      */
     public List<AgentEntity> listAgentsByWorkspace(Long workspaceId) {
-        return listAgentsByWorkspace(workspaceId, null);
+        return agentMapper.selectList(new LambdaQueryWrapper<AgentEntity>()
+                .eq(AgentEntity::getWorkspaceId, workspaceId)
+                .and(wrapper -> wrapper.isNull(AgentEntity::getDeleted).or().eq(AgentEntity::getDeleted, 0))
+                .orderByDesc(AgentEntity::getCreateTime));
     }
 
-    /**
-     * 按工作区列出 Agent，可选过滤启用状态。
-     *
-     * @param enabled non-null restricts the result set to agents whose
-     *                {@code enabled} column matches the given value.
-     *                Pass {@code true} from chat selectors so disabled
-     *                agents disappear from the picker; the admin
-     *                management page passes {@code null} to keep
-     *                disabled rows visible for re-enabling.
-     */
-    public List<AgentEntity> listAgentsByWorkspace(Long workspaceId, Boolean enabled) {
-        LambdaQueryWrapper<AgentEntity> q = new LambdaQueryWrapper<AgentEntity>()
-                .eq(AgentEntity::getWorkspaceId, workspaceId);
-        if (enabled != null) {
-            q.eq(AgentEntity::getEnabled, enabled);
-        }
-        return agentMapper.selectList(q.orderByDesc(AgentEntity::getCreateTime));
+    public List<AgentEntity> listDeletedAgentsByWorkspace(Long workspaceId) {
+        return agentMapper.selectList(new LambdaQueryWrapper<AgentEntity>()
+                .eq(AgentEntity::getWorkspaceId, workspaceId)
+                .eq(AgentEntity::getDeleted, 1)
+                .orderByDesc(AgentEntity::getUpdateTime));
     }
 
     public AgentEntity getAgent(Long id) {
+        AgentEntity entity = agentMapper.selectOne(new LambdaQueryWrapper<AgentEntity>()
+                .eq(AgentEntity::getId, id)
+                .and(wrapper -> wrapper.isNull(AgentEntity::getDeleted).or().eq(AgentEntity::getDeleted, 0)));
+        if (entity == null) {
+            throw new MateClawException("err.agent.not_found", "Agent不存在: " + id);
+        }
+        return entity;
+    }
+
+    public AgentEntity getAgentIncludingDeleted(Long id) {
         AgentEntity entity = agentMapper.selectById(id);
         if (entity == null) {
             throw new MateClawException("err.agent.not_found", "Agent不存在: " + id);
@@ -97,110 +92,53 @@ public class AgentService {
 
     public AgentEntity createAgent(AgentEntity agent) {
         agent.setEnabled(true);
+        agent.setDeleted(0);
         if (agent.getAgentType() == null) {
             agent.setAgentType("react");
         }
-        requireUniqueName(agent, null);
         agentMapper.insert(agent);
-        publishLifecycle(agent, "spawned");
         return agent;
     }
 
     public AgentEntity updateAgent(AgentEntity agent) {
-        // Detect enabled-flag flip so the lifecycle event reflects the
-        // intent rather than every metadata edit. Reading the prior row
-        // is cheap and gives us a clean diff source.
-        AgentEntity prior = agentMapper.selectById(agent.getId());
-        // Only re-validate uniqueness when the name actually changes —
-        // a pure metadata edit (icon, prompt, ...) shouldn't pay the
-        // SELECT cost or risk a false positive against the row itself.
-        if (prior != null
-                && agent.getName() != null
-                && !agent.getName().equals(prior.getName())) {
-            // Workspace cannot be moved (Controller pins it to prior.workspaceId),
-            // so reuse it for the lookup even if the incoming DTO left it null.
-            if (agent.getWorkspaceId() == null) {
-                agent.setWorkspaceId(prior.getWorkspaceId());
-            }
-            requireUniqueName(agent, agent.getId());
-        }
         agentMapper.updateById(agent);
-        agentInstances.remove(agent.getId());
-        if (prior != null && prior.getEnabled() != null
-                && !prior.getEnabled().equals(agent.getEnabled())) {
-            publishLifecycle(agent,
-                    Boolean.TRUE.equals(agent.getEnabled()) ? "enabled" : "disabled");
-        }
+        invalidateAgentCache(agent.getId());
         return agent;
     }
 
-    /**
-     * Friendly business-code surface for the {@code (workspace_id, name)}
-     * unique index added in V102.
-     *
-     * <p>The wire shape is the project-wide R&lt;T&gt; envelope: HTTP status
-     * stays 200 (per the convention in {@code R.fail} and the axios
-     * interceptor in {@code mateclaw-ui/src/api/index.ts}); the 409 lives in
-     * the response body's {@code code} field so the front-end can branch
-     * without breaking on an axios error. Without this pre-check the
-     * duplicate save would surface as an opaque
-     * {@code DataIntegrityViolation} stack trace.
-     *
-     * @param excludeId when non-null, skip this row in the lookup so
-     *                  {@link #updateAgent} doesn't mistake the row for its
-     *                  own duplicate.
-     */
-    private void requireUniqueName(AgentEntity agent, Long excludeId) {
-        if (agent.getName() == null || agent.getName().isBlank()) {
-            throw new MateClawException("err.agent.name_required", 400, "Agent 名称不能为空");
-        }
-        Long workspaceId = agent.getWorkspaceId() == null ? 1L : agent.getWorkspaceId();
-        LambdaQueryWrapper<AgentEntity> q = new LambdaQueryWrapper<AgentEntity>()
-                .eq(AgentEntity::getWorkspaceId, workspaceId)
-                .eq(AgentEntity::getName, agent.getName());
-        if (excludeId != null) {
-            q.ne(AgentEntity::getId, excludeId);
-        }
-        Long count = agentMapper.selectCount(q);
-        if (count != null && count > 0) {
-            throw new MateClawException("err.agent.duplicate_name", 409,
-                    "工作区内已存在同名 Agent: " + agent.getName());
-        }
-    }
-
     public void deleteAgent(Long id) {
-        AgentEntity prior = agentMapper.selectById(id);
-        agentMapper.deleteById(id);
-        agentInstances.remove(id);
-        if (prior != null) publishLifecycle(prior, "terminated");
+        int changed = agentMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AgentEntity>()
+                .eq(AgentEntity::getId, id)
+            .and(wrapper -> wrapper.isNull(AgentEntity::getDeleted).or().eq(AgentEntity::getDeleted, 0))
+                .set(AgentEntity::getDeleted, 1));
+        if (changed <= 0) {
+            throw new MateClawException("err.agent.not_found", "Agent不存在: " + id);
+        }
+        invalidateAgentCache(id);
     }
 
-    /**
-     * Best-effort publish of an {@link AgentLifecycleEvent}. A publish
-     * failure must never roll back the agent CRUD that just succeeded —
-     * the agent_lifecycle trigger surface is observability, not the
-     * canonical record.
-     */
-    private void publishLifecycle(AgentEntity agent, String phase) {
-        if (events == null || agent == null) return;
-        try {
-            events.publishEvent(new AgentLifecycleEvent(
-                    agent.getWorkspaceId() == null ? 0L : agent.getWorkspaceId(),
-                    agent.getId() == null ? 0L : agent.getId(),
-                    agent.getName(),
-                    phase,
-                    System.currentTimeMillis()));
-        } catch (Exception e) {
-            log.warn("[AgentService] lifecycle publish failed for agent {} ({}): {}",
-                    agent.getId(), phase, e.getMessage());
+    public AgentEntity restoreAgent(Long id) {
+        AgentEntity existing = getAgentIncludingDeleted(id);
+        if (!Integer.valueOf(1).equals(existing.getDeleted())) {
+            return existing;
         }
+        int changed = agentMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AgentEntity>()
+                .eq(AgentEntity::getId, id)
+                .eq(AgentEntity::getDeleted, 1)
+                .set(AgentEntity::getDeleted, 0));
+        if (changed <= 0) {
+            throw new MateClawException("err.agent.not_found", "Agent不存在: " + id);
+        }
+        invalidateAgentCache(id);
+        return getAgent(id);
     }
 
     /**
      * 清除 Agent 运行时缓存（绑定变更后需调用，使下次对话重新构建 Agent）
      */
     public void invalidateAgentCache(Long agentId) {
-        agentInstances.remove(agentId);
+        String prefix = agentId + ":";
+        agentInstances.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     // ==================== 运行时入口 ====================
@@ -215,8 +153,19 @@ public class AgentService {
      * down to {@code @Tool} methods via Spring AI {@link org.springframework.ai.chat.model.ToolContext}.
      */
     public String chat(Long agentId, String message, String conversationId, ChatOrigin origin) {
+        return chat(agentId, message, conversationId, ConversationService.RUNTIME_MODE_DEFAULT, origin);
+    }
+
+    public String chat(Long agentId, String message, String conversationId,
+                       String runtimeMode, ChatOrigin origin) {
+        return chat(agentId, message, conversationId, runtimeMode, null, null, origin);
+    }
+
+    public String chat(Long agentId, String message, String conversationId,
+                       String runtimeMode, String runtimeProviderId,
+                       String runtimeModelName, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
-        BaseAgent agent = getOrBuildAgent(agentId);
+        BaseAgent agent = getOrBuildAgent(agentId, runtimeMode, runtimeProviderId, runtimeModelName);
         ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
         try {
             return withLifecycleSync(agentId, message, conversationId,
@@ -231,8 +180,13 @@ public class AgentService {
     }
 
     public Flux<String> chatStream(Long agentId, String message, String conversationId, ChatOrigin origin) {
+        return chatStream(agentId, message, conversationId, ConversationService.RUNTIME_MODE_DEFAULT, origin);
+    }
+
+    public Flux<String> chatStream(Long agentId, String message, String conversationId,
+                                   String runtimeMode, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
-        BaseAgent agent = getOrBuildAgent(agentId);
+        BaseAgent agent = getOrBuildAgent(agentId, runtimeMode);
         // Capture the origin into a request-scoped holder; cleared on Flux
         // termination so the next reactive subscriber doesn't inherit stale state.
         ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
@@ -267,8 +221,23 @@ public class AgentService {
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
                                                    String requesterId, String thinkingLevel,
                                                    ChatOrigin origin) {
+        return chatStructuredStream(agentId, message, conversationId, requesterId, thinkingLevel,
+            ConversationService.RUNTIME_MODE_DEFAULT, null, null, origin);
+        }
+
+        public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
+                               String requesterId, String thinkingLevel,
+                               String runtimeMode, ChatOrigin origin) {
+        return chatStructuredStream(agentId, message, conversationId, requesterId, thinkingLevel,
+                runtimeMode, null, null, origin);
+    }
+
+    public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
+                               String requesterId, String thinkingLevel,
+                               String runtimeMode, String runtimeProviderId,
+                               String runtimeModelName, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
-        BaseAgent agent = getOrBuildAgent(agentId);
+        BaseAgent agent = getOrBuildAgent(agentId, runtimeMode, runtimeProviderId, runtimeModelName);
 
         // 设置请求级思考深度（通过 ThreadLocal 传递到 StateGraph 执行）
         if (thinkingLevel != null && !thinkingLevel.isBlank()) {
@@ -313,8 +282,13 @@ public class AgentService {
     }
 
     public String execute(Long agentId, String goal, String conversationId, ChatOrigin origin) {
+        return execute(agentId, goal, conversationId, ConversationService.RUNTIME_MODE_DEFAULT, origin);
+    }
+
+    public String execute(Long agentId, String goal, String conversationId,
+                          String runtimeMode, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, goal);
-        BaseAgent agent = getOrBuildAgent(agentId);
+        BaseAgent agent = getOrBuildAgent(agentId, runtimeMode);
         ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
         try {
             return withLifecycleSync(agentId, goal, conversationId,
@@ -340,8 +314,22 @@ public class AgentService {
 
     public String chatWithReplay(Long agentId, String userMessage, String conversationId,
                                   String toolCallPayload, ChatOrigin origin) {
+        return chatWithReplay(agentId, userMessage, conversationId, toolCallPayload,
+                ConversationService.RUNTIME_MODE_DEFAULT, origin);
+    }
+
+    public String chatWithReplay(Long agentId, String userMessage, String conversationId,
+                                  String toolCallPayload, String runtimeMode, ChatOrigin origin) {
+        return chatWithReplay(agentId, userMessage, conversationId, toolCallPayload,
+            runtimeMode, null, null, origin);
+        }
+
+        public String chatWithReplay(Long agentId, String userMessage, String conversationId,
+                      String toolCallPayload, String runtimeMode,
+                      String runtimeProviderId, String runtimeModelName,
+                      ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
-        BaseAgent agent = getOrBuildAgent(agentId);
+        BaseAgent agent = getOrBuildAgent(agentId, runtimeMode, runtimeProviderId, runtimeModelName);
         ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
         try {
             return withLifecycleSync(agentId, userMessage, conversationId,
@@ -368,8 +356,23 @@ public class AgentService {
     public Flux<StreamDelta> chatWithReplayStream(Long agentId, String userMessage, String conversationId,
                                                    String toolCallPayload, String requesterId,
                                                    ChatOrigin origin) {
+        return chatWithReplayStream(agentId, userMessage, conversationId, toolCallPayload,
+            requesterId, ConversationService.RUNTIME_MODE_DEFAULT, origin);
+        }
+
+        public Flux<StreamDelta> chatWithReplayStream(Long agentId, String userMessage, String conversationId,
+                               String toolCallPayload, String requesterId,
+                               String runtimeMode, ChatOrigin origin) {
+        return chatWithReplayStream(agentId, userMessage, conversationId, toolCallPayload,
+            requesterId, runtimeMode, null, null, origin);
+        }
+
+        public Flux<StreamDelta> chatWithReplayStream(Long agentId, String userMessage, String conversationId,
+                       String toolCallPayload, String requesterId,
+                       String runtimeMode, String runtimeProviderId,
+                       String runtimeModelName, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
-        BaseAgent agent = getOrBuildAgent(agentId);
+        BaseAgent agent = getOrBuildAgent(agentId, runtimeMode, runtimeProviderId, runtimeModelName);
         ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
         return Flux.defer(() -> {
                     ChatOriginHolder.set(captured);
@@ -382,14 +385,21 @@ public class AgentService {
     }
 
     public AgentState getAgentState(Long agentId) {
-        BaseAgent agent = agentInstances.get(agentId);
+        BaseAgent agent = agentInstances.get(cacheKey(agentId, ConversationService.RUNTIME_MODE_DEFAULT));
+        if (agent == null) {
+            agent = agentInstances.entrySet().stream()
+                    .filter(entry -> entry.getKey().startsWith(agentId + ":"))
+                    .map(Map.Entry::getValue)
+                    .findFirst()
+                    .orElse(null);
+        }
         return agent != null ? agent.getState() : AgentState.IDLE;
     }
 
     // ==================== 缓存管理 ====================
 
     public void refreshAgent(Long agentId) {
-        agentInstances.remove(agentId);
+        invalidateAgentCache(agentId);
         log.info("Agent instance cache cleared: {}", agentId);
     }
 
@@ -473,13 +483,56 @@ public class AgentService {
     // ==================== 内部方法 ====================
 
     private BaseAgent getOrBuildAgent(Long agentId) {
-        return agentInstances.computeIfAbsent(agentId, id -> {
-            AgentEntity entity = getAgent(id);
+        return getOrBuildAgent(agentId, ConversationService.RUNTIME_MODE_DEFAULT);
+    }
+
+    private BaseAgent getOrBuildAgent(Long agentId, String runtimeMode) {
+        return getOrBuildAgent(agentId, runtimeMode, null, null);
+    }
+
+    private BaseAgent getOrBuildAgent(Long agentId, String runtimeMode,
+                                      String runtimeProviderId, String runtimeModelName) {
+        String cacheKey = cacheKey(agentId, runtimeMode);
+        if (hasRuntimeModelOverride(runtimeProviderId, runtimeModelName)) {
+            String overrideKey = cacheKey(agentId, runtimeMode, runtimeProviderId, runtimeModelName);
+            return agentInstances.computeIfAbsent(overrideKey, key -> {
+                AgentEntity entity = getAgent(agentId);
+                if (!Boolean.TRUE.equals(entity.getEnabled())) {
+                    throw new MateClawException("err.agent.disabled", "Agent 已禁用: " + entity.getName());
+                }
+                return agentGraphBuilder.build(entity, normalizeRuntimeMode(runtimeMode), runtimeProviderId, runtimeModelName);
+            });
+        }
+        return agentInstances.computeIfAbsent(cacheKey, key -> {
+            AgentEntity entity = getAgent(agentId);
             if (!Boolean.TRUE.equals(entity.getEnabled())) {
                 throw new MateClawException("err.agent.disabled", "Agent 已禁用: " + entity.getName());
             }
-            return agentGraphBuilder.build(entity);
+            return agentGraphBuilder.build(entity, normalizeRuntimeMode(runtimeMode));
         });
+    }
+
+    private String cacheKey(Long agentId, String runtimeMode) {
+        return agentId + ":" + normalizeRuntimeMode(runtimeMode);
+    }
+
+    private String cacheKey(Long agentId, String runtimeMode, String runtimeProviderId, String runtimeModelName) {
+        return cacheKey(agentId, runtimeMode) + ":" + runtimeProviderId.trim() + ":" + runtimeModelName.trim();
+    }
+
+    private boolean hasRuntimeModelOverride(String runtimeProviderId, String runtimeModelName) {
+        return runtimeProviderId != null && !runtimeProviderId.isBlank()
+                && runtimeModelName != null && !runtimeModelName.isBlank();
+    }
+
+    private String normalizeRuntimeMode(String runtimeMode) {
+        if (ConversationService.RUNTIME_MODE_PLAN.equalsIgnoreCase(runtimeMode)) {
+            return ConversationService.RUNTIME_MODE_PLAN;
+        }
+        if (ConversationService.RUNTIME_MODE_CODING.equalsIgnoreCase(runtimeMode)) {
+            return ConversationService.RUNTIME_MODE_CODING;
+        }
+        return ConversationService.RUNTIME_MODE_DEFAULT;
     }
 
     // ==================== StreamDelta ====================

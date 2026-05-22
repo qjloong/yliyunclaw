@@ -71,12 +71,14 @@ public class PlanSummaryNode implements NodeAction {
 
             userContent.append("执行结果：\n").append(String.join("\n", completedResults));
 
-            Prompt prompt = new Prompt(List.of(
+                Prompt prompt = new Prompt(List.of(
                     new SystemMessage("请根据以下各步骤的执行结果，给出一个简洁完整的总结回答。"
-                            + "直接回答用户的原始问题，不要罗列步骤。"
-                            + "如果对话上下文中包含用户的特殊要求（如风格、语言、格式等），请在总结中体现。"),
+                        + "直接回答用户的原始问题，不要罗列步骤。"
+                        + "如果对话上下文中包含用户的特殊要求（如风格、语言、格式等），请在总结中体现。"
+                        + "如果步骤结果显示审批等待、路径受限、材料不足或执行受阻，不要简单说无法完成；应给出最接近目标的继续方案，优先包括：批准权限后继续、改用已绑定知识库/会话材料、缩小到子目录/关键文件、或提出一个最小必要澄清。"
+                        + "如果已有部分材料足够支持一版结果，应先给出 best-effort 结果，再明确哪些部分可在补充材料后增强。"),
                     new UserMessage(userContent.toString())
-            ));
+                ));
 
             // 流式调用 LLM，实时推送 content/thinking
             NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCall(
@@ -108,7 +110,8 @@ public class PlanSummaryNode implements NodeAction {
      * 每条步骤结果截断至 300 字，避免把过长内容（包括错误体）直接暴露给用户。
      */
     private static String buildFallbackSummary(String goal, List<String> completedResults) {
-        StringBuilder sb = new StringBuilder("目标：").append(goal).append("\n\n执行摘要（LLM 汇总失败，以下为步骤原始结果）：\n");
+        StringBuilder sb = new StringBuilder("目标：").append(goal)
+            .append("\n\n当前无法完成自动汇总，但任务仍可继续推进。以下是已有执行结果，请优先基于这些结果选择最接近目标的下一步（如审批继续、改用知识库/会话材料、缩小目录范围或补充关键文件）：\n");
         for (String r : completedResults) {
             sb.append(truncate(r, 300)).append("\n");
         }

@@ -12,21 +12,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "mateclaw.skill.hub")
 public class SkillHubProperties {
 
-    /** Hub base URL. */
+    /** Hub 基础 URL */
     private String baseUrl = "https://clawhub.ai";
 
-    /** Search API path. */
+    /** 搜索 API 路径 */
     private String searchPath = "/api/v1/search";
 
-    /** Skill metadata API path prefix; full path is {@code <skillsPath>/<slug>}. */
-    private String skillsPath = "/api/v1/skills";
-
-    /** Bundle ZIP download API path; supports {@code ?slug=&version=}. */
-    private String downloadPath = "/api/v1/download";
-
-    /** HTTP request timeout (seconds). */
+    /** HTTP 请求超时（秒） */
     private int httpTimeout = 15;
 
-    /** HTTP retry count. */
+    /** HTTP 重试次数 */
     private int httpRetries = 3;
 }

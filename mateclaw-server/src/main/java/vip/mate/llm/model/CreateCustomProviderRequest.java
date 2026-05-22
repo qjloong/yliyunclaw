@@ -12,6 +12,5 @@ public class CreateCustomProviderRequest {
     private String apiKeyPrefix;
     private String protocol;
     private String chatModel;
-    private Boolean requireApiKey;
     private List<ModelInfoDTO> models;
 }

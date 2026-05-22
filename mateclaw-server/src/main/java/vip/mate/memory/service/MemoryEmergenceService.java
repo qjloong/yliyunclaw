@@ -13,12 +13,14 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import vip.mate.memory.event.DreamCompletedEvent;
 import vip.mate.memory.event.DreamFailedEvent;
-import vip.mate.memory.event.MemoryWriteEvent;
 import vip.mate.agent.AgentGraphBuilder;
 import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.memory.model.DreamReportEntity;
 import vip.mate.memory.model.MemoryRecallEntity;
 import vip.mate.memory.repository.DreamReportMapper;
@@ -51,6 +53,7 @@ public class MemoryEmergenceService {
     private final DreamReportMapper dreamReportMapper;
     private final vip.mate.memory.archive.MemoryArchiveService archiveService;
     private final ApplicationEventPublisher eventPublisher;
+    private final MemoryWriteProvenancePublisher provenancePublisher;
     private final vip.mate.memory.fact.contradiction.ContradictionDetector contradictionDetector;
 
     /**
@@ -160,7 +163,13 @@ public class MemoryEmergenceService {
             }
 
             workspaceFileService.saveFile(agentId, "MEMORY.md", newContent);
-            eventPublisher.publishEvent(new MemoryWriteEvent(agentId, "MEMORY.md", "consolidate", newContent));
+        provenancePublisher.publishRequired(agentId, null,
+            MemorySurfaceType.EMERGENCE_WRITER,
+            MemoryOperation.CONSOLIDATE,
+            "MEMORY.md",
+            "consolidate",
+            newContent,
+            java.util.Map.of("writer", "MemoryEmergenceService", "mode", mode.name()));
             String llmReason = root.path("reason").asText("");
             log.info("[Memory] Emergence completed for agent={}: {}", agentId, llmReason);
 
@@ -327,6 +336,13 @@ public class MemoryEmergenceService {
             }
 
             workspaceFileService.saveFile(agentId, "DREAMS.md", newContent);
+                provenancePublisher.publishRequired(agentId, null,
+                    MemorySurfaceType.EMERGENCE_WRITER,
+                    MemoryOperation.WRITE,
+                    "DREAMS.md",
+                    "append-dream-diary",
+                    newContent,
+                    Map.of("writer", "MemoryEmergenceService", "mode", mode.name()));
             log.info("[Memory] Dream diary appended for agent={}", agentId);
 
             // Archive old entries or fall back to 20KB truncation

@@ -94,9 +94,8 @@ public class ZhipuImageProvider implements ImageGenerationProvider {
             body.put("model", model);
             body.put("prompt", request.getPrompt());
 
-            // request.size already normalized by ImageGenerationService to one of supportedSizes.
-            String size = request.getSize();
-            if (size != null && !size.isBlank()) {
+            String size = aspectRatioToSize(request.getAspectRatio());
+            if (size != null) {
                 body.put("size", size);
             }
 
@@ -135,4 +134,14 @@ public class ZhipuImageProvider implements ImageGenerationProvider {
         }
     }
 
+    private String aspectRatioToSize(String aspectRatio) {
+        if (aspectRatio == null) return "1024x1024";
+        return switch (aspectRatio) {
+            case "16:9" -> "1344x768";
+            case "9:16" -> "768x1344";
+            case "4:3" -> "1152x864";
+            case "3:4" -> "864x1152";
+            default -> "1024x1024";
+        };
+    }
 }

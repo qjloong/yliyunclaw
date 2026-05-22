@@ -2,6 +2,27 @@
 -- at the DB level. MySQL doesn't allow DELETE with a subquery that scans the
 -- same table directly, so we use the LEFT JOIN + IS NULL pattern.
 --
+-- Legacy install guard: duplicate Flyway versions in older builds could mark
+-- V62 as consumed before cron-job workspace isolation ran. Ensure the column
+-- exists before dedup/index creation.
+SET @col_exists := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'mate_cron_job'
+                      AND COLUMN_NAME = 'workspace_id');
+SET @stmt := IF(@col_exists = 0,
+                'ALTER TABLE mate_cron_job ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1',
+                'SELECT 1');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @idx_ws_exists := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+                       WHERE TABLE_SCHEMA = DATABASE()
+                         AND TABLE_NAME = 'mate_cron_job'
+                         AND INDEX_NAME = 'idx_cron_job_workspace');
+SET @stmt := IF(@idx_ws_exists = 0,
+                'CREATE INDEX idx_cron_job_workspace ON mate_cron_job(workspace_id, deleted)',
+                'SELECT 1');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
 -- Step 1 — purge duplicate active rows, keeping the earliest id per
 -- (workspace_id, agent_id, name). Hard delete because this entity has no
 -- @TableLogic; deleteById() already performs physical deletes.

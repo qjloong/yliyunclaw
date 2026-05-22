@@ -5,8 +5,10 @@ import { wikiApi } from '@/api/index'
 export interface WikiKB {
   id: number
   name: string
+  externalKey?: string | null
   description: string
   agentId: number | null
+  creatorUserId?: number | null
   configContent: string
   sourceDirectory: string | null
   status: string
@@ -92,7 +94,7 @@ export const useWikiStore = defineStore('wiki', () => {
     await Promise.all([fetchRawMaterials(id), fetchPages(id)])
   }
 
-  async function createKB(data: { name: string; description?: string; agentId?: number }) {
+  async function createKB(data: { name: string; description?: string; agentId?: number; externalKey?: string | null }) {
     const res: any = await wikiApi.createKB(data)
     const kb = res.data || res
     knowledgeBases.value.unshift(kb)
@@ -107,14 +109,6 @@ export const useWikiStore = defineStore('wiki', () => {
       rawMaterials.value = []
       pages.value = []
     }
-  }
-
-  function backToLibrary() {
-    currentKB.value = null
-    currentPage.value = null
-    rawMaterials.value = []
-    pages.value = []
-    selectedRawId.value = null
   }
 
   async function fetchRawMaterials(kbId: number) {
@@ -191,7 +185,6 @@ export const useWikiStore = defineStore('wiki', () => {
     selectKB,
     createKB,
     deleteKB,
-    backToLibrary,
     fetchRawMaterials,
     fetchPages,
     filterPagesByRaw,

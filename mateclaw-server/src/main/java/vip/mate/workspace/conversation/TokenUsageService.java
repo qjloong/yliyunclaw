@@ -54,11 +54,16 @@ public class TokenUsageService {
                 .ge(MessageEntity::getCreateTime, startTime)
                 .le(MessageEntity::getCreateTime, endTime)
                 .and(w -> w
-                        .isNotNull(MessageEntity::getTokenUsage)
-                        .or()
                         .gt(MessageEntity::getPromptTokens, 0)
                         .or()
-                        .gt(MessageEntity::getCompletionTokens, 0))
+                        .gt(MessageEntity::getCompletionTokens, 0)
+                        .or()
+                        .and(w2 -> w2
+                                .isNotNull(MessageEntity::getRuntimeProvider)
+                                .ne(MessageEntity::getRuntimeProvider, "")
+                                .isNotNull(MessageEntity::getRuntimeModel)
+                                .ne(MessageEntity::getRuntimeModel, "")))
+                .notIn(MessageEntity::getStatus, "error")
                 .eq(MessageEntity::getDeleted, 0);
 
         if (modelName != null && !modelName.isBlank()) {
@@ -78,6 +83,16 @@ public class TokenUsageService {
         );
 
         List<MessageEntity> messages = messageMapper.selectList(wrapper);
+        log.info("[TokenUsageService] Query returned {} messages for range {} to {}",
+                messages.size(), startDate, endDate);
+        if (!messages.isEmpty()) {
+            for (MessageEntity msg : messages) {
+                log.info("[TokenUsageService] Message: id={}, role={}, promptTokens={}, completionTokens={}, " +
+                                "runtimeProvider='{}', runtimeModel='{}', status='{}', deleted={}",
+                        msg.getId(), msg.getRole(), msg.getPromptTokens(), msg.getCompletionTokens(),
+                        msg.getRuntimeProvider(), msg.getRuntimeModel(), msg.getStatus(), msg.getDeleted());
+            }
+        }
 
         return buildSummary(messages);
     }
@@ -104,6 +119,9 @@ public class TokenUsageService {
             // 模型维度
             String model = msg.getRuntimeModel() != null ? msg.getRuntimeModel() : "unknown";
             String provider = msg.getRuntimeProvider() != null ? msg.getRuntimeProvider() : "";
+            if (provider.isBlank() && ("unknown".equals(model) || model.isBlank())) {
+                provider = "unknown";
+            }
             String modelKey = provider + "|" + model;
             modelMap.computeIfAbsent(modelKey, k -> new long[]{0, 0, 0});
             long[] modelStats = modelMap.get(modelKey);

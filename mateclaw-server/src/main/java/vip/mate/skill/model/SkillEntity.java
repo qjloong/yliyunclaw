@@ -79,14 +79,9 @@ public class SkillEntity {
     @TableField(value = "skill_content", updateStrategy = FieldStrategy.ALWAYS)
     private String skillContent;
 
-    /**
-     * RFC-090 Phase 2 — full parsed SKILL.md frontmatter as JSON.
-     * Source of truth (§14.6); existing columns (skill_type/icon/version/
-     * author) become index projections written by
-     * {@code SkillPackageResolver} after each resolve.
-     */
-    @TableField(value = "manifest_json", updateStrategy = FieldStrategy.ALWAYS)
-    private String manifestJson;
+        /** RFC-090：结构化技能清单 JSON（与 skill_content 并存，用于 v3 元数据读取） */
+        @TableField(value = "manifest_json", updateStrategy = FieldStrategy.ALWAYS)
+        private String manifestJson;
 
     /** 是否启用 */
     private Boolean enabled;
@@ -97,17 +92,7 @@ public class SkillEntity {
     /** 标签（逗号分隔） */
     private String tags;
 
-    /**
-     * Owning workspace. The DB column has existed since the baseline schema
-     * (default = 1) but the field was missing from the entity, so MyBatis
-     * Plus silently ignored both reads and writes. Surfacing it here lets
-     * binding-time tenancy checks see the value; default behavior on insert
-     * remains "fall through to the column DEFAULT" because the field stays
-     * {@code null} in the no-arg create path.
-     */
-    private Long workspaceId;
-
-    /** 来源对话 ID（Agent 自治合成时记录） */
+    /** RFC-023：来源对话 ID（Agent 自治合成时记录） */
     private String sourceConversationId;
 
     /**

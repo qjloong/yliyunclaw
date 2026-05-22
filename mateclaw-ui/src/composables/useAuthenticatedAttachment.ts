@@ -72,32 +72,6 @@ export function useAuthenticatedAttachment() {
   }
 
   /**
-   * 批量加载所有音频附件的 blob URL（<audio :src> 同样不带 Authorization 头）
-   */
-  async function loadAllAudios(attachments: ChatAttachment[]) {
-    const audioAtts = attachments.filter(a => a.contentType?.startsWith('audio/'))
-    for (const att of audioAtts) {
-      const key = att.storedName || att.url
-      if (!att.previewUrl && att.url && !blobUrls.value[key]) {
-        await loadBlobUrl(att.url, key)
-      }
-    }
-  }
-
-  /**
-   * 批量加载所有 3D 模型附件的 blob URL（&lt;model-viewer src&gt; 不带 Authorization 头）
-   */
-  async function loadAllModels(attachments: ChatAttachment[]) {
-    const modelAtts = attachments.filter(a => a.contentType?.startsWith('model/'))
-    for (const att of modelAtts) {
-      const key = att.storedName || att.url
-      if (!att.previewUrl && att.url && !blobUrls.value[key]) {
-        await loadBlobUrl(att.url, key)
-      }
-    }
-  }
-
-  /**
    * 鉴权下载文件：fetch blob → 创建临时 <a download> → 触发点击
    */
   async function downloadFile(attachment: ChatAttachment) {
@@ -142,12 +116,19 @@ export function useAuthenticatedAttachment() {
     }
   }
 
+  function isProtectedAttachmentUrl(url?: string): boolean {
+    return typeof url === 'string' && url.startsWith('/api/v1/chat/files/')
+  }
+
   /**
    * 获取附件的显示 URL（优先 blob → previewUrl → 原始 url）
    */
   function getDisplayUrl(attachment: ChatAttachment): string {
     const key = attachment.storedName || attachment.url
-    return blobUrls.value[key] || attachment.previewUrl || attachment.url || ''
+    if (blobUrls.value[key]) return blobUrls.value[key]
+    if (attachment.previewUrl) return attachment.previewUrl
+    if (isProtectedAttachmentUrl(attachment.url)) return ''
+    return attachment.url || ''
   }
 
   /**
@@ -166,8 +147,6 @@ export function useAuthenticatedAttachment() {
     loadBlobUrl,
     loadAllImages,
     loadAllVideos,
-    loadAllAudios,
-    loadAllModels,
     downloadFile,
     openImage,
     getDisplayUrl,

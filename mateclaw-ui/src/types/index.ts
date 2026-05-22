@@ -43,20 +43,184 @@ export interface Agent {
   enabled: boolean
   icon?: string
   tags?: string
+  templateId?: string | null
+  templateVersion?: string | null
+  templateCategory?: string | null
+  templateDomain?: string | null
+  profileId?: string | null
+  capabilityPackId?: string | null
+  templateMetadataJson?: string | null
+  knowledgeBaseIdsJson?: string | null
+  homeSubtitle?: string | null
+  homeQuickStartsJson?: string | null
   createTime?: string
   updateTime?: string
+}
+
+export interface AgentTemplate {
+  id: string
+  name: string
+  nameZh?: string | null
+  version?: string | null
+  status?: string | null
+  category?: string | null
+  domain?: string | null
+  visibility?: string | null
+  ownerType?: string | null
+  description?: string | null
+  descriptionZh?: string | null
+  icon?: string | null
+  tags?: string | null
+  featured?: boolean | null
+  sortOrder?: number | null
+  systemPrompt?: string | null
+  runtime?: Record<string, any> | null
+  permissions?: Record<string, any> | null
+  defaultWorkspacePolicy?: Record<string, any> | null
+  agentProfile?: Record<string, any> | null
+  capabilityPack?: Record<string, any> | null
+  knowledgeBindings?: Record<string, any> | null
+  tools?: Record<string, any>[] | null
+  inputSchema?: Record<string, any> | null
+  outputFormats?: string[] | null
+  qualityGates?: Record<string, any> | null
+  mockAcceptanceTasks?: Record<string, any>[] | null
+  interactionHints?: Record<string, any> | null
+  starterPrompts?: Record<string, any>[] | null
+  mvpScope?: Record<string, any> | null
+  defaultKnowledgeBases?: AgentTemplateDefaultKnowledgeBase[] | null
+}
+
+export interface AgentTemplateDefaultKnowledgeBase {
+  name?: string | null
+  externalKey?: string | null
+  description?: string | null
+  required?: boolean | null
+  pages?: Record<string, any>[] | null
+}
+
+export interface TemplateKnowledgeBindingHealth {
+  externalKey?: string | null
+  name?: string | null
+  required: boolean
+  matched: boolean
+  knowledgeBaseId?: string | number | null
+  expectedPageCount: number
+  matchedPageCount: number
+}
+
+export interface TemplateCaseCheckHealth {
+  key: string
+  label: string
+  passed: boolean
+  detail?: string | null
+}
+
+export interface TemplateAppliedAgentHealth {
+  agentId?: string | number | null
+  name?: string | null
+  enabled: boolean
+  expectedWorkspaceFileCount: number
+  matchedWorkspaceFileCount: number
+  memoryFilePresent: boolean
+  acceptanceFilePresent: boolean
+  promptFilesConfigured: boolean
+}
+
+export interface TemplateHealth {
+  templateId: string
+  workspaceId?: string | number
+  ready: boolean
+  requiredCount: number
+  matchedRequiredCount: number
+  seededKnowledgeBaseCount: number
+  matchedSeededKnowledgeBaseCount: number
+  knowledgeBindings: TemplateKnowledgeBindingHealth[]
+  checkCount: number
+  passedCheckCount: number
+  caseChecks: TemplateCaseCheckHealth[]
+  applicationEvidenceReady: boolean
+  appliedAgentCount: number
+  appliedAgents: TemplateAppliedAgentHealth[]
 }
 
 // 兼容旧代码
 export type AgentEntity = Agent
 export type AgentState = 'IDLE' | 'RUNNING' | 'PAUSED' | 'ERROR' | 'COMPLETED'
+export type ConversationRuntimeMode = 'default' | 'plan' | 'coding'
+
+export interface ChatShortcutItem {
+  id: string
+  label: string
+  value: string
+  description?: string
+  icon?: string
+  aliases?: string[]
+  suffix?: string
+}
+
+export interface ProjectInsightSummary {
+  projectName?: string
+  rootPath: string
+  relativePath?: string
+  workingDirectoryPath?: string
+  workingDirectoryRelativePath?: string
+  locatorType?: string
+  locatorMarkers?: string[]
+  stackHints: string[]
+  keyFiles: string[]
+  moduleHints: string[]
+  materialIndexHints?: string[]
+  commandHints: string[]
+  packageManager?: string
+  buildSystem?: string
+  gitRootPath?: string
+  gitRootRelativePath?: string
+  changedFileCount?: number
+  changedFiles?: ProjectChangeRecord[]
+  lastScannedAt?: string
+}
+
+export interface ContextRouterMemoryFileSummary {
+  filename: string
+  enabled: boolean
+  fileSize?: number
+}
+
+export interface ContextRouterKnowledgeBaseSummary {
+  id?: string | number
+  name: string
+  externalKey?: string
+  templateMatched: boolean
+}
+
+export interface ContextRouterSessionSummary {
+  conversationId: string
+  title?: string
+  messageCount?: number
+  lastActiveTime?: string
+}
+
+export interface ContextRouterSummary {
+  rootPath: string
+  relativePath?: string
+  activeSources: string[]
+  templateKnowledgeKeys: string[]
+  missingKnowledgeBindings: string[]
+  sessionTemporaryEnabled: boolean
+  projectDerivedEnabled: boolean
+  memoryFiles: ContextRouterMemoryFileSummary[]
+  knowledgeBases: ContextRouterKnowledgeBaseSummary[]
+  recentSessions: ContextRouterSessionSummary[]
+  generatedAt?: string
+}
 
 // ==================== 会话与消息 ====================
 export interface Conversation {
   id?: string | number
   conversationId: string
   title: string
-  agentId: string | number
+  agentId?: string | number | null
   agentName?: string
   agentIcon?: string
   username?: string
@@ -65,6 +229,15 @@ export interface Conversation {
   status?: 'active' | 'closed'
   streamStatus?: 'idle' | 'running'
   source?: string
+  workingDirectory?: string
+  runtimeMode?: ConversationRuntimeMode
+  runtimeProviderId?: string
+  runtimeModelName?: string
+  workspaceName?: string
+  workspaceBasePath?: string
+  effectiveProjectPath?: string
+  projectRelativePath?: string
+  usingWorkspaceRoot?: boolean
   lastActiveTime?: string
   updateTime?: string
   createTime?: string
@@ -83,9 +256,6 @@ export interface Message {
   // Token 统计
   promptTokens?: number
   completionTokens?: number
-  // Runtime model attribution (assistant messages): the model that actually produced this reply
-  runtimeModel?: string
-  runtimeProvider?: string
   // 前端临时字段
   streaming?: boolean  // 内部动画控制，UI 渲染以 status 为准
   attachments?: ChatAttachment[]
@@ -102,11 +272,14 @@ export interface ChatAttachment {
   storedName: string
   path: string
   contentType?: string
+  contextStrategy?: string
+  contextHint?: string
   /** 本地预览 URL（ObjectURL），图片附件用于避免 JWT 认证问题 */
   previewUrl?: string
 }
 
 export interface ToolCallMeta {
+  toolCallId?: string
   name: string
   arguments?: string
   status: 'running' | 'completed' | 'awaiting_approval'
@@ -115,11 +288,121 @@ export interface ToolCallMeta {
   startTime?: number
 }
 
+export type FileChangeType = 'added' | 'modified'
+export type ProjectChangeType = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+
+export interface FileChangeRecord {
+  path: string
+  changeType: FileChangeType
+  toolName: string
+  summary?: string
+  bytesWritten?: number
+  replacements?: number
+  timestamp?: number
+}
+
+export interface ProjectChangeRecord {
+  path: string
+  changeType: ProjectChangeType
+}
+
+export interface CheckpointCapability {
+  supported: boolean
+  reason?: string
+}
+
+export interface ReviewValidationRecord {
+  command: string
+  toolName: string
+  status: 'passed' | 'failed' | 'running' | 'pending' | 'approved' | 'denied' | 'completed'
+  result?: string
+  exitCode?: number
+  timestamp?: number
+}
+
+export interface ReviewSummary {
+  totalFiles: number
+  addedCount: number
+  modifiedCount: number
+  files: FileChangeRecord[]
+  validations?: ReviewValidationRecord[]
+  projectChangedFiles?: ProjectChangeRecord[]
+  checkpointCapability?: CheckpointCapability
+}
+
+export type HarnessRunStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED'
+
+export interface HarnessStep {
+  id: string
+  name: string
+  phase: string
+  status: string
+  startedAt?: string
+  completedAt?: string
+  metadata?: Record<string, any>
+}
+
+export interface HarnessToolInvocation {
+  id: string
+  stepId?: string
+  toolName: string
+  status: string
+  riskLevel?: string
+  startedAt?: string
+  completedAt?: string
+  metadata?: Record<string, any>
+}
+
+export interface HarnessApproval {
+  id: string
+  toolInvocationId?: string
+  status: string
+  scope?: string
+  requestedBy?: string
+  resolvedBy?: string
+  requestedAt?: string
+  resolvedAt?: string
+  metadata?: Record<string, any>
+}
+
+export interface HarnessExecutionSummary {
+  promptTokens?: number
+  completionTokens?: number
+  runtimeModelName?: string
+  runtimeProviderId?: string
+  finishReason?: string
+  errorMessage?: string
+  finalAnswerPreview?: string
+}
+
+export interface HarnessRun {
+  id: string
+  conversationId: string
+  agentId?: string
+  agentName?: string
+  mode?: string
+  status?: HarnessRunStatus
+  startedAt?: string
+  completedAt?: string
+  steps?: HarnessStep[]
+  toolInvocations?: HarnessToolInvocation[]
+  approvals?: HarnessApproval[]
+  summary?: HarnessExecutionSummary
+  metadata?: Record<string, any>
+}
+
 export interface PlanMeta {
   planId: string | number
   steps: string[]
   currentStep: number
   stepResults?: { result: string; status: string }[]
+}
+
+export type ApprovalDecisionScope = 'once' | 'conversation' | 'project'
+
+export interface ApprovalDecisionPayload {
+  pendingId: string
+  scope?: ApprovalDecisionScope
 }
 
 export interface PendingApprovalMeta {
@@ -165,18 +448,6 @@ export interface MessageSegment {
   plan?: PlanMeta
   /** 时间戳 */
   timestamp?: number
-  /**
-   * Iteration index this segment belongs to (0-based). Set by iteration_start —
-   * lets MessageBubble group thinking/tool/content segments per iteration so
-   * the next iteration's output never appends onto the previous one's tail.
-   */
-  iterationIndex?: number
-  /** Subagent / delegation child ID, when this segment was emitted under a child scope. */
-  subagentId?: string
-  /** Backend signaled the running content was truncated to break a repetition pattern. */
-  repetitionWarning?: 'char_pattern' | 'sentence_repetition'
-  /** Number of trailing characters dropped when the repetition guard fired. */
-  truncatedChars?: number
 }
 
 export interface MessageMetadata {
@@ -184,6 +455,7 @@ export interface MessageMetadata {
   toolCalls?: ToolCallMeta[]
   plan?: PlanMeta
   pendingApproval?: PendingApprovalMeta
+  reviewSummary?: ReviewSummary
   /** 当前正在执行的工具名称 */
   runningToolName?: string
   /** 服务端警告列表 */
@@ -200,40 +472,10 @@ export interface MessageMetadata {
     durationMs: number
     timestamp: number
   }>
-  /**
-   * Multimodal sidecar routing snapshot for this turn — written by the backend
-   * when the user uploaded an image / video the primary model couldn't handle
-   * natively. The chat bubble renders a "primary 🔀 sidecar" badge from this.
-   */
-  routing?: RoutingMeta
-}
-
-export interface RoutingMeta {
-  /** "none" | "sidecar" | "native" — lowercased on the wire to keep the JSON small. */
-  strategy: 'none' | 'sidecar' | 'native'
-  sidecarModelId?: number
-  sidecarModel?: string
-  sidecarProvider?: string
-  /** Modality names like ["VISION"] / ["VIDEO"] / ... — uppercase to match the backend enum. */
-  requiredModalities?: string[]
-  primaryMissing?: string[]
-  skipped?: Array<{ type: string; fileName?: string; reason: string }>
-}
-
-export interface AgentCapabilities {
-  agentId: number
-  modelName: string
-  providerId: string
-  /** Modality enum values: TEXT / VISION / VIDEO / AUDIO. */
-  modalities: string[]
-  defaultVisionModelId?: number | null
-  defaultVisionModelLabel?: string | null
-  defaultVideoModelId?: number | null
-  defaultVideoModelLabel?: string | null
 }
 
 export interface MessageContentPart {
-  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'model3d' | 'tool_call' | 'parse_error'
+  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'tool_call' | 'parse_error'
   text?: string
   fileUrl?: string
   fileName?: string
@@ -241,6 +483,8 @@ export interface MessageContentPart {
   contentType?: string
   fileSize?: number
   path?: string
+  contextStrategy?: string
+  contextHint?: string
   /** 前端流式渲染用：已显示的字符数。undefined 表示全部显示。 */
   visibleLength?: number
 }
@@ -278,8 +522,6 @@ export interface Skill {
 
 /** 运行时解析状态（来自 /runtime/status） */
 export interface SkillRuntimeStatus {
-  /** RFC-090 Phase 2 — entity primary key */
-  id?: number
   name: string
   description?: string
   source: string  // "directory" | "database"
@@ -303,79 +545,6 @@ export interface SkillRuntimeStatus {
   dependencySummary?: string | null
   // Computed label
   runtimeStatusLabel?: string
-  // RFC-090 §14.1 — features matrix + manifest SoT
-  manifest?: SkillManifest | null
-  /** Map<featureId, "READY" | "SETUP_NEEDED" | "UNSUPPORTED"> */
-  featureStatuses?: Record<string, string>
-  /** featureIds whose status is READY */
-  activeFeatures?: string[]
-  /** Tools advertised to the LLM after feature filtering */
-  effectiveAllowedTools?: string[]
-  /** Human-readable tool names for display after feature filtering */
-  effectiveAllowedToolsDisplay?: string[]
-}
-
-/** RFC-090 §14.6 — typed view onto manifest_json */
-export interface SkillManifest {
-  id?: string
-  name?: string
-  description?: string
-  icon?: string
-  version?: string
-  author?: string
-  /** prompt | code | mcp | acp | knowledge */
-  type?: string
-  category?: string
-  allowedTools?: string[]
-  requires?: SkillManifestRequirement[]
-  platforms?: string[]
-  features?: SkillManifestFeature[]
-  settings?: SkillManifestSetting[]
-  requiresModel?: string[]
-  dashboardMetrics?: SkillManifestDashboardMetric[]
-  selfEvolution?: { lessonsEnabled?: boolean; lessonsMaxEntries?: number; memoryWritesAllowed?: boolean }
-  knowledge?: {
-    bindKb?: string
-    retrieval?: string
-    topK?: number
-    citation?: string
-    rerank?: boolean
-    boundKbId?: number | null
-  } | null
-  extras?: Record<string, any>
-}
-
-export interface SkillManifestRequirement {
-  key: string
-  type?: string
-  check?: string
-  optional?: boolean
-  description?: string
-  install?: Record<string, string>
-}
-
-export interface SkillManifestFeature {
-  id: string
-  label?: string
-  requires?: string[]
-  platforms?: string[]
-  tools?: string[]
-  fallbackMessage?: string
-  unsupportedMessage?: string
-}
-
-export interface SkillManifestSetting {
-  key: string
-  label?: string
-  type?: string
-  defaultValue?: any
-  options?: Record<string, any>[]
-}
-
-export interface SkillManifestDashboardMetric {
-  label?: string
-  memoryKey?: string
-  format?: string
 }
 
 /** 安全扫描发现 */
@@ -456,8 +625,6 @@ export interface Channel {
   agentId?: string | number
   botPrefix?: string
   configJson?: string
-  /** Identity snapshot from the most recent successful credential verify
-   *  (RFC-084). JSON-encoded {accountName, accountId, team, region, ...}. */
   identityJson?: string
   enabled: boolean
   description?: string
@@ -545,9 +712,9 @@ export const CHANNEL_FIELD_DEFS: Record<string, ChannelFieldDef[]> = {
   ],
   webchat: [
     { key: 'api_key', label: 'API Key', placeholder: '保存后由平台自动生成', required: true, sensitive: true, readOnly: true, type: 'password', tooltip: '由平台自动生成的嵌入式 WebChat 渠道密钥，创建后可复制使用' },
-    { key: 'title', label: '标题', placeholder: 'MateClaw', type: 'text', defaultValue: 'MateClaw', tooltip: '聊天面板顶部显示的标题' },
+    { key: 'title', label: '标题', placeholder: 'Meta Y', type: 'text', defaultValue: 'Meta Y', tooltip: '聊天面板顶部显示的标题' },
     { key: 'placeholder', label: '输入框占位文案', placeholder: 'Type a message...', type: 'text', defaultValue: 'Type a message...', tooltip: '输入框默认提示文案' },
-    { key: 'primary_color', label: '主题色', placeholder: '#409eff', type: 'text', defaultValue: '#409eff', tooltip: '聊天气泡与头部使用的主色，建议使用十六进制颜色值' },
+    { key: 'primary_color', label: '主题色', placeholder: '#3b88ff', type: 'text', defaultValue: '#3b88ff', tooltip: '聊天气泡与头部使用的主色，建议使用十六进制颜色值' },
     { key: 'welcome_message', label: '欢迎语', placeholder: '你好，我可以帮你处理什么？', type: 'text', tooltip: '前端 SDK 初始化后可读取并展示的欢迎语（当前主要供配置接口返回）' },
     { key: 'allowed_origins', label: '允许嵌入域名', placeholder: 'https://example.com, https://app.example.com', type: 'text', tooltip: '预留给嵌入来源白名单校验的域名列表，多个域名用逗号分隔' },
   ],
@@ -731,6 +898,8 @@ export interface ProviderModelInfo {
    * toggle should gate on.
    */
   supportsThinking?: boolean
+  /** Whether the model natively supports image input. */
+  supportsVision?: boolean
 }
 
 /**
@@ -777,24 +946,6 @@ export interface ProviderInfo {
   cooldownRemainingMs?: number
   /** RFC-074: whether the user has explicitly opted this provider into the dropdown. */
   enabled?: boolean
-
-  // Issue #81: derived liveness fields powering the chat-console popup state machine.
-  /** CONFIGURED / MISSING / NOT_REQUIRED / OAUTH_PENDING. */
-  authStatus?: string
-  /** null = base url N/A; true/false = applicable and complete/incomplete. */
-  baseUrlComplete?: boolean | null
-  /** Comma-joined missing field names ("apiKey", "baseUrl"); empty when nothing missing. */
-  missingFields?: string
-  /**
-   * Machine-readable next-step key driving the popup primary button.
-   * fill_base_url / fill_api_key / start_oauth / configure_required_fields /
-   * test_connection / pull_model / wait_cooldown / reprobe / none.
-   */
-  suggestedAction?: string
-  /** i18n key for the actionable hint, e.g. "provider.hint.llamacppBaseUrlExample". */
-  suggestedActionHintKey?: string | null
-  /** Template params for vue-i18n t(key, args). */
-  suggestedActionHintArgs?: Record<string, unknown>
 }
 
 /**
@@ -854,6 +1005,7 @@ export interface GuardFinding {
   paramName?: string
   matchedPattern?: string
   snippet?: string
+  metadata?: Record<string, any>
 }
 
 export interface GuardRule {
@@ -919,14 +1071,21 @@ export interface CronJob {
   timezone: string
   agentId: string | number
   agentName?: string
-  taskType: 'text' | 'agent' | 'reminder'
+  taskType: 'text' | 'agent'
   triggerMessage?: string
   requestBody?: string
+  workingDirectory?: string
   enabled: boolean
   nextRunTime?: string
   lastRunTime?: string
   createTime?: string
   updateTime?: string
+  workspaceName?: string
+  workspaceBasePath?: string
+  effectiveProjectPath?: string
+  projectRelativePath?: string
+  usingWorkspaceRoot?: boolean
+  projectPermissionMode?: 'limited' | 'full'
   // RFC-063r §2.9 / §2.14: channel binding + most-recent delivery snapshot.
   // channelId / deliveryConfig: round-trippable on create/update.
   // lastDeliveryStatus / lastDeliveryError: read-only, populated by
@@ -936,4 +1095,24 @@ export interface CronJob {
   deliveryConfig?: { targetId?: string | null; threadId?: string | null; accountId?: string | null } | null
   lastDeliveryStatus?: 'NONE' | 'PENDING' | 'DELIVERED' | 'NOT_DELIVERED'
   lastDeliveryError?: string | null
+  lastExecutionSummaryStatus?: 'NONE' | 'RUNNING' | 'AWAITING_APPROVAL' | 'PERMISSION_DENIED' | 'EXECUTION_FAILED' | 'EXECUTION_SUCCEEDED'
+  lastExecutionSummaryText?: string | null
+}
+
+export interface CronJobRun {
+  id: string | number
+  cronJobId: string | number
+  conversationId?: string
+  status: string
+  triggerType?: string
+  startedAt?: string
+  finishedAt?: string
+  errorMessage?: string | null
+  tokenUsage?: number | null
+  deliveryStatus?: string | null
+  deliveryTarget?: string | null
+  deliveryError?: string | null
+  executionSummaryStatus?: 'NONE' | 'RUNNING' | 'AWAITING_APPROVAL' | 'PERMISSION_DENIED' | 'EXECUTION_FAILED' | 'EXECUTION_SUCCEEDED'
+  executionSummaryText?: string | null
+  createTime?: string
 }

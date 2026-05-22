@@ -15,7 +15,10 @@ import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
 import vip.mate.memory.event.MemoryWriteEvent;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 
@@ -44,6 +47,7 @@ public class SoulSummarizerService {
     private final ModelConfigService modelConfigService;
     private final AgentGraphBuilder agentGraphBuilder;
     private final MemoryProperties properties;
+    private final MemoryWriteProvenancePublisher provenancePublisher;
 
     /** Per-agent write counter since last SOUL update */
     private final Map<Long, AtomicInteger> writeCounters = new ConcurrentHashMap<>();
@@ -53,6 +57,11 @@ public class SoulSummarizerService {
     public void onMemoryWrite(MemoryWriteEvent event) {
         int interval = properties.getSoulUpdateInterval();
         if (interval <= 0) return;
+        if (event == null || event.agentId() == null) return;
+        if ("SOUL.md".equalsIgnoreCase(event.target())) {
+            log.debug("[SOUL] Ignoring SOUL.md self-write event for agent={}", event.agentId());
+            return;
+        }
 
         Long agentId = event.agentId();
         AtomicInteger counter = writeCounters.computeIfAbsent(agentId, k -> new AtomicInteger(0));
@@ -113,8 +122,16 @@ public class SoulSummarizerService {
         String newSoul = response.getResult().getOutput().getText();
 
         if (newSoul != null && !newSoul.isBlank() && newSoul.length() > 50) {
-            workspaceFileService.saveFile(agentId, "SOUL.md", newSoul.trim());
-            log.info("[SOUL] Updated SOUL.md for agent={} ({} chars)", agentId, newSoul.length());
+            String normalizedSoul = newSoul.trim();
+            workspaceFileService.saveFile(agentId, "SOUL.md", normalizedSoul);
+            provenancePublisher.publishRequired(agentId, null,
+                    MemorySurfaceType.DERIVED_SUMMARY_WRITER,
+                    MemoryOperation.WRITE,
+                    "SOUL.md",
+                    "refresh-soul",
+                    normalizedSoul,
+                    Map.of("writer", "SoulSummarizerService"));
+            log.info("[SOUL] Updated SOUL.md for agent={} ({} chars)", agentId, normalizedSoul.length());
         } else {
             log.debug("[SOUL] LLM returned empty/short response, skipping SOUL update");
         }

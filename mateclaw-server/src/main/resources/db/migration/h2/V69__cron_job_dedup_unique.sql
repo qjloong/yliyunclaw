@@ -1,20 +1,14 @@
 -- Issue #50: deduplicate accumulated cron jobs and prevent future duplicates
 -- at the DB level.
 --
--- Step 1 — purge duplicate active rows, keeping the earliest id (= earliest
--- creation, since IDs are snowflake-monotonic). Hard delete because this
--- entity has no @TableLogic; deleteById() already performs physical deletes.
-DELETE FROM mate_cron_job
-WHERE id NOT IN (
-    SELECT keep_id FROM (
-        SELECT MIN(id) AS keep_id
-        FROM mate_cron_job
-        GROUP BY workspace_id, agent_id, name
-    )
-);
+-- Legacy install guard: some older builds shipped duplicate Flyway versions
+-- (V62/V63), so the original cron-job workspace/working-directory migrations
+-- may have been skipped on those databases even though newer code expects the
+-- columns. Ensure the key column exists.
+ALTER TABLE mate_cron_job ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_cron_job_workspace ON mate_cron_job(workspace_id, deleted);
 
--- Step 2 — enforce uniqueness so concurrent LLM-driven creates can't
--- re-introduce duplicates. The service layer also dedups in-process; this
--- index is the racy-write safety net.
-CREATE UNIQUE INDEX IF NOT EXISTS uk_cron_job_workspace_agent_name
-    ON mate_cron_job(workspace_id, agent_id, name);
+-- Legacy H2 upgrades can still expose stale metadata/statement planning in the
+-- same migration after ADD COLUMN IF NOT EXISTS. Final dedup + unique-index
+-- enforcement is intentionally deferred to a later backfill migration once the
+-- schema is fully stabilized for this startup path.

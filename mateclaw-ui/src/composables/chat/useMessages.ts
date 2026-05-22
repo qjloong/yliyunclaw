@@ -3,7 +3,7 @@
  * 参考 @agentscope-ai/chat 的消息管理实现
  */
 import { ref, computed } from 'vue'
-import type { Message, MessageContentPart } from '@/types'
+import type { ChatAttachment, Message, MessageContentPart } from '@/types'
 
 export type MessageStatus = 'generating' | 'completed' | 'stopped' | 'failed' | 'awaiting_approval' | 'interrupted'
 
@@ -57,6 +57,24 @@ export interface UseMessagesReturn {
 
 // 生成唯一 ID
 const generateId = () => `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+
+function deriveAttachments(parts: MessageContentPart[] | undefined): ChatAttachment[] | undefined {
+  if (!parts?.length) return undefined
+  const attachments = parts
+    .filter(part => (part.type === 'image' || part.type === 'video' || part.type === 'file') && part.fileUrl)
+    .map((part) => ({
+      name: part.fileName || 'unknown',
+      size: typeof part.fileSize === 'number' ? part.fileSize : Number(part.fileSize) || 0,
+      url: part.fileUrl || '',
+      storedName: part.storedName || '',
+      path: part.path || '',
+      contentType: part.contentType,
+      contextStrategy: part.contextStrategy,
+      contextHint: part.contextHint,
+    }))
+
+  return attachments.length ? attachments : undefined
+}
 
 export function useMessages(options: UseMessagesOptions = {}): UseMessagesReturn {
   const { initialMessages = [], onUpdate, onComplete } = options
@@ -201,6 +219,7 @@ export function useMessages(options: UseMessagesOptions = {}): UseMessagesReturn
       conversationId: conversationId || '',
       content,
       contentParts: parts,
+      attachments: deriveAttachments(parts),
       status: 'completed',
     })
   }

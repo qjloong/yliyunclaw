@@ -8,6 +8,8 @@ import vip.mate.hook.action.HookResult;
 import vip.mate.hook.event.MateHookEvent;
 import vip.mate.hook.model.HookRunEntity;
 import vip.mate.hook.repository.HookRunMapper;
+import vip.mate.lifecycle.contract.LifecycleEventEnvelope;
+import vip.mate.lifecycle.normalizer.LifecycleEventNormalizer;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -45,6 +47,8 @@ public class HookDispatcher {
     private final HookRegistry registry;
     private final HookRunMapper runMapper;
     private final HookProperties props;
+    /** WP-5: event normalizer — maps hook events to LifecycleEventEnvelope for unified audit/diagnostics. */
+    private final LifecycleEventNormalizer eventNormalizer;
 
     private final HookRateLimiter rateLimiter;
     private final Semaphore concurrencySemaphore;
@@ -52,10 +56,12 @@ public class HookDispatcher {
     private final ExecutorService auditVt;
     private final AtomicLong dispatchCount = new AtomicLong();
 
-    public HookDispatcher(HookRegistry registry, HookRunMapper runMapper, HookProperties props) {
+    public HookDispatcher(HookRegistry registry, HookRunMapper runMapper, HookProperties props,
+                          LifecycleEventNormalizer eventNormalizer) {
         this.registry = registry;
         this.runMapper = runMapper;
         this.props = props;
+        this.eventNormalizer = eventNormalizer;
         this.rateLimiter = new HookRateLimiter(props.getGlobalRateLimit());
         this.concurrencySemaphore = new Semaphore(props.getGlobalConcurrency());
         this.vt = Executors.newThreadPerTaskExecutor(
@@ -115,10 +121,17 @@ public class HookDispatcher {
 
     private HookResult executeOne(HookMatch m, MateHookEvent event) {
         long start = System.nanoTime();
+
+        // WP-5: normalize the hook event into LifecycleEventEnvelope and attach to context.
+        LifecycleEventEnvelope normalizedEnvelope = normalizeHookEvent(event);
+        java.util.Map<String, Object> ctxData = new java.util.HashMap<>();
+        ctxData.put("event.type", event.type());
+        ctxData.put("lifecycleEnvelope", normalizedEnvelope);
+
         var ctx = new HookContext(
                 m.entity().getId(),
                 m.entity().getName(),
-                Map.of("event.type", event.type()));
+                ctxData);
         HookResult result;
         try {
             result = m.action().execute(event, ctx);
@@ -160,6 +173,35 @@ public class HookDispatcher {
     public long dispatchCount() { return dispatchCount.get(); }
 
     /** 显式关闭（测试或优雅停机时）。 */
+
+    /**
+     * WP-5: split event type (e.g., "agent:start" → family="agent", type="start")
+     * and normalize via {@link LifecycleEventNormalizer}.
+     * Falls back to a minimal envelope when normalizer is unavailable.
+     */
+    private LifecycleEventEnvelope normalizeHookEvent(MateHookEvent event) {
+        if (eventNormalizer == null || event.type() == null) {
+            return LifecycleEventEnvelope.builder()
+                    .eventId(java.util.UUID.randomUUID().toString())
+                    .sourceSystem("hook")
+                    .payload(event.payload() != null ? event.payload() : Map.of())
+                    .build();
+        }
+        String type = event.type();
+        int colon = type.indexOf(':');
+        String family = colon > 0 ? type.substring(0, colon) : type;
+        String hookType = colon > 0 ? type.substring(colon + 1) : "";
+        try {
+            return eventNormalizer.normalizeHookEvent(family, hookType, event.payload());
+        } catch (Exception e) {
+            log.debug("[WP-5] Hook event normalization failed for {}: {}", type, e.getMessage());
+            return LifecycleEventEnvelope.builder()
+                    .eventId(java.util.UUID.randomUUID().toString())
+                    .sourceSystem("hook")
+                    .payload(event.payload() != null ? event.payload() : Map.of())
+                    .build();
+        }
+    }
     public void shutdown(long timeoutSec) {
         vt.shutdown();
         auditVt.shutdown();

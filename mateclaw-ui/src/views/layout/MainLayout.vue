@@ -10,11 +10,11 @@
       <!-- Logo -->
       <div class="sidebar-logo">
         <div class="logo-icon">
-          <img src="/logo/mateclaw_logo_s.png" alt="MateClaw" class="logo-img" />
+          <img src="/logo/mateclaw_logo_s.png" alt="Meta Y" class="logo-img" />
         </div>
         <transition name="fade">
           <div v-if="!effectiveCollapsed" class="logo-text">
-            <span class="logo-name">Mate<span class="logo-name-highlight">Claw</span></span>
+            <span class="logo-name">Meta <span class="logo-name-highlight">Y</span></span>
             <span class="logo-version">v{{ appVersion }}</span>
           </div>
         </transition>
@@ -38,35 +38,42 @@
 
       <!-- 导航菜单 -->
       <nav class="sidebar-nav">
-        <template v-for="group in navGroups" :key="group.key">
-          <div class="nav-group">
-            <div v-if="!effectiveCollapsed" class="nav-group-title">{{ group.label }}</div>
-            <router-link
-              v-for="item in group.items"
-              :key="item.path"
-              :to="item.path"
-              class="nav-item"
-              :class="{ active: isNavItemActive(item), 'has-attention': item.path === '/backstage' && backstageAlertActive }"
-              :title="effectiveCollapsed ? (item.tooltip || item.label) : (item.tooltip || '')"
-              @click="onNavClick"
-            >
-              <span class="nav-icon" v-html="item.icon"></span>
-              <span v-if="!effectiveCollapsed" class="nav-label">{{ item.label }}</span>
-              <span
-                v-if="item.path === '/backstage' && backstageAlertActive"
-                class="nav-attention-dot"
-                :title="t('backstage.attention')"
-              ></span>
-            </router-link>
-          </div>
-        </template>
+        <div v-for="group in sidebarNavGroups" :key="group.key" class="nav-group">
+          <div v-if="!effectiveCollapsed" class="nav-group-title">{{ group.label }}</div>
+          <router-link
+            v-for="item in group.items"
+            :key="item.path"
+            :to="item.path"
+            class="nav-item"
+            :class="{ active: isNavItemActive(item) }"
+            :title="effectiveCollapsed ? item.label : ''"
+            @click="onNavClick"
+          >
+            <span class="nav-icon" v-html="item.icon"></span>
+            <span v-if="!effectiveCollapsed" class="nav-label">{{ item.label }}</span>
+          </router-link>
+        </div>
       </nav>
 
       <!-- 底部 -->
       <div class="sidebar-footer">
         <template v-if="!sidebarCollapsed || isMobile">
+          <button v-if="showClientDownload" class="client-download-card" type="button" @click="openClientDownload">
+            <span class="client-download-card__icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="12" rx="2"/>
+                <path d="M8 20h8"/>
+                <path d="M12 16v4"/>
+              </svg>
+            </span>
+            <span class="client-download-card__copy">
+              <span class="client-download-card__title">{{ t('nav.downloadClient') }}</span>
+              <span class="client-download-card__hint">{{ t('nav.downloadClientHint') }}</span>
+            </span>
+            <span class="client-download-card__arrow">›</span>
+          </button>
           <!-- Doctor 健康指示器 -->
-          <button class="health-indicator" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
+          <button v-if="isAdmin" class="health-indicator" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
             <span class="health-dot"></span>
             <span class="health-label">{{ t('doctor.title') }}</span>
           </button>
@@ -88,6 +95,22 @@
               </div>
             </div>
 
+            <div class="compact-utility-row compact-utility-row--stacked">
+              <span class="compact-utility-title">{{ t('nav.themeStyleLabel') }}</span>
+              <div class="preset-toggle-row preset-toggle-row--compact">
+                <button
+                  v-for="opt in themePresetOptions"
+                  :key="opt.value"
+                  class="preset-btn"
+                  :class="{ active: themeStore.preset === opt.value }"
+                  @click="themeStore.setPreset(opt.value)"
+                >
+                  <span class="preset-swatch" :class="`preset-swatch--${opt.value}`"></span>
+                  <span class="preset-btn-label">{{ opt.label }}</span>
+                </button>
+              </div>
+            </div>
+
             <div class="compact-utility-row">
               <span class="compact-utility-title">{{ t('nav.languageLabel') }}</span>
               <div class="language-toggle-row language-toggle-row--compact">
@@ -104,28 +127,30 @@
             </div>
           </div>
 
-          <div class="user-info">
+          <button ref="footerTriggerRef" class="user-info user-info--button" :class="{ 'is-open': footerPanelOpen }" @click.stop="toggleFooterPanel()">
             <div class="user-avatar">{{ userInitial }}</div>
             <div class="user-detail">
               <div class="user-name">{{ username }}</div>
               <div class="user-role">{{ roleLabel }}</div>
             </div>
-            <button class="change-password-btn" @click="showChangePassword = true" :title="t('auth.changePassword')">
-              <el-icon :size="16"><Lock /></el-icon>
-            </button>
-            <button class="logout-btn" @click="logout" :title="t('nav.logout')">
-              <el-icon :size="16"><SwitchButton /></el-icon>
-            </button>
-          </div>
+            <span class="user-info__chevron" :class="{ 'is-open': footerPanelOpen }">›</span>
+          </button>
         </template>
 
         <template v-else>
           <div class="collapsed-footer-actions">
-            <button class="footer-icon-btn" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
+            <button v-if="showClientDownload" class="footer-icon-btn footer-icon-btn--client" @click="openClientDownload" :title="t('nav.downloadClient')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="12" rx="2"/>
+                <path d="M8 20h8"/>
+                <path d="M12 16v4"/>
+              </svg>
+            </button>
+            <button v-if="isAdmin" class="footer-icon-btn" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
               <span class="health-dot"></span>
             </button>
-            <button class="footer-icon-btn" :title="t('nav.logout')" @click="logout">
-              <el-icon :size="16"><SwitchButton /></el-icon>
+            <button ref="footerTriggerRef" class="footer-icon-btn footer-icon-btn--user" :title="username" @click.stop="toggleFooterPanel()">
+              <span class="footer-user-initial">{{ userInitial }}</span>
             </button>
           </div>
         </template>
@@ -143,7 +168,7 @@
             <line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
         </button>
-        <span class="mobile-topbar-title">Mate<span class="logo-name-highlight">Claw</span></span>
+        <span class="mobile-topbar-title">Meta <span class="logo-name-highlight">Y</span></span>
       </div>
       <!-- RFC-074 PR-1 fix: include route.path in the key so two different
            keepAlive routes (e.g. /channels and /settings/models) don't collide
@@ -162,25 +187,81 @@
     <OnboardingWizard v-if="showOnboarding" @close="showOnboarding = false" />
     <DoctorDrawer :visible="showDoctor" @close="showDoctor = false" @status="onHealthStatus" />
 
-    <ChangePasswordDialog v-model:visible="showChangePassword" />
+    <Teleport to="body">
+      <div
+        v-if="footerPanelOpen"
+        ref="footerPanelRef"
+        class="account-flyout account-flyout--portal"
+        :class="{ 'account-flyout--mobile': isMobile }"
+        :style="footerPanelStyle"
+        @click.stop
+      >
+        <div class="account-flyout__kicker">{{ t('settings.title') }}</div>
+
+        <div class="account-flyout__header">
+          <div class="account-flyout__avatar">{{ userInitial }}</div>
+          <div class="account-flyout__identity">
+            <div class="account-flyout__name">{{ username }}</div>
+            <div class="account-flyout__meta">{{ roleLabel }}</div>
+          </div>
+        </div>
+
+        <div v-for="group in accountMenuGroups" :key="group.key" class="account-flyout__section">
+          <div class="account-flyout__section-title">{{ group.label }}</div>
+          <div class="account-flyout__group-card">
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="account-flyout__item"
+              :class="{ active: isNavItemActive(item) }"
+              @click="navigateTo(item.path)"
+            >
+              <span class="account-flyout__item-icon" v-html="item.icon"></span>
+              <span class="account-flyout__item-label">{{ item.label }}</span>
+              <span class="account-flyout__item-arrow">›</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="account-flyout__divider"></div>
+
+        <div class="account-flyout__group-card">
+          <button class="account-flyout__item" @click="openChangePassword()">
+            <span class="account-flyout__item-icon"><el-icon :size="16"><Lock /></el-icon></span>
+            <span class="account-flyout__item-label">{{ t('auth.changePassword') }}</span>
+            <span class="account-flyout__item-arrow">›</span>
+          </button>
+          <button class="account-flyout__item account-flyout__item--danger" @click="logout()">
+            <span class="account-flyout__item-icon"><el-icon :size="16"><SwitchButton /></el-icon></span>
+            <span class="account-flyout__item-label">{{ t('nav.logout') }}</span>
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <ChangePasswordDialog :visible="showChangePassword" @update:visible="showChangePassword = $event" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useThemeStore } from '@/stores/useThemeStore'
-import { version as appVersion } from '../../../package.json'
-import type { ThemeMode } from '@/stores/useThemeStore'
-import { http, settingsApi, setupApi, backstageApi } from '@/api/index'
-import OnboardingWizard from '@/views/Onboarding/OnboardingWizard.vue'
-import DoctorDrawer from '@/views/Doctor/DoctorDrawer.vue'
-import WorkspaceSwitcher from '@/components/workspace/WorkspaceSwitcher.vue'
-import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import { applyLocale, currentLocale, type AppLocale } from '@/i18n'
+import { useThemeStore } from '../../stores/useThemeStore'
+import type { ThemeMode, ThemePreset } from '../../stores/useThemeStore'
+import { http, settingsApi, setupApi } from '../../api/index'
+import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
+import { applyLocale, currentLocale, type AppLocale } from '../../i18n'
 import { SwitchButton, Lock } from '@element-plus/icons-vue'
-import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import { canAccessAdminConsole } from '../../utils/access'
+import { logoutAndRedirect } from '../../utils/auth'
+import { isDesktopRuntime } from '../../utils/desktop'
+
+const appVersion = (window as unknown as Window & { __APP_VERSION__: string }).__APP_VERSION__
+const OnboardingWizard = defineAsyncComponent(() => import('../Onboarding/OnboardingWizard.vue').then((m: any) => m.default ?? m))
+const DoctorDrawer = defineAsyncComponent(() => import('../Doctor/DoctorDrawer.vue').then((m: any) => m.default ?? m))
+const WorkspaceSwitcher = defineAsyncComponent(() => import('../../components/workspace/WorkspaceSwitcher.vue').then((m: any) => m.default ?? m))
+const ChangePasswordDialog = defineAsyncComponent(() => import('../../components/ChangePasswordDialog.vue').then((m: any) => m.default ?? m))
 
 const router = useRouter()
 const route = useRoute()
@@ -189,6 +270,17 @@ const themeStore = useThemeStore()
 const workspaceStore = useWorkspaceStore()
 const sidebarCollapsed = ref(localStorage.getItem('mc-sidebar-collapsed') === 'true')
 const footerPanelOpen = ref(false)
+const footerPanelRef = ref<HTMLElement | null>(null)
+const footerTriggerRef = ref<HTMLElement | null>(null)
+const footerPanelStyle = ref<Record<string, string>>({})
+const desktopDownloadUrl = computed(() => {
+  const configured = import.meta.env.VITE_DESKTOP_DOWNLOAD_URL
+  return configured && String(configured).trim() ? String(configured).trim() : '/downloads/MetaY-Desktop.exe'
+})
+const showClientDownload = computed(() => !isDesktopRuntime())
+
+type NavItem = { path: string; label: string; icon: string; adminOnly?: boolean }
+type NavGroup = { key: string; label: string; items: NavItem[] }
 
 // Workspace 切换时通过 key 变化让 router-view 重新挂载，避免 hard reload 破坏运行状态
 const workspaceRouteKey = computed(() => `ws-${workspaceStore.currentWorkspaceId ?? 'none'}`)
@@ -207,25 +299,6 @@ async function fetchHealthStatus() {
     healthStatus.value = data?.overall || 'healthy'
   } catch {
     healthStatus.value = 'unknown'
-  }
-}
-
-// Live attention signal for the Backstage sidebar entry. Admins only —
-// non-admin users never poll the runtime endpoint and never see the dot.
-const backstageStuckCount = ref(0)
-let backstagePollTimer: ReturnType<typeof setInterval> | null = null
-
-const isAdminRole = computed(() => (localStorage.getItem('role') || 'user') === 'admin')
-const backstageAlertActive = computed(() => isAdminRole.value && backstageStuckCount.value > 0)
-
-async function refreshBackstageBadge() {
-  if (!isAdminRole.value) return
-  try {
-    const res: any = await backstageApi.snapshot()
-    const data = res?.data ?? res
-    backstageStuckCount.value = data?.summary?.stuck ?? 0
-  } catch {
-    // Silent: stale value is preferable to a flapping indicator.
   }
 }
 
@@ -252,6 +325,9 @@ function handleMediumChange(e: MediaQueryListEvent | MediaQueryList) {
 }
 
 onMounted(async () => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+  window.addEventListener('resize', updateFooterPanelPosition)
+  window.addEventListener('scroll', updateFooterPanelPosition, true)
   mobileQuery = window.matchMedia('(max-width: 768px)')
   handleMobileChange(mobileQuery)
   mobileQuery.addEventListener('change', handleMobileChange)
@@ -274,26 +350,27 @@ onMounted(async () => {
 
   // Fetch initial health status for sidebar indicator
   fetchHealthStatus()
-
-  // Backstage attention dot — poll every 15s for admins.
-  if (isAdminRole.value) {
-    refreshBackstageBadge()
-    backstagePollTimer = setInterval(refreshBackstageBadge, 15_000)
-  }
 })
 
 onBeforeUnmount(() => {
   mobileQuery?.removeEventListener('change', handleMobileChange)
   mediumQuery?.removeEventListener('change', handleMediumChange)
-  if (backstagePollTimer) clearInterval(backstagePollTimer)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  window.removeEventListener('resize', updateFooterPanelPosition)
+  window.removeEventListener('scroll', updateFooterPanelPosition, true)
 })
 
 function onNavClick() {
   if (isMobile.value) mobileMenuOpen.value = false
 }
 
+function openClientDownload() {
+  window.open(desktopDownloadUrl.value, '_blank', 'noopener,noreferrer')
+}
+
 const username = computed(() => localStorage.getItem('username') || 'User')
 const role = computed(() => localStorage.getItem('role') || 'user')
+const isAdmin = computed(() => canAccessAdminConsole())
 const userInitial = computed(() => username.value.charAt(0).toUpperCase())
 const roleLabel = computed(() => role.value === 'admin' ? t('nav.roleAdmin') : t('nav.roleUser'))
 const effectiveCollapsed = computed(() => sidebarCollapsed.value && !isMobile.value)
@@ -318,12 +395,23 @@ const themeOptions = computed<{ value: ThemeMode; label: string; icon: string }[
   },
 ])
 
+const themePresetOptions = computed<{ value: ThemePreset; label: string }[]>(() => [
+  {
+    value: 'default',
+    label: t('nav.themePresetDefault'),
+  },
+  {
+    value: 'blue',
+    label: t('nav.themePresetBlue'),
+  },
+])
+
 const localeOptions = computed<{ value: AppLocale; label: string; short: string }[]>(() => [
   { value: 'zh-CN', label: t('settings.languageOptions.zhCN'), short: '中' },
   { value: 'en-US', label: t('settings.languageOptions.enUS'), short: 'EN' },
 ])
 
-const navGroups = computed(() => [
+const navGroups = computed<NavGroup[]>(() => [
   {
     key: 'core',
     label: t('nav.core'),
@@ -343,12 +431,6 @@ const navGroups = computed(() => [
         label: t('nav.agents'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>`,
       },
-      ...(isAdminRole.value ? [{
-        path: '/backstage',
-        label: t('nav.backstage'),
-        tooltip: t('nav.backstageTooltip'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`,
-      }] : []),
       {
         path: '/wiki',
         label: t('nav.wiki'),
@@ -358,11 +440,6 @@ const navGroups = computed(() => [
         path: '/memory',
         label: t('nav.memory'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14H8a4 4 0 0 0-4 4v2h16v-2a4 4 0 0 0-4-4z"/><line x1="12" y1="11" x2="12" y2="14"/></svg>`,
-      },
-      {
-        path: '/enterprise',
-        label: t('nav.enterprise'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 9h.01"/><path d="M9 12h.01"/><path d="M9 15h.01"/><path d="M9 18h.01"/><path d="M15 9h.01"/><path d="M15 12h.01"/><path d="M15 15h.01"/><path d="M15 18h.01"/></svg>`,
       },
     ],
   },
@@ -381,15 +458,16 @@ const navGroups = computed(() => [
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
       },
       {
+        path: '/tools',
+        label: t('nav.tools'),
+        adminOnly: true,
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+      },
+      {
         path: '/plugins',
         label: t('nav.plugins'),
+        adminOnly: true,
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 3h-8v4h8V3z"/></svg>`,
-      },
-      // RFC-090 Phase 4: Activity 提升到顶层
-      {
-        path: '/activity',
-        label: t('nav.activity'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
       },
     ],
   },
@@ -400,16 +478,27 @@ const navGroups = computed(() => [
       {
         path: '/settings/models',
         label: t('nav.settings'),
+        adminOnly: true,
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>`,
       },
       {
         path: '/security',
         label: t('nav.security'),
+        adminOnly: true,
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
       },
     ],
   },
 ])
+
+const visibleNavGroups = computed(() => navGroups.value
+  .map(group => ({
+    ...group,
+    items: group.items.filter(item => !item.adminOnly || isAdmin.value),
+  }))
+  .filter(group => group.items.length > 0))
+const sidebarNavGroups = computed(() => visibleNavGroups.value.filter((group) => group.key === 'core'))
+const accountMenuGroups = computed(() => visibleNavGroups.value.filter((group) => group.key !== 'core'))
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
@@ -432,11 +521,76 @@ function isNavItemActive(item: { path: string; label: string }) {
 
 const showChangePassword = ref(false)
 
+function toggleFooterPanel() {
+  footerPanelOpen.value = !footerPanelOpen.value
+  if (footerPanelOpen.value) {
+    nextTick(updateFooterPanelPosition)
+  }
+}
+
+function openChangePassword() {
+  footerPanelOpen.value = false
+  showChangePassword.value = true
+}
+
+function navigateTo(path: string) {
+  footerPanelOpen.value = false
+  if (route.path !== path) {
+    router.push(path)
+  }
+}
+
 function logout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('username')
-  localStorage.removeItem('role')
-  router.push('/login')
+  footerPanelOpen.value = false
+  logoutAndRedirect('/login')
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!footerPanelOpen.value) return
+  const target = event.target as Node | null
+  if (!target) return
+  const clickedPanel = footerPanelRef.value?.contains(target)
+  const clickedTrigger = footerTriggerRef.value?.contains(target)
+  if (!clickedPanel && !clickedTrigger) {
+    footerPanelOpen.value = false
+  }
+}
+
+function updateFooterPanelPosition() {
+  if (!footerPanelOpen.value) return
+  const trigger = footerTriggerRef.value
+  const panel = footerPanelRef.value
+  if (!trigger || !panel) return
+
+  const triggerRect = trigger.getBoundingClientRect()
+  const panelRect = panel.getBoundingClientRect()
+  const gap = 10
+  const viewportPadding = 12
+
+  if (isMobile.value) {
+    const left = Math.max(viewportPadding, Math.min(triggerRect.left, window.innerWidth - panelRect.width - viewportPadding))
+    const top = Math.max(viewportPadding, triggerRect.top - panelRect.height - gap)
+    footerPanelStyle.value = {
+      left: `${left}px`,
+      top: `${top}px`,
+      '--account-flyout-arrow-left': `${Math.max(24, Math.min(panelRect.width - 24, triggerRect.left + triggerRect.width / 2 - left))}px`,
+    }
+    return
+  }
+
+  const desiredLeft = triggerRect.right + gap
+  const maxLeft = window.innerWidth - panelRect.width - viewportPadding
+  const left = Math.max(viewportPadding, Math.min(desiredLeft, maxLeft))
+  const desiredTop = triggerRect.bottom - panelRect.height
+  const maxTop = window.innerHeight - panelRect.height - viewportPadding
+  const top = Math.max(viewportPadding, Math.min(desiredTop, maxTop))
+  const arrowTop = Math.max(24, Math.min(panelRect.height - 24, triggerRect.top + triggerRect.height / 2 - top))
+
+  footerPanelStyle.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+    '--account-flyout-arrow-top': `${arrowTop}px`,
+  }
 }
 
 async function changeLocale(locale: AppLocale) {
@@ -452,6 +606,12 @@ async function changeLocale(locale: AppLocale) {
 watch(() => route.fullPath, () => {
   footerPanelOpen.value = false
   if (isMobile.value) mobileMenuOpen.value = false
+})
+
+watch([footerPanelOpen, isMobile], async ([open]) => {
+  if (!open) return
+  await nextTick()
+  updateFooterPanelPosition()
 })
 
 watch(() => sidebarCollapsed.value, (collapsed) => {
@@ -501,7 +661,8 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
   display: flex;
   flex-direction: column;
   transition: width 0.2s ease, min-width 0.2s ease;
-  overflow: hidden;
+  overflow-x: visible;
+  overflow-y: hidden;
   position: relative;
   z-index: 1;
 }
@@ -673,44 +834,6 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
 .nav-icon { display: flex; align-items: center; flex-shrink: 0; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }
 
-/* Backstage attention dot — appears only when stuck > 0 for an admin. */
-.nav-attention-dot {
-  position: absolute;
-  right: 14px;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: hsl(20, 80%, 55%);
-  transform: translateY(-50%);
-  box-shadow: 0 0 0 0 hsla(20, 80%, 55%, 0.6);
-  animation: nav-attention-pulse 2.4s ease-in-out infinite;
-}
-
-.nav-item.has-attention {
-  color: hsl(20, 75%, 50%);
-}
-
-@keyframes nav-attention-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 hsla(20, 80%, 55%, 0.55); transform: translateY(-50%) scale(1); }
-  50%      { box-shadow: 0 0 0 6px hsla(20, 80%, 55%, 0);    transform: translateY(-50%) scale(1.15); }
-}
-
-.sidebar.collapsed .nav-attention-dot {
-  right: 8px;
-  top: 8px;
-  transform: none;
-}
-
-.sidebar.collapsed .nav-attention-dot {
-  animation-name: nav-attention-pulse-collapsed;
-}
-
-@keyframes nav-attention-pulse-collapsed {
-  0%, 100% { box-shadow: 0 0 0 0 hsla(20, 80%, 55%, 0.55); transform: scale(1); }
-  50%      { box-shadow: 0 0 0 5px hsla(20, 80%, 55%, 0);    transform: scale(1.2); }
-}
-
 /* 底部 */
 .sidebar-footer {
   border-top: 1px solid var(--mc-border-light);
@@ -718,7 +841,73 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
   background: var(--mc-sidebar-footer-bg);
   backdrop-filter: blur(14px);
   position: relative;
+  z-index: 5;
 }
+
+.client-download-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--mc-primary) 18%, var(--mc-border-light));
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mc-primary) 10%, transparent), color-mix(in srgb, var(--mc-accent) 8%, transparent));
+  color: var(--mc-text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.client-download-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--mc-primary) 38%, var(--mc-border-light));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mc-primary) 16%, transparent), color-mix(in srgb, var(--mc-accent) 12%, transparent));
+}
+
+.client-download-card__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mc-primary);
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border-light);
+  flex: 0 0 auto;
+}
+
+.client-download-card__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.client-download-card__title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--mc-text-primary);
+}
+
+.client-download-card__hint {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--mc-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.client-download-card__arrow {
+  color: var(--mc-text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+}
+
 .health-indicator { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid var(--mc-border-light); background: var(--mc-bg-muted); border-radius: 12px; cursor: pointer; color: var(--mc-text-secondary); font-size: 12px; margin-bottom: 8px; }
 .health-indicator:hover { background: var(--mc-bg-sunken); }
 .health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -774,6 +963,22 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
   border-radius: 999px;
 }
 
+.preset-toggle-row {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-toggle-row--compact {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+}
+
 .language-toggle-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -823,6 +1028,61 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
 .theme-btn-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.compact-utility-row--stacked {
+  align-items: stretch;
+}
+
+.preset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--mc-text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preset-btn:hover {
+  color: var(--mc-text-secondary);
+}
+
+.preset-btn.active {
+  background: var(--mc-bg-elevated);
+  color: var(--mc-text-primary);
+  box-shadow: var(--mc-shadow-soft);
+}
+
+.preset-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.preset-swatch--default {
+  background: linear-gradient(135deg, #d96d46, #bb4f27);
+}
+
+.preset-swatch--blue {
+  background: linear-gradient(135deg, #3b88ff, #2f72de);
 }
 
 .language-btn {
@@ -897,6 +1157,22 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
   border: 1px solid var(--mc-border-light);
 }
 
+.user-info--button {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.user-info--button:hover {
+  background: var(--mc-bg-sunken);
+}
+
+.user-info--button.is-open {
+  background: var(--mc-primary-bg);
+  border-color: color-mix(in srgb, var(--mc-primary) 18%, var(--mc-border-light));
+}
+
 .user-avatar {
   width: 30px;
   height: 30px;
@@ -924,30 +1200,18 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
 
 .user-role { font-size: 10px; color: var(--mc-text-tertiary); }
 
-.change-password-btn,
-.logout-btn {
-  width: 26px;
-  height: 26px;
-  border: none;
-  background: none;
-  cursor: pointer;
+.user-info__chevron {
+  margin-left: auto;
   color: var(--mc-text-tertiary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  padding: 0;
-  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.15s ease, color 0.15s ease;
 }
 
-.change-password-btn:hover {
-  background: var(--mc-primary-bg);
+.user-info__chevron.is-open {
+  transform: rotate(180deg);
   color: var(--mc-primary);
-}
-
-.logout-btn:hover {
-  background: var(--mc-danger-bg);
-  color: var(--mc-danger);
 }
 
 .collapsed-footer-actions {
@@ -981,10 +1245,213 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
 .footer-icon-btn.error .health-dot { background: var(--mc-danger); }
 .footer-icon-btn.unknown .health-dot { background: var(--mc-text-tertiary); }
 
+.footer-icon-btn--user {
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+  border-color: color-mix(in srgb, var(--mc-primary) 20%, var(--mc-border-light));
+}
+
+.footer-user-initial {
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .footer-icon-btn--accent {
   color: var(--mc-primary);
   background: var(--mc-primary-bg);
   border-color: rgba(217, 109, 70, 0.18);
+}
+
+.account-flyout {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 286px;
+  transform: none;
+  padding: 12px;
+  border-radius: 22px;
+  border: 1px solid var(--mc-border);
+  background: color-mix(in srgb, var(--mc-sidebar-floating-bg) 88%, white 12%);
+  box-shadow: 0 22px 50px rgba(19, 36, 66, 0.14);
+  backdrop-filter: blur(22px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 4000;
+}
+
+.account-flyout::after {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: var(--account-flyout-arrow-top, 28px);
+  width: 14px;
+  height: 14px;
+  border-left: 1px solid var(--mc-border);
+  border-top: 1px solid var(--mc-border);
+  background: color-mix(in srgb, var(--mc-sidebar-floating-bg) 88%, white 12%);
+  transform: rotate(45deg);
+}
+
+.account-flyout--portal {
+  pointer-events: auto;
+}
+
+.account-flyout--mobile {
+  width: calc(100% - 16px);
+}
+
+.account-flyout--mobile::after {
+  left: var(--account-flyout-arrow-left, 32px);
+  top: auto;
+  bottom: -7px;
+  border-left: none;
+  border-top: none;
+  border-right: 1px solid var(--mc-border);
+  border-bottom: 1px solid var(--mc-border);
+}
+
+.account-flyout__kicker {
+  padding: 2px 4px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mc-text-tertiary);
+  letter-spacing: 0.06em;
+}
+
+.account-flyout__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--mc-bg-elevated) 78%, var(--mc-bg-muted));
+  border: 1px solid var(--mc-border-light);
+}
+
+.account-flyout__avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--mc-primary), var(--mc-accent));
+}
+
+.account-flyout__identity {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-flyout__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-flyout__meta {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+}
+
+.account-flyout__section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.account-flyout__section-title {
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--mc-text-tertiary);
+}
+
+.account-flyout__group-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid var(--mc-border-light);
+  background: color-mix(in srgb, var(--mc-bg-elevated) 82%, var(--mc-bg-muted));
+  overflow: hidden;
+}
+
+.account-flyout__divider {
+  height: 1px;
+  background: var(--mc-border-light);
+  margin: 2px 4px;
+}
+
+.account-flyout__item {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mc-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.account-flyout__item + .account-flyout__item {
+  border-top: 1px solid var(--mc-border-light);
+}
+
+.account-flyout__item:hover {
+  background: color-mix(in srgb, var(--mc-bg-muted) 88%, white 12%);
+  color: var(--mc-text-primary);
+}
+
+.account-flyout__item.active {
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+}
+
+.account-flyout__item.active + .account-flyout__item {
+  border-top-color: color-mix(in srgb, var(--mc-primary) 12%, var(--mc-border-light));
+}
+
+.account-flyout__item--danger:hover {
+  background: var(--mc-danger-bg);
+  color: var(--mc-danger);
+}
+
+.account-flyout__item-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.account-flyout__item-label {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.account-flyout__item-arrow {
+  flex-shrink: 0;
+  font-size: 14px;
+  color: var(--mc-text-tertiary);
+  opacity: 0.75;
 }
 
 .sidebar-utility-panel {
@@ -1173,6 +1640,16 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
 
   .sidebar-utility-panel {
     display: none;
+  }
+
+  .account-flyout--mobile {
+    width: calc(100% - 16px);
+  }
+
+  .account-flyout--mobile::after {
+    right: auto;
+    left: var(--account-flyout-arrow-left, 32px);
+    bottom: -7px;
   }
 
   .sidebar-utility-card {

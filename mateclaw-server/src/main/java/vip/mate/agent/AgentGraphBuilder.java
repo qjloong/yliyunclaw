@@ -8,6 +8,7 @@ import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
@@ -51,26 +52,30 @@ import vip.mate.agent.graph.plan.edge.StepProgressDispatcher;
 import vip.mate.agent.graph.plan.node.*;
 import vip.mate.agent.graph.plan.state.PlanStateKeys;
 import vip.mate.agent.graph.state.MateClawStateKeys;
+import vip.mate.harness.service.HarnessRunService;
 import vip.mate.agent.binding.service.AgentBindingService;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.config.GraphObservationProperties;
 import vip.mate.exception.MateClawException;
+import vip.mate.llm.model.ModelCapability;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelFamily;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
-import vip.mate.llm.routing.ProviderRouter;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.service.ModelProviderService;
 import vip.mate.planning.service.PlanningService;
 import vip.mate.skill.service.SkillService;
 import vip.mate.system.service.SystemSettingService;
 import vip.mate.tool.ToolRegistry;
+import vip.mate.tool.image.vision.ImageVisionService;
 import vip.mate.memory.spi.MemoryManager;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.tool.guard.service.ToolGuardService;
 import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.approval.ApprovalGrantService;
 import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.auth.service.AuthService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.wiki.service.WikiContextService;
 
@@ -101,11 +106,10 @@ public class AgentGraphBuilder {
     private final ConversationService conversationService;
     private final ModelConfigService modelConfigService;
     private final ModelProviderService modelProviderService;
-    private final vip.mate.llm.service.ModelCapabilityService modelCapabilityService;
-    private final ProviderRouter providerRouter;
     private final PlanningService planningService;
     private final ToolGuardService toolGuardService;
     private final vip.mate.tool.guard.service.ToolGuardConfigService toolGuardConfigService;
+    private final ApprovalGrantService approvalGrantService;
     private final ApprovalWorkflowService approvalService;
     private final ChatStreamTracker streamTracker;
     private final SystemSettingService systemSettingService;
@@ -131,72 +135,55 @@ public class AgentGraphBuilder {
     private final vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
     private final vip.mate.llm.chatmodel.ProviderChatModelFactory chatModelFactory;
     private final vip.mate.llm.failover.AvailableProviderPool providerPool;
-    private final vip.mate.tool.document.GeneratedFileCache generatedFileCache;
     /** PR-0b: DashScope-specific construction lives here now; we only call into it for the search-on log. */
     private final vip.mate.agent.chatmodel.AgentDashScopeChatModelBuilder dashScopeBuilder;
-    private final vip.mate.llm.routing.MultimodalRouter multimodalRouter;
-    private final vip.mate.llm.routing.MediaCaptionService mediaCaptionService;
-
-    /**
-     * Optional audit pipeline. Setter injection (rather than a constructor
-     * parameter) keeps existing constructor-based wiring + tests intact.
-     * When present, the executor receives it so child-agent denied-tool
-     * attempts can be recorded.
-     */
-    private vip.mate.audit.service.AuditEventService auditEventService;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setAuditEventService(vip.mate.audit.service.AuditEventService s) {
-        this.auditEventService = s;
-    }
+    private final ImageVisionService imageVisionService;
+    private final HarnessRunService harnessRunService;
+    private final AuthService authService;
+    private final vip.mate.tool.metadata.ToolMetadataResolver toolMetadataResolver;
+    /** WP-2: wired into ToolExecutionExecutor for provenance-carrying policy resolution. */
+    private final vip.mate.policy.resolver.EffectivePolicyResolver effectivePolicyResolver;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
      */
     public BaseAgent build(AgentEntity entity) {
+        return build(entity, ConversationService.RUNTIME_MODE_DEFAULT);
+        }
+
+        public BaseAgent build(AgentEntity entity, String runtimeMode) {
+        return build(entity, runtimeMode, null, null);
+    }
+
+    public BaseAgent build(AgentEntity entity, String runtimeMode,
+                           String runtimeProviderId, String runtimeModelName) {
         AgentToolSet toolSet = toolRegistry.getEnabledToolSet();
+        String normalizedRuntimeMode = runtimeMode != null ? runtimeMode.trim().toLowerCase() : "";
+        String effectiveRuntimeMode = switch (normalizedRuntimeMode) {
+            case ConversationService.RUNTIME_MODE_PLAN -> ConversationService.RUNTIME_MODE_PLAN;
+            case ConversationService.RUNTIME_MODE_CODING -> ConversationService.RUNTIME_MODE_CODING;
+            default -> ConversationService.RUNTIME_MODE_DEFAULT;
+        };
+        String effectiveAgentType = (ConversationService.RUNTIME_MODE_PLAN.equals(effectiveRuntimeMode)
+            || ConversationService.RUNTIME_MODE_CODING.equals(effectiveRuntimeMode))
+            ? "plan_execute"
+            : entity.getAgentType();
 
         // 过滤掉 denied 工具，使模型完全看不到它们（防止 prompt injection 利用 schema）
         toolSet = toolSet.withDeniedToolsFiltered(toolGuardConfigService.getDeniedTools());
 
-        // RFC-090 §14.2 — single entry point that merges:
-        //   (a) tools expanded from bound skills' active features, and
-        //   (b) directly bound atomic tools (the Advanced bypass, §9.2 调整 B).
-        // Three-state semantics: null = no agent-level restriction (use
-        // global default); non-null (possibly empty) = explicit allowlist.
-        Set<String> boundTools = agentBindingService.getEffectiveToolNames(entity.getId());
+        // Per-agent tool 绑定过滤：如果 agent 有自定义 tool 绑定，则只保留绑定的工具
+        Set<String> boundTools = agentBindingService.getBoundToolNames(entity.getId());
         toolSet = toolSet.withAllowedToolsOnly(boundTools); // null = 全局默认
 
-        // RFC-090 §9.2 调整 C — pick a primary model that satisfies
-        // the agent's bound-skill requires-model. Falls back to the
-        // global default when no preferred provider satisfies, so the
-        // existing "no default model" error path stays intact.
-        // Honor per-Agent model override when set.
-        // resolveModel() looks up entity.modelName in enabled-only models;
-        // null / blank / unmatched silently fall back to getDefaultModel(),
-        // preserving the legacy behavior for Agents without an override.
-        ModelConfigEntity globalDefault;
-        try {
-            globalDefault = modelConfigService.resolveModel(entity.getModelName());
-        } catch (Exception e) {
-            throw new MateClawException("err.agent.no_default_model", "无法构建 Agent：请先在「设置 → 模型」中配置并启用默认模型");
-        }
+        // 默认使用全局默认模型；会话级运行时覆盖存在时优先使用该模型。
         ModelConfigEntity runtimeModel;
         try {
-            runtimeModel = providerRouter.selectPrimary(entity.getId(), globalDefault);
-            if (runtimeModel == null) runtimeModel = globalDefault;
+            runtimeModel = StringUtils.hasText(runtimeProviderId) && StringUtils.hasText(runtimeModelName)
+                    ? modelConfigService.resolveChatModel(runtimeProviderId, runtimeModelName)
+                    : modelConfigService.getDefaultModel();
         } catch (Exception e) {
-            log.debug("[ProviderRouter] primary selection failed, falling back to global default: {}",
-                    e.getMessage());
-            runtimeModel = globalDefault;
-        }
-        // Even after the upgrade, log a WARN when the chosen primary
-        // still doesn't satisfy needs (e.g. no preferred provider was
-        // capable). The diagnostic is observability-only.
-        try {
-            providerRouter.diagnosePrimary(entity.getId(), runtimeModel);
-        } catch (Exception e) {
-            log.debug("[ProviderRouter] diagnostic failed: {}", e.getMessage());
+            throw new MateClawException("err.agent.no_default_model", "无法构建 Agent：请先在「设置 → 模型」中配置并启用默认模型");
         }
 
         ModelProviderEntity provider;
@@ -243,28 +230,26 @@ public class AgentGraphBuilder {
             // 内置搜索作为首选，search 工具作为补充/兜底
             log.info("内置搜索已开启 (provider={})，search 工具保留作为补充通道", provider.getProviderId());
         }
-        // Default 100 if DB row leaves max_iterations null. Negative or zero is an
-        // explicit opt-in to "no soft cap" — ObservationDispatcher already treats
-        // maxIterations<=0 as "do not enforce", so the agent runs until the LLM
-        // emits a final answer (or returnDirect short-circuits). Positive values
-        // are clamped to the hard ceiling so a misconfigured row can't skip the
-        // safety net unintentionally.
+        // Default 100 if DB row leaves max_iterations null; clamp per-agent overrides
+        // to the hard ceiling (BaseAgent.MAX_ITERATIONS_HARD_CEILING) so a misconfigured
+        // row can never push an unbounded loop. Aligned with QwenPaw's 1..100 range.
         int rawMaxIter = entity.getMaxIterations() != null ? entity.getMaxIterations() : 100;
-        int maxIter;
-        if (rawMaxIter <= 0) {
-            maxIter = 0;
-            log.info("Agent {} max_iterations={} → unlimited soft cap (LLM controls termination)",
-                    entity.getId(), rawMaxIter);
-        } else {
-            maxIter = Math.min(rawMaxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
-            if (maxIter != rawMaxIter) {
-                log.warn("Agent {} max_iterations={} clamped to {} (1..{})",
-                        entity.getId(), rawMaxIter, maxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
-            }
+        int maxIter = Math.max(1, Math.min(rawMaxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING));
+        if (maxIter != rawMaxIter) {
+            log.warn("Agent {} max_iterations={} clamped to {} (1..{})",
+                    entity.getId(), rawMaxIter, maxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
         }
 
-        String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled,
-                boundTools, runtimeModel.getMaxInputTokens());
+        // 检测当前运行时模型是否支持工具调用；不支持则降级为空 toolSet，避免 Ollama 等返回 400
+        boolean modelSupportsTools = ModelCapability.supportsTools(runtimeModel);
+        if (!modelSupportsTools) {
+            log.warn("Model {} does not support tool calling, disabling tools for agent {}. "
+                    + "Tool guidance will be stripped from the system prompt.",
+                    runtimeModel.getModelName(), entity.getName());
+            toolSet = AgentToolSet.fromCallbacks(List.of(), List.of());
+        }
+
+        String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled, effectiveRuntimeMode, modelSupportsTools);
 
         // 当前仅支持 DashScope 和 OpenAI-compatible，其他协议直接拒绝
         if (!supportsStateGraph(protocol)) {
@@ -274,17 +259,17 @@ public class AgentGraphBuilder {
 
         BaseAgent agent;
         boolean toolCallingEnabled;
-        if ("plan_execute".equals(entity.getAgentType())) {
-            agent = buildPlanExecuteAgent(toolSet, runtimeModel, maxIter, entity.getId());
-            toolCallingEnabled = true;
-            log.info("Built StateGraph Plan-Execute agent: {} (maxIterations={}, tools={}, protocol={})",
-                    entity.getName(), maxIter, toolSet.size(), protocol.getId());
+        if ("plan_execute".equals(effectiveAgentType)) {
+            agent = buildPlanExecuteAgent(toolSet, runtimeModel, maxIter, entity.getId(), entity.getTemplateMetadataJson());
+            toolCallingEnabled = modelSupportsTools;
+            log.info("Built StateGraph Plan-Execute agent: {} (maxIterations={}, tools={}, protocol={}, runtimeMode={})",
+                entity.getName(), maxIter, toolSet.size(), protocol.getId(), effectiveRuntimeMode);
         } else {
-            agent = buildReActAgent(toolSet, runtimeModel, maxIter, entity.getId());
+            agent = buildReActAgent(toolSet, runtimeModel, maxIter, entity.getId(), entity.getTemplateMetadataJson());
             // StateGraph 路径下工具调用由 ActionNode 控制，始终启用
-            toolCallingEnabled = true;
-            log.info("Built StateGraph ReAct agent: {} (maxIterations={}, tools={}, protocol={})",
-                    entity.getName(), maxIter, toolSet.size(), protocol.getId());
+            toolCallingEnabled = modelSupportsTools;
+            log.info("Built StateGraph ReAct agent: {} (maxIterations={}, tools={}, protocol={}, runtimeMode={})",
+                entity.getName(), maxIter, toolSet.size(), protocol.getId(), effectiveRuntimeMode);
         }
 
         // 设置通用属性
@@ -293,14 +278,13 @@ public class AgentGraphBuilder {
         agent.systemPrompt = enhancedPrompt;
         agent.maxIterations = maxIter;
         agent.modelName = runtimeModel.getModelName();
-        agent.modelCapabilities = modelCapabilityService.resolve(
-                runtimeModel.getModelName(), runtimeModel.getModalities());
         agent.runtimeProviderId = provider != null ? provider.getProviderId() : "";
-        agent.runtimeModelConfig = runtimeModel;
-        agent.toolSet = toolSet;
-        agent.multimodalRouter = multimodalRouter;
-        agent.mediaCaptionService = mediaCaptionService;
-        agent.userLocale = resolveLocale();
+        agent.runtimeMode = effectiveRuntimeMode;
+        agent.templateId = entity.getTemplateId();
+        agent.profileId = entity.getProfileId();
+        agent.capabilityPackId = entity.getCapabilityPackId();
+        agent.templateMetadataJson = entity.getTemplateMetadataJson();
+        agent.knowledgeBaseIdsJson = entity.getKnowledgeBaseIdsJson();
         agent.temperature = runtimeModel.getTemperature();
         agent.maxTokens = runtimeModel.getMaxTokens();
         agent.maxInputTokens = runtimeModel.getMaxInputTokens();
@@ -320,9 +304,9 @@ public class AgentGraphBuilder {
             }
         }
 
-        log.info("Built agent instance: {} (type={}, protocol={}, tools={}, toolCallingEnabled={})",
-                entity.getName(), entity.getAgentType(), protocol.getId(),
-                toolSet.size(), agent.toolCallingEnabled);
+        log.info("Built agent instance: {} (type={}, effectiveType={}, runtimeMode={}, protocol={}, tools={}, toolCallingEnabled={})",
+            entity.getName(), entity.getAgentType(), effectiveAgentType, effectiveRuntimeMode, protocol.getId(),
+            toolSet.size(), agent.toolCallingEnabled);
         return agent;
     }
 
@@ -334,12 +318,17 @@ public class AgentGraphBuilder {
 
     StateGraphReActAgent buildReActAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel,
                                          int maxIter, Long agentId) {
+        return buildReActAgent(toolSet, runtimeModel, maxIter, agentId, null);
+    }
+
+    StateGraphReActAgent buildReActAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel,
+                                         int maxIter, Long agentId, String templateMetadataJson) {
         ChatModel chatModel = buildRuntimeChatModel(runtimeModel);
         ChatClient chatClient = ChatClient.create(chatModel);
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
-        CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId);
+        CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId, templateMetadataJson);
         return new StateGraphReActAgent(chatClient, conversationService, compiledGraph,
-                chatModel, conversationWindowManager, toolSet);
+            chatModel, conversationWindowManager, imageVisionService, harnessRunService);
     }
 
     StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel, int maxIter) {
@@ -348,12 +337,17 @@ public class AgentGraphBuilder {
 
     StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel,
                                                      int maxIter, Long agentId) {
+        return buildPlanExecuteAgent(toolSet, runtimeModel, maxIter, agentId, null);
+    }
+
+    StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel,
+                                                     int maxIter, Long agentId, String templateMetadataJson) {
         ChatModel chatModel = buildRuntimeChatModel(runtimeModel);
         ChatClient chatClient = ChatClient.create(chatModel);
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
-        CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId);
+        CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId, templateMetadataJson);
         return new StateGraphPlanExecuteAgent(chatClient, conversationService, graph, planningService,
-                chatModel, conversationWindowManager, toolSet);
+            chatModel, conversationWindowManager, imageVisionService, harnessRunService);
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
@@ -368,22 +362,19 @@ public class AgentGraphBuilder {
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
                                          String reasoningEffort, ModelConfigEntity primaryModelConfig,
                                          Long agentId) {
+        return buildPlanExecuteGraph(toolSet, chatModel, maxIterations, reasoningEffort, primaryModelConfig, agentId, null);
+    }
+
+    CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
+                                         String reasoningEffort, ModelConfigEntity primaryModelConfig,
+                                         Long agentId, String templateMetadataJson) {
         try {
             List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig, agentId);
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
                     streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
                     providerPool);
-            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
-            // Issue #46: enable skill-aware "Tool not found" hint so when the
-            // LLM mis-calls a skill name as a tool, the response tells it
-            // the right invocation pattern instead of a dead-end error.
-            executor.setSkillRuntimeService(skillRuntimeService);
-            // Optional: route child-agent denied-tool audit events through
-            // the audit pipeline. Null when audit is not wired (legacy / test).
-            if (auditEventService != null) {
-                executor.setAuditEventService(auditEventService);
-            }
+            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry, workspaceService, conversationService, approvalGrantService, authService, toolMetadataResolver, effectivePolicyResolver, templateMetadataJson);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
             PlanSummaryNode planSummaryNode = new PlanSummaryNode(chatModel, planningService, streamingHelper);
@@ -451,15 +442,6 @@ public class AgentGraphBuilder {
                     .addStrategy(MateClawStateKeys.COMPLETION_TOKENS, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_MODEL_NAME, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_PROVIDER_ID, KeyStrategy.REPLACE)
-                    // SourceEvidenceLedger: ActionNode 把每轮 ToolResponse 抽取出的
-                    // (sourcePaths, sourceSymbols, failedPaths) merge 进这个 ledger，
-                    // 后续 ReasoningNode / FinalAnswerNode 调 validateAnswer 校验
-                    // 模型引用是否有真实证据。漏注册时框架在多 node merge 时会偶发
-                    // 丢这个键，evidence_insufficient 检查会"静默地不生效" ——
-                    // StateKeyRegistrationCoverageTest 专门兜这条。
-                    .addStrategy(MateClawStateKeys.SOURCE_EVIDENCE_LEDGER, KeyStrategy.REPLACE)
-                    // Multimodal sidecar routing decision for the current turn.
-                    .addStrategy(MateClawStateKeys.ROUTING_DECISION, KeyStrategy.REPLACE)
                     .build();
 
             // Graph 拓扑：
@@ -494,35 +476,11 @@ public class AgentGraphBuilder {
                     .addEdge(PlanStateKeys.DIRECT_ANSWER_NODE, StateGraph.END);
 
             return graph.compile(CompileConfig.builder()
-                    .recursionLimit(frameworkRecursionLimit())
+                    .recursionLimit(maxIterations > 0 ? maxIterations * 3 + 10 : 300)
                     .build());
         } catch (Exception e) {
             throw new MateClawException("err.agent.plan_compile_failed", "Plan-Execute StateGraph 编译失败: " + e.getMessage());
         }
-    }
-
-    /**
-     * Hard ceiling for the underlying graph framework's recursion guard.
-     * <p>
-     * The framework treats "recursion limit reached" as a normal completion —
-     * it emits a {@code done} signal with no exception and no log. That makes
-     * it indistinguishable from a real final answer downstream, and is the
-     * mechanism by which a turn can silently stop mid-execution and persist
-     * only whatever partial content the accumulator happened to hold.
-     * <p>
-     * To avoid that class of bug, the recursion limit must be sized so it can
-     * <em>never</em> trip before the soft cap (ObservationDispatcher →
-     * LimitExceededNode), which is the only path that produces a proper
-     * {@code finish_reason} and human-facing message. Sized for the maximum
-     * effective soft cap (DB hard ceiling + thinking-mode bonus) multiplied
-     * by 4 (each iteration is worst-case reasoning + summarizing + action +
-     * observation) plus a 100-step buffer for phase nodes, approval replays
-     * and tool-result chunking. Decoupled from the per-agent value so a small
-     * {@code max_iterations} can never accidentally re-introduce the silent
-     * killer.
-     */
-    private static int frameworkRecursionLimit() {
-        return (BaseAgent.MAX_ITERATIONS_HARD_CEILING + 5) * 4 + 100;
     }
 
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
@@ -537,22 +495,19 @@ public class AgentGraphBuilder {
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
                                    String reasoningEffort, ModelConfigEntity primaryModelConfig,
                                    Long agentId) {
+        return buildReActGraph(toolSet, chatModel, maxIterations, reasoningEffort, primaryModelConfig, agentId, null);
+    }
+
+    CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
+                                   String reasoningEffort, ModelConfigEntity primaryModelConfig,
+                                   Long agentId, String templateMetadataJson) {
         try {
             List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig, agentId);
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
                     streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
                     providerPool);
-            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
-            // Issue #46: enable skill-aware "Tool not found" hint so when the
-            // LLM mis-calls a skill name as a tool, the response tells it
-            // the right invocation pattern instead of a dead-end error.
-            executor.setSkillRuntimeService(skillRuntimeService);
-            // Optional: route child-agent denied-tool audit events through
-            // the audit pipeline. Null when audit is not wired (legacy / test).
-            if (auditEventService != null) {
-                executor.setAuditEventService(auditEventService);
-            }
+            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry, workspaceService, conversationService, approvalGrantService, authService, toolMetadataResolver, effectivePolicyResolver, templateMetadataJson);
             // PR-1.2 (RFC-049 L1-B): propagate the bound model's capability so ReasoningNode
             // can gate the ThinkingLevelHolder override explicitly, rather than inferring
             // capability from reasoningEffort == null.
@@ -566,7 +521,7 @@ public class AgentGraphBuilder {
             ObservationNode observationNode = new ObservationNode(observationProcessor, streamTracker);
             SummarizingNode summarizingNode = new SummarizingNode(chatModel, streamingHelper, streamTracker);
             LimitExceededNode limitExceededNode = new LimitExceededNode(chatModel, observationProcessor, streamingHelper, i18nService);
-            FinalAnswerNode finalAnswerNode = new FinalAnswerNode(generatedFileCache);
+            FinalAnswerNode finalAnswerNode = new FinalAnswerNode();
 
             KeyStrategyFactory keyStrategyFactory = KeyStrategy.builder()
                     // 输入字段
@@ -639,15 +594,6 @@ public class AgentGraphBuilder {
                     .addStrategy(MateClawStateKeys.COMPLETION_TOKENS, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_MODEL_NAME, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_PROVIDER_ID, KeyStrategy.REPLACE)
-                    // SourceEvidenceLedger: ActionNode 把每轮 ToolResponse 抽取出的
-                    // (sourcePaths, sourceSymbols, failedPaths) merge 进这个 ledger，
-                    // 后续 ReasoningNode / FinalAnswerNode 调 validateAnswer 校验
-                    // 模型引用是否有真实证据。漏注册时框架在多 node merge 时会偶发
-                    // 丢这个键，evidence_insufficient 检查会"静默地不生效" ——
-                    // StateKeyRegistrationCoverageTest 专门兜这条。
-                    .addStrategy(MateClawStateKeys.SOURCE_EVIDENCE_LEDGER, KeyStrategy.REPLACE)
-                    // Multimodal sidecar routing decision for the current turn.
-                    .addStrategy(MateClawStateKeys.ROUTING_DECISION, KeyStrategy.REPLACE)
                     .build();
 
             StateGraph graph = new StateGraph("react-agent-v2", keyStrategyFactory)
@@ -682,7 +628,7 @@ public class AgentGraphBuilder {
                     .addEdge(MateClawStateKeys.FINAL_ANSWER_NODE, StateGraph.END);
 
             return graph.compile(CompileConfig.builder()
-                    .recursionLimit(frameworkRecursionLimit())
+                    .recursionLimit(maxIterations > 0 ? maxIterations * 3 + 10 : 300)
                     .withLifecycleListener(new ReActLifecycleListener())
                     .build());
         } catch (Exception e) {
@@ -711,21 +657,6 @@ public class AgentGraphBuilder {
      */
     public ChatModel buildRuntimeChatModel(ModelConfigEntity runtimeModel) {
         return buildRuntimeChatModel(runtimeModel, this.retryTemplate);
-    }
-
-    /**
-     * Resolve the user-facing locale used for sidecar caption prompts.
-     * Reads {@code language} from system settings; falls back to
-     * {@code zh-CN} so CN deployments stay consistent with the chat UI.
-     */
-    private java.util.Locale resolveLocale() {
-        try {
-            String lang = systemSettingService.getLanguage();
-            if (lang == null || lang.isBlank()) return java.util.Locale.SIMPLIFIED_CHINESE;
-            return java.util.Locale.forLanguageTag(lang);
-        } catch (Exception e) {
-            return java.util.Locale.SIMPLIFIED_CHINESE;
-        }
     }
 
     /**
@@ -842,16 +773,6 @@ public class AgentGraphBuilder {
         if (!preferred.isEmpty()) {
             providers = reorderByPreferences(providers, preferred);
             log.debug("[LlmFailover] agent={} preferences={} -> chain head reordered", agentId, preferred);
-        }
-
-        // RFC-090 §9.2 调整 C — second-pass reorder: lift providers
-        // that satisfy the bound-skill capability set (vision / video /
-        // audio) ahead of those that don't. Stable otherwise so the
-        // user-preferred order still wins among capable providers.
-        try {
-            providers = new ArrayList<>(providerRouter.reorderForCapabilities(agentId, providers));
-        } catch (Exception e) {
-            log.debug("[ProviderRouter] chain reorder failed: {}", e.getMessage());
         }
 
         List<vip.mate.llm.failover.FallbackEntry> chain = new ArrayList<>();
@@ -977,36 +898,22 @@ public class AgentGraphBuilder {
 
     // ==================== Prompt 构建 ====================
 
-    private String buildEnhancedPrompt(AgentEntity entity, boolean builtinSearchEnabled,
-                                       Set<String> boundTools, Integer maxInputTokens) {
-        // The agent's own systemPrompt encodes its identity (role / goal /
-        // backstory). The memory block from workspace files (AGENTS.md, SOUL.md,
-        // PROFILE.md, MEMORY.md, ...) augments that identity with durable
-        // context. Both are independently optional, but when both exist they
-        // must be joined — earlier this branch picked memory and silently
-        // dropped the identity prompt, so editor-side identity changes never
-        // reached runtime if the agent had any workspace files.
-        String identityPrompt = entity.getSystemPrompt() != null ? entity.getSystemPrompt().trim() : "";
+    private String buildEnhancedPrompt(AgentEntity entity, boolean builtinSearchEnabled, String runtimeMode, boolean toolsEnabled) {
+        // 通过 MemoryManager 从所有 MemoryProvider 组装系统提示词（快照冻结）
         String memoryPrompt = memoryManager.buildSystemPromptBlock(entity.getId());
-        StringBuilder basePromptBuilder = new StringBuilder();
-        if (!identityPrompt.isEmpty()) {
-            basePromptBuilder.append(identityPrompt);
-        }
-        if (memoryPrompt != null && !memoryPrompt.isBlank()) {
-            if (basePromptBuilder.length() > 0) {
-                basePromptBuilder.append("\n\n");
-            }
-            basePromptBuilder.append(memoryPrompt);
-        }
-        String basePrompt = basePromptBuilder.toString();
+        String basePrompt = (memoryPrompt != null && !memoryPrompt.isBlank())
+                ? memoryPrompt
+                : (entity.getSystemPrompt() != null ? entity.getSystemPrompt() : "");
 
         // 使用 skill runtime 构建技能增强（per-agent 绑定过滤）
         Set<Long> boundSkillIds = agentBindingService.getBoundSkillIds(entity.getId());
-        String skillEnhancement = skillRuntimeService.buildSkillPromptEnhancement(
-                boundSkillIds, boundTools, maxInputTokens, entity.getId());
+        String skillEnhancement = skillRuntimeService.buildSkillPromptEnhancement(boundSkillIds);
+        String templateGuidance = buildTemplateRuntimeGuidance(entity);
 
-        // 工具调用指导
-        String toolGuidance = """
+        String toolGuidance;
+        if (toolsEnabled) {
+            // 工具调用指导（完整版）
+            toolGuidance = """
 
                 ## Runtime Context
                 - Current Agent ID: %s
@@ -1060,6 +967,14 @@ public class AgentGraphBuilder {
 
                 ## Tool Usage Guidelines
                 When you have available tools, use them to access local system information, files, or execute commands.
+                Prefer explicit tools / skills over fallback reasoning or filename guessing.
+                The runtime may inject a <context-router> block with a cached project/material index. Reuse that shared index before repeating broad directory scans.
+                If a directory is involved and no cached index covers it, list or index it first; if a skill already covers the workflow, use the skill/tool path before inventing a manual workaround.
+                If the user explicitly specifies a local directory/folder/path as the context scope, treat that directory as the primary context boundary and prefer the cached index first, then the stable local chain only when the cache is missing or too coarse.
+                When you need to rank or narrow directory materials, first use any search/filter/ranking capability already exposed by the current runtime.
+                If no richer search/filter capability is available, use `filter_directory_materials(...)` as the lightweight fallback instead of ad-hoc filename guessing.
+                When source materials are large, first build a compact index/outline and only pull the files or snippets needed for the current task.
+                Do not dump whole folders or long raw materials into context unless the user explicitly needs a full transcript.
                 Do not assume you cannot access local resources - try calling the appropriate tool first.
                 If a tool requires approval due to security policies, the system will prompt the user for confirmation.
                 Only state you cannot access something if no relevant tool is available.
@@ -1073,6 +988,16 @@ public class AgentGraphBuilder {
                 5. Treat each sub-task's result as equally important regardless of processing order
 
                 ## File Reading Guidelines
+
+                **Directories** (reuse cached project/material index first; use list_directory / index_directory_materials only when needed):
+                For folders inside the current workspace, first check the injected <context-router> Project cues / Cached material index.
+                Do not call `list_directory` or `index_directory_materials` again for the same broad workspace/project if the cached index already answers the directory/material scope.
+                Call `list_directory(directoryPath="...")` only when the user asks to refresh/sync, the cached index is missing/stale, or you need a specific subfolder/file list not present in the cache.
+                For large material folders without a useful cache, prefer `index_directory_materials(directoryPath="...")` to build a compact index before reading any files.
+                If the user explicitly names a folder/path as the source scope, keep that folder as the default boundary unless the user broadens it.
+                If you already know the current task/query and need a small shortlist, prefer an existing search/filter skill/tool; otherwise use `filter_directory_materials(directoryPath="...", query="...")`.
+                Stable local order: list/index -> existing search/filter skill/tool -> `filter_directory_materials(...)` fallback -> read/extract only the needed files/snippets.
+                If you need nested materials, use recursive listing or indexing instead of guessing filenames or probing shell paths.
 
                 **Text Files** (use read_file):
                 For .txt, .md, .json, .yaml, .csv, .log, .py, .java, .js, .html, .xml, .sql, .conf, .ini, .toml files.
@@ -1092,34 +1017,253 @@ public class AgentGraphBuilder {
 
                 If you try to read a PDF/Office file with read_file, you will get binary garbage or an error.
                 """.formatted(entity.getId());
+        } else {
+            // 降级模式：移除所有工具指导，避免模型被误导后输出工具错误分析
+            toolGuidance = """
 
-        // Web-search vs browser_use priority guidance — emitted unconditionally so the rule
-        // also reaches OpenAI-compatible / Anthropic / Gemini / DeepSeek / Ollama agents that
-        // do not have builtin search. Issue #40: without this rule the model treats
-        // browser_use as a search tool and gets stuck in a Playwright launch loop on Windows.
-        String searchGuidance = """
+                ## Runtime Context
+                - Current Agent ID: %s
+
+                ## Capability Notice
+                当前模型不支持工具调用（function calling），你没有可用工具。
+                请直接根据已有知识回答用户问题，不要尝试调用任何工具，也不要在回答中分析工具不可用或配置错误的原因。
+                如果用户的问题明显需要工具支持才能完成，请在回答末尾礼貌地提醒用户：
+                「当前模型不支持工具调用，仅可进行纯文本问答。如需使用工具，请切换到支持工具调用的模型（如 qwen3、qwen2.5:7b+、llama3.1:8b+、mistral-nemo 等）。」
+                """.formatted(entity.getId());
+        }
+
+        String searchGuidance = "";
+        if (builtinSearchEnabled) {
+            searchGuidance = """
 
                 ## Web Search Capability
 
-                ### Tool Priority
-                - For plain web search or fetching public page content, call the `search` tool. It supports advanced parameters: `freshness` (day/week/month/year), `language` (zh-CN/en), `count` (1-10).
-                - Call `browser_use` ONLY when you need to interact with a page (click, fill forms, screenshot, run JS, follow a logged-in flow). Do NOT use `browser_use` as a search alternative.
-                - **NEVER** call both `browser_use` and `search` for the same query.
+                You have **dual search capability**:
+                1. **Built-in search** (preferred): Your responses automatically incorporate live web search results from the model provider. For most queries, answer directly — your response already includes real-time search data.
+                2. **search tool** (supplementary): Available as a fallback. Supports advanced parameters: `freshness` (day/week/month/year), `language` (zh-CN/en), `count` (1-10).
+
+                ### Priority Rules
+                - **Default**: Answer directly using built-in search. Do NOT say you cannot search — your replies already include live results.
+                - **Use search tool** ONLY when: you need precise time filtering (e.g., user asks for "yesterday's news" → call search with freshness=day), specific language results, or your built-in results feel insufficient.
+                - **NEVER** call both browser_use and search tool for the same query.
                 - When searching for news, use the standard format: `📰 [Category] Title — Source | Time + Summary`, up to 5 results per category.
                 """;
-        if (builtinSearchEnabled) {
-            searchGuidance += """
-
-                ### Built-in Search (preferred when available)
-                Your responses automatically incorporate live web search results from the model provider. For most queries, answer directly — your reply already includes real-time search data. Do NOT say you cannot search.
-                Use the `search` tool ONLY when you need precise time filtering (e.g., "yesterday's news" → freshness=day), a specific language, or when built-in results feel insufficient.
-                """;
         }
+
+            String codingGuidance = "";
+            if (ConversationService.RUNTIME_MODE_CODING.equalsIgnoreCase(runtimeMode)) {
+                codingGuidance = """
+
+                ## Coding Agent Profile
+                You are operating in coding mode for the current workspace/project.
+
+                Preferred workflow:
+                1. Explore the codebase and identify the minimum set of relevant files.
+                2. Make or refine a short plan before edits when the task is multi-step.
+                3. Implement narrowly scoped code changes that preserve existing style and APIs unless requested otherwise.
+                4. Run targeted verification commands or tests when a safe validation path exists.
+                5. Summarize what changed, what was validated, and any remaining risk.
+
+                Coding rules:
+                - Prefer workspace/project-relative operations; do not write outside workspace boundaries unless explicitly approved.
+                - Read before editing when modifying existing files.
+                - Prefer small, reviewable edits over large rewrites.
+                - After changing code, proactively inspect command output or test results before declaring success.
+                - If validation cannot run, clearly state what remains unverified.
+                """;
+            }
 
         // Wiki 知识库上下文注入
         String wikiContext = wikiContextService.buildWikiContext(entity.getId());
 
-        return basePrompt + skillEnhancement + toolGuidance + searchGuidance + wikiContext;
+            return basePrompt + templateGuidance + skillEnhancement + toolGuidance + searchGuidance + codingGuidance + wikiContext;
+    }
+
+    private String buildTemplateRuntimeGuidance(AgentEntity entity) {
+        if (!StringUtils.hasText(entity.getTemplateMetadataJson())) {
+            return "";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(entity.getTemplateMetadataJson());
+            JsonNode template = root.path("template");
+            if (template.isMissingNode() || template.isNull()) {
+                return "";
+            }
+
+            StringBuilder sb = new StringBuilder("""
+
+                ## Template Runtime Binding
+                This agent was created from a built-in template. Treat these bindings as active runtime constraints, not decorative metadata.
+                """);
+
+            appendLine(sb, "Template", firstText(template.path("templateId"), entity.getTemplateId()));
+            appendLine(sb, "Version", firstText(template.path("version"), entity.getTemplateVersion()));
+            appendLine(sb, "Category", firstText(template.path("category"), entity.getTemplateCategory()));
+            appendLine(sb, "Domain", firstText(template.path("domain"), entity.getTemplateDomain()));
+
+            JsonNode profile = template.path("agentProfile");
+            if (profile.isObject()) {
+                appendLine(sb, "Profile", firstText(profile.path("profileId"), entity.getProfileId()));
+                appendLine(sb, "Role", profile.path("role").asText(null));
+                appendLine(sb, "Tone", profile.path("tone").asText(null));
+            }
+
+            JsonNode capabilityPack = template.path("capabilityPack");
+            if (capabilityPack.isObject()) {
+                appendLine(sb, "Capability Pack", firstText(capabilityPack.path("packId"), entity.getCapabilityPackId()));
+                appendArray(sb, "Capabilities", capabilityPack.path("capabilities"), 12);
+            }
+
+            JsonNode runtime = template.path("runtime");
+            if (runtime.isObject()) {
+                appendLine(sb, "Preferred Runtime Mode", runtime.path("preferredMode").asText(null));
+                appendArray(sb, "Allowed Runtime Modes", runtime.path("allowedModes"), 8);
+            }
+
+            JsonNode policy = template.path("defaultWorkspacePolicy");
+            if (policy.isObject()) {
+                sb.append("\nTemplate policy guidance:\n");
+                appendLine(sb, "Sandbox", policy.path("sandboxMode").asText(null));
+                appendLine(sb, "Approval", policy.path("approvalPolicy").asText(null));
+                appendLine(sb, "Network", policy.path("networkPolicy").asText(null));
+                appendArray(sb, "Allowed actions", policy.path("allowedActions"), 12);
+                appendArray(sb, "Denied actions", policy.path("deniedActions"), 12);
+                appendArray(sb, "Allowed paths", policy.path("allowedPaths"), 12);
+                appendArray(sb, "Denied paths", policy.path("deniedPaths"), 12);
+            }
+
+            JsonNode contextSources = template.path("contextSources");
+            JsonNode legacyKnowledge = template.path("knowledgeBindings");
+            if (contextSources.isObject() || legacyKnowledge.isObject()) {
+                sb.append("\nContext source guidance:\n");
+                JsonNode knowledgeBases = contextSources.path("knowledgeBases");
+                if (knowledgeBases.isObject()) {
+                    appendLine(sb, "Knowledge base mode", knowledgeBases.path("mode").asText(null));
+                    appendLine(sb, "Knowledge base note", knowledgeBases.path("description").asText(null));
+                } else if (legacyKnowledge.isObject()) {
+                    appendArray(sb, "Suggested knowledge bases", legacyKnowledge.path("selectable"), 12);
+                    appendArray(sb, "Optional knowledge bases", legacyKnowledge.path("optional"), 12);
+                }
+                JsonNode sessionTemporary = contextSources.isObject()
+                        ? contextSources.path("sessionTemporary")
+                        : legacyKnowledge.path("sessionTemporary");
+                if (sessionTemporary.isObject() && sessionTemporary.path("enabled").asBoolean(false)) {
+                    sb.append("- Session temporary context is enabled; prefer session materials before persistent knowledge when relevant.\n");
+                }
+                JsonNode projectDerived = contextSources.isObject()
+                        ? contextSources.path("projectDerived")
+                        : legacyKnowledge.path("projectDerived");
+                if (projectDerived.isObject() && projectDerived.path("enabled").asBoolean(false)) {
+                    appendArray(sb, "Project-derived context sources", projectDerived.path("sources"), 16);
+                }
+            }
+
+            appendToolNames(sb, template.path("tools"), 16);
+
+            if ("builtin.teacher_exam_assistant".equals(firstText(template.path("templateId"), entity.getTemplateId()))) {
+                sb.append("""
+
+                    Teacher exam workflow:
+                    - In plan mode, exam-generation requests are gated by the runtime: first produce a confirmed exam plan, then generate the paper only after user confirmation.
+                    - Ordinary Q&A, usage guidance, material summaries, and concept explanation should answer directly without forcing confirmation.
+                    - After confirmation, output with these exact Markdown sections: ## 试题, ## 参考答案, ## 采分点, ## 命题质量审核, ## 来源依据.
+                    - The questions section must come first and should not be mixed with answers or scoring rubrics.
+                    - The runtime injects a cached project/material index for the active workspace. Reuse it as shared context across consecutive teacher turns; do not repeatedly call `list_directory` / `index_directory_materials` for the same broad folder.
+                    - Local teaching folders inside the current workspace can be explored with `list_directory` or `index_directory_materials` only when the cached index is missing, the user explicitly asks to refresh/sync, or a specific subfolder/file list is needed; then read file-by-file with `read_file` / document extraction tools. Do not guess filenames.
+                        - If the active runtime already exposes a search/filter skill or tool, use it first to narrow candidate materials. If not, use `filter_directory_materials(...)` as the lightweight shortlist step.
+                    - When the user names a local folder as the source scope, treat that folder as the primary context boundary. Template examples and seed materials are only style references unless they are explicitly bound as knowledge sources.
+                    - Respect context budget: first extract a compact materials index (目录、文件类型、主题、可用范围), then按当前题目目标按需拉取相关文件和片段，不要把整批教材原文一次性塞入上下文。
+                    - For reusable materials, prefer Wiki/Knowledge Base scan -> process -> bind to Agent -> use in chat.
+                    - If directory materials are outside the current workspace boundary or permissions block direct reads, stop retrying shell/path probes and clearly ask the user to approve the required action or import/bind the knowledge base.
+                    - If the preferred path is blocked or materials are insufficient, stay goal-oriented: offer the closest feasible continuation path (approve access, use bound knowledge bases, use session materials, narrow to a subfolder, or ask for one minimal clarification) instead of ending with a blunt failure.
+                        - For export, first use whatever export-capable tool/skill is actually exposed by the current runtime. Prefer built-in `renderDocxFromFile` / `renderDocxFromFiles` / `renderDocx` or an equivalent bound document skill when available.
+                        - If the user does not specify an export path, default to the current project/workspace `output/` directory and create it when needed.
+                        - Only fall back to Markdown/JSON delivery when no export-capable tool or skill is currently available.
+                    """);
+            }
+
+            JsonNode qualityGates = template.path("qualityGates");
+            if (qualityGates.isObject()) {
+                sb.append("\nQuality gates:\n");
+                qualityGates.fields().forEachRemaining(entry -> {
+                    JsonNode gate = entry.getValue();
+                    if (!gate.isObject() || gate.path("enabled").asBoolean(false)) {
+                        String rule = gate.path("rule").asText("");
+                        sb.append("- ").append(entry.getKey());
+                        if (StringUtils.hasText(rule)) {
+                            sb.append(": ").append(rule);
+                        }
+                        sb.append("\n");
+                    }
+                });
+            }
+
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("Failed to build template runtime guidance for agent {}", entity.getId(), e);
+            return "";
+        }
+    }
+
+    private String firstText(JsonNode node, String fallback) {
+        if (node != null && node.isValueNode() && StringUtils.hasText(node.asText())) {
+            return node.asText();
+        }
+        return fallback;
+    }
+
+    private void appendLine(StringBuilder sb, String label, String value) {
+        if (StringUtils.hasText(value)) {
+            sb.append("- ").append(label).append(": ").append(value).append("\n");
+        }
+    }
+
+    private void appendToolNames(StringBuilder sb, JsonNode node, int limit) {
+        if (node == null || !node.isArray() || node.isEmpty()) {
+            return;
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (values.size() >= limit) {
+                break;
+            }
+            String name = item.path("name").asText(null);
+            if (StringUtils.hasText(name)) {
+                values.add(name);
+            }
+        }
+        if (!values.isEmpty()) {
+            sb.append("\nDeclared template tools:\n");
+            sb.append("- Tools: ").append(String.join(", ", values));
+            if (node.size() > values.size()) {
+                sb.append(", ...");
+            }
+            sb.append("\n");
+        }
+    }
+
+    private void appendArray(StringBuilder sb, String label, JsonNode node, int limit) {
+        if (node == null || !node.isArray() || node.isEmpty()) {
+            return;
+        }
+        List<String> values = new ArrayList<>();
+        int count = 0;
+        for (JsonNode item : node) {
+            if (count >= limit) {
+                break;
+            }
+            if (item.isValueNode() && StringUtils.hasText(item.asText())) {
+                values.add(item.asText());
+                count++;
+            }
+        }
+        if (!values.isEmpty()) {
+            sb.append("- ").append(label).append(": ").append(String.join(", ", values));
+            if (node.size() > values.size()) {
+                sb.append(", ...");
+            }
+            sb.append("\n");
+        }
     }
 
     // ==================== 模型选项构建 ====================
@@ -1211,16 +1355,6 @@ public class AgentGraphBuilder {
 
     /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
     public OpenAiApi buildOpenAiApi(ModelProviderEntity provider) {
-        return buildOpenAiApi(provider, null);
-    }
-
-    /**
-     * Overload that accepts a per-model read-timeout override (seconds).
-     * Threaded into both the sync RestClient and streaming WebClient so
-     * timeout behavior is consistent across blocking and streaming chat
-     * completions. Null falls back to the default 180s.
-     */
-    public OpenAiApi buildOpenAiApi(ModelProviderEntity provider, Integer readTimeoutOverride) {
         if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
             throw new MateClawException("err.agent.provider_not_configured", "Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
         }
@@ -1242,9 +1376,8 @@ public class AgentGraphBuilder {
         MultiValueMap<String, String> headers = buildOpenAiHeaders(kwargs);
         String completionsPath = resolveOpenAiCompletionsPath(baseUrl, kwargs);
         RestClient.Builder restClientBuilder = applyHttpTimeouts(
-                restClientBuilderProvider.getIfAvailable(RestClient::builder), readTimeoutOverride);
-        WebClient.Builder webClientBuilder = applyHttpTimeoutsToWebClient(
-                webClientBuilderProvider.getIfAvailable(WebClient::builder), readTimeoutOverride);
+                restClientBuilderProvider.getIfAvailable(RestClient::builder));
+        WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder);
 
         // Spring AI OpenAiApi 构造函数会先 set User-Agent 为 "spring-ai"，再 addAll 我们的 headers，
         // 导致自定义 User-Agent 被追加而非覆盖。因此对需要伪装客户端身份的 provider（如 kimi-code），
@@ -1601,59 +1734,12 @@ public class AgentGraphBuilder {
      * readTimeout=180s（覆盖 nginx 60s 网关超时 + 留足真实长响应余量；超时后由上层 retry 接管）。
      */
     private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder) {
-        return applyHttpTimeouts(builder, null);
-    }
-
-    /**
-     * Overload that accepts a per-model read-timeout override (seconds).
-     * Null falls back to the default 180s.
-     */
-    private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
-                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(10))
                 .build();
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
+        rf.setReadTimeout(Duration.ofSeconds(180));
         return builder.requestFactory(rf);
-    }
-
-    /**
-     * Apply equivalent timeouts to the WebClient that backs OpenAI-compatible
-     * STREAMING calls (chat completions with {@code stream:true}). The
-     * RestClient version above only protects synchronous HTTP — without this,
-     * the streaming code path uses the default {@code WebClient} which has
-     * neither connect nor read timeout, so a stalled provider can hang the
-     * call forever (observed: a single volcengine-plan request held the agent
-     * thread for 9+ minutes with no error, until the user manually pressed
-     * Stop). That kept the failover chain idle because nothing threw.
-     * <p>
-     * Uses {@link JdkClientHttpConnector} with the same {@link HttpClient} we
-     * already use for the RestClient so the dependency surface stays clean
-     * (reactor-netty is not on this project's classpath — Spring's webflux
-     * starter is excluded by design).
-     */
-    private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder) {
-        return applyHttpTimeoutsToWebClient(builder, null);
-    }
-
-    /**
-     * Overload with the same per-model override semantics as
-     * {@link #applyHttpTimeouts(RestClient.Builder, Integer)}.
-     */
-    private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder, Integer readTimeoutOverride) {
-        // Pin HTTP/1.1: many self-hosted OpenAI-compatible servers (vLLM, lmstudio,
-        // llama.cpp, ollama — all uvicorn/ASGI based) only speak HTTP/1.1 over
-        // cleartext and slam the socket on the JDK client's default H2C upgrade
-        // probe, surfacing as "header parser received no bytes" with no body sent.
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
-                .version(HttpClient.Version.HTTP_1_1)
-                .build();
-        org.springframework.http.client.reactive.JdkClientHttpConnector connector =
-                new org.springframework.http.client.reactive.JdkClientHttpConnector(httpClient);
-        connector.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
-        return builder.clientConnector(connector);
     }
 
     /**

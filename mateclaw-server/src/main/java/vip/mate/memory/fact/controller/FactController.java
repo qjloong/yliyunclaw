@@ -9,12 +9,15 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
 import vip.mate.memory.fact.model.FactContradictionEntity;
 import vip.mate.memory.fact.model.FactEntity;
 import vip.mate.memory.fact.projection.FactProjectionBuilder;
 import vip.mate.memory.fact.query.FactQueryService;
 import vip.mate.memory.fact.repository.FactContradictionMapper;
 import vip.mate.memory.fact.repository.FactMapper;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
@@ -41,6 +44,7 @@ public class FactController {
     private final FactProjectionBuilder projectionBuilder;
     private final WorkspaceFileService workspaceFileService;
     private final MemoryProperties properties;
+    private final MemoryWriteProvenancePublisher provenancePublisher;
 
     @Operation(summary = "List facts for an agent")
     @GetMapping
@@ -100,6 +104,13 @@ public class FactController {
                 content = content + "\n" + marker + "\n";
             }
             workspaceFileService.saveFile(agentId, filename, content);
+                provenancePublisher.publishRequired(agentId, null,
+                    MemorySurfaceType.FACT_MAINTENANCE,
+                    MemoryOperation.WRITE,
+                    filename,
+                    "forget-fact",
+                    content,
+                    Map.of("writer", "FactController", "factId", String.valueOf(factId), "userId", userId));
             // Rebuild projection from the UPDATED canonical content (not stale file object)
             // Forgotten section will be skipped by PatternEntityExtractor
             projectionBuilder.rebuildOne(agentId, filename, content);
@@ -152,6 +163,13 @@ public class FactController {
                 content = content + "\n" + marker + "\n";
             }
             workspaceFileService.saveFile(agentId, filename, content);
+                provenancePublisher.publishRequired(agentId, null,
+                    MemorySurfaceType.FACT_MAINTENANCE,
+                    MemoryOperation.WRITE,
+                    filename,
+                    "fact-feedback",
+                    content,
+                    Map.of("writer", "FactController", "factId", String.valueOf(factId), "feedback", kind));
             // Rebuild projection from updated canonical — trust will be derived from metadata
             projectionBuilder.rebuildOne(agentId, filename, content);
         }

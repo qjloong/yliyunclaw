@@ -1,10 +1,15 @@
 package vip.mate.wiki.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.repository.AgentMapper;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.repository.WikiKnowledgeBaseMapper;
 
@@ -21,6 +26,8 @@ import java.util.List;
 public class WikiKnowledgeBaseService {
 
     private final WikiKnowledgeBaseMapper kbMapper;
+    private final AgentMapper agentMapper;
+    private final ObjectMapper objectMapper;
 
     /**
      * RFC-051 PR-2: optional system-page scaffold (overview / log). Marked
@@ -73,15 +80,56 @@ public class WikiKnowledgeBaseService {
                         .orderByDesc(WikiKnowledgeBaseEntity::getUpdateTime));
     }
 
+    public WikiKnowledgeBaseEntity findByWorkspaceAndExternalKey(Long workspaceId, String externalKey) {
+        if (workspaceId == null || externalKey == null || externalKey.isBlank()) {
+            return null;
+        }
+        return kbMapper.selectOne(
+                new LambdaQueryWrapper<WikiKnowledgeBaseEntity>()
+                        .eq(WikiKnowledgeBaseEntity::getWorkspaceId, workspaceId)
+                        .eq(WikiKnowledgeBaseEntity::getExternalKey, externalKey.trim())
+                        .last("LIMIT 1"));
+    }
+
+    public WikiKnowledgeBaseEntity findByWorkspaceAndName(Long workspaceId, String name) {
+        if (workspaceId == null || name == null || name.isBlank()) {
+            return null;
+        }
+        return kbMapper.selectOne(
+                new LambdaQueryWrapper<WikiKnowledgeBaseEntity>()
+                        .eq(WikiKnowledgeBaseEntity::getWorkspaceId, workspaceId)
+                        .eq(WikiKnowledgeBaseEntity::getName, name.trim())
+                        .last("LIMIT 1"));
+    }
+
     /**
      * 获取 Agent 可访问的知识库：Agent 专属 KB + 公共 KB（agent_id IS NULL）
      */
     public List<WikiKnowledgeBaseEntity> listByAgentId(Long agentId) {
+        AgentEntity agent = agentId != null ? agentMapper.selectById(agentId) : null;
+        List<Long> boundIds = parseKnowledgeBaseIds(agent != null ? agent.getKnowledgeBaseIdsJson() : null);
+        if (agent == null || boundIds.isEmpty()) {
+            return List.of();
+        }
         return kbMapper.selectList(
                 new LambdaQueryWrapper<WikiKnowledgeBaseEntity>()
-                        .and(w -> w.eq(WikiKnowledgeBaseEntity::getAgentId, agentId)
-                                .or().isNull(WikiKnowledgeBaseEntity::getAgentId))
+                        .in(WikiKnowledgeBaseEntity::getId, boundIds)
+                        .eq(WikiKnowledgeBaseEntity::getWorkspaceId, agent.getWorkspaceId())
                         .orderByDesc(WikiKnowledgeBaseEntity::getUpdateTime));
+    }
+
+    private List<Long> parseKnowledgeBaseIds(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(raw, new TypeReference<List<Long>>() {}).stream()
+                    .filter(id -> id != null && id > 0)
+                    .distinct()
+                    .toList();
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     public WikiKnowledgeBaseEntity getById(Long id) {
@@ -95,11 +143,25 @@ public class WikiKnowledgeBaseService {
 
     @Transactional
     public WikiKnowledgeBaseEntity create(String name, String description, Long agentId, Long workspaceId) {
+        return create(name, description, agentId, workspaceId, null);
+    }
+
+    @Transactional
+    public WikiKnowledgeBaseEntity create(String name, String description, Long agentId,
+                                          Long workspaceId, String externalKey) {
+        return create(name, description, agentId, workspaceId, externalKey, null);
+    }
+
+    @Transactional
+    public WikiKnowledgeBaseEntity create(String name, String description, Long agentId,
+                                          Long workspaceId, String externalKey, Long creatorUserId) {
         WikiKnowledgeBaseEntity entity = new WikiKnowledgeBaseEntity();
         entity.setName(name);
+        entity.setExternalKey(externalKey);
         entity.setDescription(description);
         entity.setAgentId(agentId);
         entity.setWorkspaceId(workspaceId);
+        entity.setCreatorUserId(creatorUserId);
         entity.setConfigContent(DEFAULT_CONFIG);
         entity.setStatus("active");
         entity.setPageCount(0);
@@ -115,6 +177,12 @@ public class WikiKnowledgeBaseService {
 
     @Transactional
     public WikiKnowledgeBaseEntity update(Long id, String name, String description, Long agentId) {
+        return update(id, name, description, agentId, null, false);
+    }
+
+    @Transactional
+    public WikiKnowledgeBaseEntity update(Long id, String name, String description, Long agentId,
+                                          String externalKey, boolean updateExternalKey) {
         WikiKnowledgeBaseEntity entity = kbMapper.selectById(id);
         if (entity == null) {
             throw new IllegalArgumentException("Knowledge base not found: " + id);
@@ -122,6 +190,7 @@ public class WikiKnowledgeBaseService {
         if (name != null) entity.setName(name);
         if (description != null) entity.setDescription(description);
         if (agentId != null) entity.setAgentId(agentId);
+        if (updateExternalKey) entity.setExternalKey(externalKey);
         kbMapper.updateById(entity);
         return entity;
     }

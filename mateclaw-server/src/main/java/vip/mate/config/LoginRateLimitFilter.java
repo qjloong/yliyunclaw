@@ -38,6 +38,10 @@ public class LoginRateLimitFilter implements Filter {
 
         if ("POST".equalsIgnoreCase(httpReq.getMethod()) && LOGIN_PATH.equals(httpReq.getRequestURI())) {
             String ip = getClientIp(httpReq);
+            if (isLoopbackIp(ip)) {
+                chain.doFilter(request, response);
+                return;
+            }
             AtomicInteger count = attempts.get(ip, k -> new AtomicInteger(0));
             int current = count.incrementAndGet();
 
@@ -64,5 +68,16 @@ public class LoginRateLimitFilter implements Filter {
             return realIp;
         }
         return request.getRemoteAddr();
+    }
+
+    private static boolean isLoopbackIp(String ip) {
+        if (ip == null || ip.isBlank()) {
+            return false;
+        }
+        String normalized = ip.trim();
+        return "127.0.0.1".equals(normalized)
+                || "::1".equals(normalized)
+                || "0:0:0:0:0:0:0:1".equals(normalized)
+                || "localhost".equalsIgnoreCase(normalized);
     }
 }

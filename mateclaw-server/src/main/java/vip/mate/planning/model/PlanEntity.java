@@ -21,6 +21,9 @@ public class PlanEntity {
     /** 关联的 Agent ID（字符串） */
     private String agentId;
 
+    /** 关联的会话 ID（用于审批 replay 恢复正确计划） */
+    private String conversationId;
+
     /** 任务目标 */
     private String goal;
 

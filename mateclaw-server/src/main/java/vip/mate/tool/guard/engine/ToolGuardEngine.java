@@ -67,6 +67,8 @@ public class ToolGuardEngine {
             }
         }
 
+        allFindings = policyResolver.augmentFindings(allFindings, context);
+
         // 通过 policy resolver 产出最终裁决
         GuardDecision decision = policyResolver.resolve(allFindings, context);
         GuardSeverity maxSeverity = computeMaxSeverity(allFindings);

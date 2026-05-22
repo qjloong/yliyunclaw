@@ -136,6 +136,13 @@
         <div class="model-add-box">
           <div class="form-grid">
             <div class="form-group">
+              <label class="form-label">{{ t('settings.model.fields.modelType') }}</label>
+              <select v-model="modelForm.modelType" class="form-input">
+                <option value="chat">{{ t('settings.model.modelTypeChat') }}</option>
+                <option value="embedding">{{ t('settings.model.modelTypeEmbedding') }}</option>
+              </select>
+            </div>
+            <div class="form-group">
               <label class="form-label">{{ t('settings.model.fields.modelId') }}</label>
               <input v-model="modelForm.id" class="form-input" />
             </div>
@@ -143,6 +150,9 @@
               <label class="form-label">{{ t('settings.model.fields.modelDisplayName') }}</label>
               <input v-model="modelForm.name" class="form-input" />
             </div>
+          </div>
+          <div v-if="modelForm.modelType === 'embedding'" class="model-add-hint">
+            {{ t('settings.model.embeddingModalHint') }}
           </div>
           <div class="modal-footer compact">
             <button class="btn-primary" @click="$emit('addModel')">{{ t('settings.model.addModel') }}</button>
@@ -163,7 +173,7 @@ const { t } = useI18n()
 const props = defineProps<{
   show: boolean
   provider: ProviderInfo | null
-  modelForm: { id: string; name: string }
+  modelForm: { id: string; name: string; modelType: 'chat' | 'embedding' }
   discovering: boolean
   discoverResult: DiscoverResult | null
   selectedNewModelIds: string[]
@@ -284,10 +294,11 @@ defineEmits<{
 .model-list-id { font-size: 12px; color: var(--mc-text-secondary); }
 .model-list-actions { display: flex; align-items: center; gap: 8px; }
 .model-add-box { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--mc-border-light); }
-.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .form-label { display: block; font-size: 13px; color: var(--mc-text-secondary); margin-bottom: 6px; }
 .form-input { width: 100%; border: 1px solid var(--mc-border); border-radius: 10px; padding: 10px 12px; font-size: 14px; background: var(--mc-bg-sunken); color: var(--mc-text-primary); }
 .form-input:focus { outline: none; border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.1); }
+.model-add-hint { margin-top: 10px; font-size: 12px; color: var(--mc-text-secondary); line-height: 1.6; }
 
 .provider-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 600; }
 .provider-badge.builtin { background: var(--mc-primary-bg); color: var(--mc-primary); }
@@ -296,4 +307,8 @@ defineEmits<{
 .model-test-result { margin-top: 4px; font-size: 11px; }
 .model-test-result.success { color: var(--mc-primary); }
 .model-test-result.error { color: var(--mc-danger); }
+
+@media (max-width: 900px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
 </style>

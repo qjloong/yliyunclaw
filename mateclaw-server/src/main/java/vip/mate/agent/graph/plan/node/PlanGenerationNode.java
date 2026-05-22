@@ -4,12 +4,17 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.anthropic.AnthropicChatModel;
+import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.util.StringUtils;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
@@ -23,6 +28,8 @@ import vip.mate.planning.service.PlanningService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -46,6 +53,18 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 public class PlanGenerationNode implements NodeAction {
+
+    private static final int TRIAGE_FAST_PATH_MAX_CHARS = 220;
+    private static final Pattern STRUCTURED_MULTI_STEP_PATTERN = Pattern.compile(
+        "(?is)(?:^|\\n)\\s*(?:[-*•]|\\d+[.)、])\\s+");
+    private static final Pattern EXPLICIT_MULTI_STEP_PATTERN = Pattern.compile(
+        "(?is)(?:"
+            + "\\bfirst\\b.{0,40}\\b(?:then|finally|after(?:\\s+that)?)\\b"
+            + "|\\bstep\\s*[1-9]"
+            + "|\\b(?:compare|contrast|versus|vs\\.?)\\b"
+            + "|先.{0,40}(?:再|然后|最后)"
+            + "|(?:分别|逐个|依次|一步一步|分步骤|多步|对比|比较)"
+            + ")");
 
     private final ChatModel chatModel;
     private final PlanningService planningService;
@@ -141,6 +160,16 @@ public class PlanGenerationNode implements NodeAction {
                     .build();
         }
 
+                if (shouldSkipSilentTriage(goal)) {
+                    log.info("[PlanGeneration] Fast-path single-step plan for likely ordinary request: {}",
+                        goal.length() > 100 ? goal.substring(0, 100) + "..." : goal);
+                    events.add(GraphEventPublisher.perfSummary("triage", Map.of(
+                        "triage_skipped", true,
+                        "strategy", "single_step_fast_path"
+                    )));
+                    return createSingleStepPlan(agentId, conversationId, goal, events, "plan_generated");
+                }
+
         try {
             // PLANNING_PROMPT is the sole system message; we deliberately do NOT
             // concatenate the agent's full systemPrompt (wiki / skill / memory guidance),
@@ -178,7 +207,7 @@ public class PlanGenerationNode implements NodeAction {
             BeanOutputConverter<TriageResult> converter = new BeanOutputConverter<>(TriageResult.class);
             promptMessages.add(new UserMessage(converter.getFormat()));
 
-            Prompt prompt = new Prompt(promptMessages);
+            Prompt prompt = buildNoThinkingPrompt(promptMessages);
 
             // Broadcast a lightweight progress token so the frontend shows activity
             // during the silent triage call (typically 1-3 s).
@@ -201,7 +230,7 @@ public class PlanGenerationNode implements NodeAction {
                     retryMessages.add(promptMessages.get(0));
                     retryMessages.addAll(compactedMessages);
                     result = streamingHelper.streamCallSilent(
-                            chatModel, new Prompt(retryMessages), conversationId, "plan_generation_compact_retry");
+                            chatModel, buildNoThinkingPrompt(retryMessages), conversationId, "plan_generation_compact_retry");
                 }
             }
 
@@ -251,7 +280,7 @@ public class PlanGenerationNode implements NodeAction {
                 steps = List.of(goal);
             }
 
-            var plan = planningService.createPlan(agentId, goal, steps);
+            var plan = planningService.createPlan(agentId, conversationId, goal, steps);
             log.info("[PlanGeneration] Plan created: id={}, steps={} ({})",
                     plan.getId(), steps.size(), steps.size() == 1 ? "single-step" : "multi-step");
 
@@ -277,7 +306,7 @@ public class PlanGenerationNode implements NodeAction {
             // answer. This preserves tool access on the failure path; the previous
             // "direct answer" fallback silently degraded tool-requiring tasks.
             try {
-                var plan = planningService.createPlan(agentId, goal, List.of(goal));
+                var plan = planningService.createPlan(agentId, conversationId, goal, List.of(goal));
                 events.add(GraphEventPublisher.planCreated(plan.getId(), List.of(goal)));
                 return PlanStateAccessor.output()
                         .needsPlanning(true)
@@ -292,12 +321,72 @@ public class PlanGenerationNode implements NodeAction {
                 log.error("[PlanGeneration] Single-step fallback persistence also failed: {}", persistErr.getMessage());
                 return PlanStateAccessor.output()
                         .needsPlanning(false)
-                        .directAnswer("抱歉，我暂时无法完成任务分流，请重试或换一种方式描述任务。")
+                    .directAnswer("当前任务分流遇到内部问题，但仍建议继续推进：请重试一次；若仍失败，可改为明确说明要读取的目录/文件、是否允许使用现有知识库/会话材料，或先让我基于现有材料生成一版结果。")
                         .currentPhase("direct_answer")
                         .events(events)
                         .build();
             }
         }
+    }
+
+    private boolean shouldSkipSilentTriage(String goal) {
+        if (!StringUtils.hasText(goal)) {
+            return false;
+        }
+        String normalized = goal.trim();
+        if (normalized.length() > TRIAGE_FAST_PATH_MAX_CHARS) {
+            return false;
+        }
+        if (STRUCTURED_MULTI_STEP_PATTERN.matcher(normalized).find()) {
+            return false;
+        }
+        if (EXPLICIT_MULTI_STEP_PATTERN.matcher(normalized).find()) {
+            return false;
+        }
+        long questionCount = normalized.chars()
+                .filter(ch -> ch == '?' || ch == '？')
+                .count();
+        if (questionCount > 1) {
+            return false;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        return !(lower.contains("\n") && (lower.contains("然后") || lower.contains("then")));
+    }
+
+    private Map<String, Object> createSingleStepPlan(String agentId, String conversationId, String goal,
+                                                     List<GraphEventPublisher.GraphEvent> events,
+                                                     String phase) {
+        var plan = planningService.createPlan(agentId, conversationId, goal, List.of(goal));
+        events.add(GraphEventPublisher.planCreated(plan.getId(), List.of(goal)));
+        return PlanStateAccessor.output()
+                .needsPlanning(true)
+                .planId(plan.getId())
+                .planSteps(List.of(goal))
+                .planValid(true)
+                .currentStepIndex(0)
+                .currentPhase(phase)
+                .contentStreamed(true)
+                .events(events)
+                .build();
+    }
+
+    /**
+     * Triage is lightweight classification, not deep reasoning.
+     * Force no-thinking options so supported providers do not spend extra time
+     * on invisible chain-of-thought before the real execution starts.
+     */
+    private Prompt buildNoThinkingPrompt(List<Message> messages) {
+        ChatOptions options;
+        if (chatModel instanceof AnthropicChatModel) {
+            options = AnthropicChatOptions.builder()
+                    .thinking(org.springframework.ai.anthropic.api.AnthropicApi.ThinkingType.DISABLED, 0)
+                    .build();
+        } else {
+            OpenAiChatOptions openAiOptions = OpenAiChatOptions.builder().build();
+            openAiOptions.setStreamUsage(true);
+            options = openAiOptions;
+        }
+        return new Prompt(messages, options);
     }
 
 }

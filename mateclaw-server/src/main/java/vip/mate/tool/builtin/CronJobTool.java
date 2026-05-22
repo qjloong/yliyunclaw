@@ -34,16 +34,9 @@ public class CronJobTool {
     private final CronJobService cronJobService;
 
     @vip.mate.tool.ConcurrencyUnsafe("cron job creation persists to mate_cron_job; concurrent creates can race on name")
-    @Tool(description = "Create a scheduled task that asks the agent to do something at a specific time — "
-            + "the trigger message is sent to the LLM, which can use tools (search, weather, etc.) to produce the answer. "
-            + "Use this for queries like 'every morning give me a weather report' or 'daily news summary'. "
-            + "DO NOT use this for plain reminders where the user already wrote the exact text they want delivered — "
-            + "use create_reminder instead, otherwise the LLM will rephrase or echo the reminder. "
-            + "Use 5-field cron expressions: minute hour day month weekday. "
-            + "Examples: '0 9 * * *' = daily at 9am, '0 9 * * 1-5' = weekdays at 9am, '*/30 * * * *' = every 30 minutes. "
-            + "If a task with the same name already exists for this agent, the existing one is returned "
-            + "(deduplicated=true in the response) — do NOT call this tool again with a different name "
-            + "just to retry; check list_cron_jobs first if unsure.")
+    @Tool(description = "Create a scheduled task (cron job). The task will run automatically at the specified time "
+            + "and send the trigger message to the current agent. Use 5-field cron expressions: minute hour day month weekday. "
+            + "Examples: '0 9 * * *' = daily at 9am, '0 9 * * 1-5' = weekdays at 9am, '*/30 * * * *' = every 30 minutes.")
     public String create_cron_job(
             @ToolParam(description = "Task name, e.g. 'Daily AI News Summary'") String name,
             @ToolParam(description = "5-field cron expression: minute hour day month weekday") String cronExpression,
@@ -88,11 +81,7 @@ public class CronJobTool {
             // reflection until PR-2 adds them to CronJobDTO + CronJobEntity.
             propagateChannelBinding(dto, origin);
 
-            // RFC-083: stamp workspace from the originating ChatOrigin so the
-            // cron job is created in the agent's current workspace; fall back
-            // to the default workspace when origin is unscoped (legacy paths).
-            Long workspaceId = origin.workspaceId() != null ? origin.workspaceId() : 1L;
-            CronJobDTO created = cronJobService.create(dto, workspaceId);
+            CronJobDTO created = cronJobService.create(dto);
 
             JSONObject result = new JSONObject();
             result.set("success", true);
@@ -110,75 +99,11 @@ public class CronJobTool {
         }
     }
 
-    @vip.mate.tool.ConcurrencyUnsafe("reminder creation persists to mate_cron_job; concurrent creates can race on name")
-    @Tool(description = "Create a scheduled REMINDER. The reminder text is delivered to the user verbatim at the "
-            + "scheduled time — no LLM call, no rephrasing, no token cost. "
-            + "Use this when the user wants a notification with specific content (e.g. 'remind me at 3pm to leave for the meeting' → "
-            + "reminder text 'It's time to leave for the meeting'). "
-            + "DO NOT use this if the message requires the agent to compute or look something up — use create_cron_job for that. "
-            + "Use 5-field cron expressions: minute hour day month weekday. "
-            + "Examples: '0 15 * * *' = every day at 3pm, '0 9 * * 1' = every Monday at 9am. "
-            + "If a reminder with the same name already exists for this agent, the existing one is returned — "
-            + "do NOT retry with the same name to force a new row.")
-    public String create_reminder(
-            @ToolParam(description = "Reminder name, e.g. 'Meeting at Room 6'") String name,
-            @ToolParam(description = "5-field cron expression: minute hour day month weekday") String cronExpression,
-            @ToolParam(description = "The exact text to deliver to the user when the reminder fires, e.g. "
-                    + "'⏰ It's time to leave for the meeting at Room 6.'") String reminderText,
-            @ToolParam(description = "Timezone, default Asia/Shanghai. Examples: UTC, America/New_York", required = false) String timezone,
-            @Nullable ToolContext ctx) {
-
-        try {
-            ChatOrigin origin = ChatOrigin.from(ctx);
-            String conversationId = origin.conversationId() != null && !origin.conversationId().isEmpty()
-                    ? origin.conversationId()
-                    : ToolExecutionContext.conversationId();
-            Long agentId = origin.agentId();
-            if (agentId == null) {
-                log.warn("[CronJobTool] create_reminder invoked without an agentId in ChatOrigin " +
-                        "(conv={}); refusing to silently bind to a default agent.", conversationId);
-                return errorResult("Cannot create reminder: agent context unavailable.");
-            }
-
-            CronJobDTO dto = new CronJobDTO();
-            dto.setName(name);
-            dto.setCronExpression(cronExpression);
-            dto.setTriggerMessage(reminderText);
-            dto.setTimezone(timezone != null && !timezone.isBlank() ? timezone : "Asia/Shanghai");
-            dto.setAgentId(agentId);
-            dto.setTaskType("reminder");
-            dto.setEnabled(true);
-
-            propagateChannelBinding(dto, origin);
-
-            Long workspaceId = origin.workspaceId() != null ? origin.workspaceId() : 1L;
-            CronJobDTO created = cronJobService.create(dto, workspaceId);
-
-            JSONObject result = new JSONObject();
-            result.set("success", true);
-            result.set("jobId", created.getId());
-            result.set("name", created.getName());
-            result.set("taskType", "reminder");
-            result.set("cronExpression", created.getCronExpression());
-            result.set("timezone", created.getTimezone());
-            result.set("nextRunTime", created.getNextRunTime() != null ? created.getNextRunTime().toString() : "");
-            result.set("enabled", created.getEnabled());
-            return JSONUtil.toJsonPrettyStr(result);
-
-        } catch (Exception e) {
-            log.error("[CronJobTool] create_reminder failed: {}", e.getMessage());
-            return errorResult("Failed to create reminder: " + e.getMessage());
-        }
-    }
-
     @Tool(description = "List all scheduled tasks (cron jobs) for the current agent. "
             + "Returns task name, cron expression, next run time, enabled status, and last run time.")
-    public String list_cron_jobs(@Nullable ToolContext ctx) {
+    public String list_cron_jobs() {
         try {
-            // RFC-083: scope to the originating workspace so an agent only
-            // sees the cron jobs of the workspace it's running in.
-            Long workspaceId = workspaceFromContext(ctx);
-            List<CronJobDTO> jobs = cronJobService.list(workspaceId);
+            List<CronJobDTO> jobs = cronJobService.list();
             JSONArray arr = new JSONArray();
             for (CronJobDTO job : jobs) {
                 JSONObject obj = new JSONObject();
@@ -207,13 +132,10 @@ public class CronJobTool {
             + "Use list_cron_jobs first to find the job ID.")
     public String toggle_cron_job(
             @ToolParam(description = "Job ID (number)") Long jobId,
-            @ToolParam(description = "true to enable, false to disable") Boolean enabled,
-            @Nullable ToolContext ctx) {
+            @ToolParam(description = "true to enable, false to disable") Boolean enabled) {
         try {
-            // RFC-083: scope toggle to the originating workspace.
-            Long workspaceId = workspaceFromContext(ctx);
-            cronJobService.toggle(jobId, enabled, workspaceId);
-            CronJobDTO updated = cronJobService.getById(jobId, workspaceId);
+            cronJobService.toggle(jobId, enabled);
+            CronJobDTO updated = cronJobService.getById(jobId);
             JSONObject result = new JSONObject();
             result.set("success", true);
             result.set("jobId", jobId);
@@ -231,14 +153,11 @@ public class CronJobTool {
     @Tool(description = "Delete a scheduled task by its job ID. This action requires user approval. "
             + "Use list_cron_jobs first to find the job ID.")
     public String delete_cron_job(
-            @ToolParam(description = "Job ID (number) to delete") Long jobId,
-            @Nullable ToolContext ctx) {
+            @ToolParam(description = "Job ID (number) to delete") Long jobId) {
         try {
-            // RFC-083: scope delete to the originating workspace.
-            Long workspaceId = workspaceFromContext(ctx);
-            CronJobDTO job = cronJobService.getById(jobId, workspaceId);
+            CronJobDTO job = cronJobService.getById(jobId);
             String jobName = job.getName();
-            cronJobService.delete(jobId, workspaceId);
+            cronJobService.delete(jobId);
             JSONObject result = new JSONObject();
             result.set("success", true);
             result.set("deleted", jobName);
@@ -257,17 +176,6 @@ public class CronJobTool {
     }
 
     /**
-     * RFC-083: resolve the workspace ID from the originating ChatOrigin so
-     * cron-tool reads/writes are scoped to the agent's current workspace.
-     * Falls back to the default workspace (1) when origin is unscoped — same
-     * behaviour as the controller-layer {@code resolve()} helper.
-     */
-    private Long workspaceFromContext(@Nullable ToolContext ctx) {
-        ChatOrigin origin = ChatOrigin.from(ctx);
-        return origin != null && origin.workspaceId() != null ? origin.workspaceId() : 1L;
-    }
-
-    /**
      * RFC-063r §2.4: propagate the originating channel binding into the cron
      * job DTO so PR-3's delivery dispatcher can route results back to the
      * originating channel.
@@ -276,14 +184,7 @@ public class CronJobTool {
         if (origin == null || origin.channelId() == null) return;
         dto.setChannelId(origin.channelId());
         if (origin.channelTarget() != null) {
-            // Carry the requesterId (= IM senderId) so CronConversationResolver
-            // can match (channelId, senderId) instead of (channelId, targetId).
-            // Adapters that use a replyToken (DingTalk sessionWebhook etc.)
-            // store it as session.targetId, which never equals the cron's own
-            // chatId/senderId-derived targetId — the senderId match is the
-            // stable common key.
-            dto.setDeliveryConfig(vip.mate.cron.model.DeliveryConfig.from(
-                    origin.channelTarget(), origin.requesterId()));
+            dto.setDeliveryConfig(vip.mate.cron.model.DeliveryConfig.from(origin.channelTarget()));
         }
     }
 }

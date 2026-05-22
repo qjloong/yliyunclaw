@@ -45,14 +45,15 @@ public class ApprovalController {
     @GetMapping("/{conversationId}/pending-approvals")
     public R<List<Map<String, Object>>> getPendingApprovals(
             @PathVariable String conversationId,
-            Authentication auth) {
+            Authentication auth,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
 
         if (auth == null) {
             return R.fail(401, "未登录，请先登录");
         }
         String username = auth.getName();
 
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权访问该会话");
         }
 

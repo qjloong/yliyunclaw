@@ -45,7 +45,7 @@
             </td>
             <td>
               <div class="agent-cell">
-                <span class="agent-icon-sm"><SkillIcon :value="session.agentIcon" :size="16" :fallback="'🤖'" /></span>
+                <AgentIcon class="agent-icon-sm" :value="session.agentIcon" :size="18" fallback="🤖" :title="session.agentName || 'Agent'" />
                 <span>{{ session.agentName || '-' }}</span>
               </div>
             </td>
@@ -93,12 +93,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
-import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { conversationApi } from '@/api/index'
+import AgentIcon from '@/components/common/AgentIcon.vue'
 import { channelIconUrl, sourceLabel } from '@/utils/channelSource'
+import { getAuthToken, isAuthRedirectInProgress } from '@/utils/auth'
 import type { Conversation } from '@/types/index'
-import SkillIcon from '@/components/common/SkillIcon.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -120,20 +120,25 @@ async function loadSessions() {
   try {
     const res: any = await conversationApi.list()
     sessions.value = res.data || []
-  } catch (e: any) { ElMessage.error(t('sessions.loadFailed')) }
+  } catch (e: any) {
+    if (getAuthToken() && !isAuthRedirectInProgress()) {
+      ElMessage.error(t('sessions.loadFailed'))
+    }
+  }
 }
 
 function viewSession(session: Conversation) {
-  router.push({ path: '/chat', query: { agentId: String(session.agentId), conversationId: session.conversationId } })
+  const query: Record<string, string> = {
+    conversationId: session.conversationId,
+  }
+  if (session.agentId !== undefined && session.agentId !== null && session.agentId !== '') {
+    query.agentId = String(session.agentId)
+  }
+  router.push({ path: '/chat', query })
 }
 
 async function deleteSession(conversationId: string) {
-  const ok = await mcConfirm({
-    title: t('sessions.deleteTitle'),
-    message: t('sessions.deleteConfirm'),
-    tone: 'danger',
-  })
-  if (!ok) return
+  try { await ElMessageBox.confirm(t('sessions.deleteConfirm'), t('sessions.deleteTitle'), { type: 'warning' }) } catch { return }
   try {
     await conversationApi.delete(conversationId)
     await loadSessions()
@@ -169,7 +174,6 @@ function formatTime(time?: string) {
 .session-row:hover { background: var(--mc-bg-sunken); }
 .session-row:last-child { border-bottom: none; }
 .sessions-table td { padding: 14px 16px; font-size: 14px; color: var(--mc-text-primary); }
-.session-info {}
 .session-title { font-weight: 500; color: var(--mc-text-primary); margin-bottom: 2px; }
 .session-id { font-size: 11px; color: var(--mc-text-tertiary); font-family: monospace; }
 .source-cell { display: flex; align-items: center; gap: 6px; }

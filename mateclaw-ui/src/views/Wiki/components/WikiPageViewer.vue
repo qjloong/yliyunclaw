@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="page-viewer" v-if="store.currentPage">
     <!-- RFC-033: Enhanced header with page_type, enrichment status, citations -->
     <PageHeader
@@ -21,13 +21,13 @@
       <button v-if="editing" class="btn-primary btn-sm" @click="saveEdit">
         {{ t('common.save') }}
       </button>
-      <button v-if="!editing" class="btn-secondary btn-sm btn-action" @click="handleEnrich">
+      <button v-if="!editing" class="btn-secondary btn-sm btn-action" :disabled="enriching" @click="handleEnrich">
         <el-icon><Link /></el-icon>
-        {{ t('wiki.page.enrich') }}
+        {{ enriching ? '处理中...' : t('wiki.page.enrich') }}
       </button>
-      <button v-if="!editing" class="btn-secondary btn-sm btn-action" @click="handleRepair">
+      <button v-if="!editing" class="btn-secondary btn-sm btn-action" :disabled="repairing" @click="handleRepair">
         <el-icon><SetUp /></el-icon>
-        {{ t('wiki.page.repair') }}
+        {{ repairing ? '处理中...' : t('wiki.page.repair') }}
       </button>
       <!-- RFC-051 PR-8: hide delete on protected pages (system / locked). -->
       <button
@@ -46,16 +46,8 @@
     </div>
 
     <!-- Content -->
-    <article
-      v-if="!editing"
-      ref="articleRef"
-      class="page-content markdown-body"
-      v-html="renderedContent"
-    ></article>
+    <article v-if="!editing" class="page-content markdown-body" v-html="renderedContent"></article>
     <textarea v-else v-model="editContent" class="page-editor" rows="30"></textarea>
-
-    <!-- Click-to-zoom overlay for inline images. Bound after each render via attach(). -->
-    <ImageLightbox ref="lightboxRef" />
 
     <!-- RFC-033: Related Pages Panel (replaces backlinks) -->
     <RelatedPagesPanel
@@ -96,16 +88,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { useWikiStore, isProtectedPage, type WikiPage } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { Link, SetUp } from '@element-plus/icons-vue'
 import PageHeader from './PageHeader.vue'
 import RelatedPagesPanel from './RelatedPagesPanel.vue'
 import CitationDrawer from './CitationDrawer.vue'
-import ImageLightbox from './ImageLightbox.vue'
 
 const { t } = useI18n()
 const store = useWikiStore()
@@ -116,10 +109,8 @@ const editContent = ref('')
 const backlinks = ref<WikiPage[]>([])
 const citationDrawerOpen = ref(false)
 const enrichToast = ref('')
-
-// Refs for the lightbox post-render binding step.
-const articleRef = ref<HTMLElement | null>(null)
-const lightboxRef = ref<{ attach: (el: HTMLElement | null) => void } | null>(null)
+const enriching = ref(false)
+const repairing = ref(false)
 
 // RFC-051 PR-8: protection state for delete-button gating + badge rendering.
 const isSystem = computed(() => store.currentPage?.pageType === 'system')
@@ -144,15 +135,6 @@ const renderedContent = computed(() => {
   return renderMarkdown(content)
 })
 
-// Bind the image lightbox to the rendered article on every content swap.
-// Awaits a microtask so v-html has a chance to repopulate the DOM, then
-// asks the lightbox to walk <img> tags and attach click handlers. Already-
-// bound elements are skipped by the lightbox itself.
-watch(renderedContent, async () => {
-  await nextTick()
-  lightboxRef.value?.attach(articleRef.value)
-})
-
 watch(() => store.currentPage, async (page) => {
   if (page && store.currentKB) {
     editing.value = false
@@ -175,57 +157,90 @@ async function saveEdit() {
 
 async function handleDelete() {
   if (!store.currentKB || !store.currentPage) return
-  const confirmed = confirm(t('wiki.confirmDelete', { title: store.currentPage.title }))
+  const confirmed = await mcConfirm({
+    title: t('common.confirm'),
+    message: t('wiki.confirmDelete', { title: store.currentPage.title }),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    tone: 'danger',
+  })
   if (!confirmed) return
   try {
     await wikiApi.deletePage(store.currentKB.id, store.currentPage.slug)
     store.currentPage = null
     await store.fetchPages(store.currentKB.id)
+    ElMessage.success('页面已删除')
   } catch (e: any) {
-    alert(e?.message || 'Delete failed')
+    ElMessage.error(e?.message || 'Delete failed')
   }
 }
 
 async function handleEnrich() {
   if (!store.currentKB || !store.currentPage) return
+  enriching.value = true
   try {
-    await wikiApi.enrichPage(store.currentKB.id, store.currentPage.slug)
-    enrichToast.value = t('wiki.page.enrich') + '…'
-    setTimeout(() => { enrichToast.value = '' }, 5000)
+    const res: any = await wikiApi.enrichPage(store.currentKB.id, store.currentPage.slug)
+    const data = res?.data || res
+    if (data?.error) throw new Error(data.error)
+    enrichToast.value = '已创建交叉连接任务，系统会在后台处理。'
+    ElMessage.success(data?.jobId ? `交叉连接任务已提交：${data.jobId}` : '交叉连接任务已提交')
+    setTimeout(async () => {
+      enrichToast.value = ''
+      if (store.currentKB && store.currentPage) {
+        await store.loadPage(store.currentKB.id, store.currentPage.slug)
+        await store.fetchPages(store.currentKB.id)
+      }
+    }, 5000)
   } catch (e: any) {
     console.error('[WikiViewer] Enrich failed:', e)
+    ElMessage.error(e?.message || '添加交叉连接失败')
+  } finally {
+    enriching.value = false
   }
 }
 
 async function handleRepair() {
   if (!store.currentKB || !store.currentPage) return
+  repairing.value = true
   try {
-    await wikiApi.repairPage(store.currentKB.id, store.currentPage.slug)
-    enrichToast.value = t('wiki.page.repair') + '…'
+    const res: any = await wikiApi.repairPage(store.currentKB.id, store.currentPage.slug)
+    const data = res?.data || res
+    if (data?.error) throw new Error(data.error)
+    enrichToast.value = '已创建页面修复任务，系统会在后台重新生成该页面。'
+    ElMessage.success(data?.jobId ? `页面修复任务已提交：${data.jobId}` : '页面修复任务已提交')
     setTimeout(async () => {
       enrichToast.value = ''
       if (store.currentKB && store.currentPage) {
         await store.loadPage(store.currentKB.id, store.currentPage.slug)
+        await store.fetchPages(store.currentKB.id)
       }
     }, 5000)
   } catch (e: any) {
     console.error('[WikiViewer] Repair failed:', e)
+    ElMessage.error(e?.message || '修复页面失败')
+  } finally {
+    repairing.value = false
   }
 }
-
 async function openPage(slug: string) {
   if (!store.currentKB) return
   await store.loadPage(store.currentKB.id, slug)
 }
 
+function handleDocumentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.classList.contains('wiki-link')) {
+    const slug = target.dataset.slug
+    if (slug) openPage(slug)
+  }
+}
+
 onMounted(() => {
-  document.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement
-    if (target.classList.contains('wiki-link')) {
-      const slug = target.dataset.slug
-      if (slug) openPage(slug)
-    }
-  })
+  document.addEventListener('click', handleDocumentClick)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleDocumentClick)
 })
 </script>
 
@@ -241,6 +256,7 @@ onMounted(() => {
 .btn-primary.btn-sm { padding: 6px 14px; font-size: 13px; }
 .btn-secondary { padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 10px; font-size: 14px; cursor: pointer; }
 .btn-secondary:hover { background: var(--mc-bg-sunken); }
+.btn-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-secondary.btn-sm { padding: 6px 14px; font-size: 13px; }
 .btn-secondary.btn-delete { color: var(--el-color-danger, #f56c6c); }
 .btn-secondary.btn-delete:hover { background: var(--el-color-danger-light-9, #fef0f0); border-color: var(--el-color-danger-light-5, #fab6b6); }

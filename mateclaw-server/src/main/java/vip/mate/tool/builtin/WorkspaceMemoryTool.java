@@ -8,6 +8,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
+import vip.mate.memory.governance.MemoryGovernanceFilter;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.memory.service.MemoryRecallTracker;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
@@ -28,6 +32,10 @@ public class WorkspaceMemoryTool {
 
     private final WorkspaceFileService workspaceFileService;
     private final MemoryRecallTracker memoryRecallTracker;
+    /** WP-3: write governance gate — blocks unauthorized memory mutations from tools. */
+    private final MemoryGovernanceFilter governanceFilter;
+    /** WP-3: standardized provenance/event emission for governed writes. */
+    private final MemoryWriteProvenancePublisher provenancePublisher;
 
     @Tool(description = """
             列出指定 Agent 的数据库工作区记忆文件。
@@ -119,8 +127,21 @@ public class WorkspaceMemoryTool {
             return error(validation);
         }
 
+        // WP-3: governance gate — reject unauthorized writes before touching storage.
+        if (!governanceFilter.isAllowed(MemorySurfaceType.DIRECT_FILE_TOOL, MemoryOperation.WRITE, filename)) {
+            log.warn("[WP-3] Write blocked by governance: surface=DIRECT_FILE_TOOL, operation=WRITE, path={}", filename);
+            return error("[WP-3] 记忆写入被安全策略拦截: " + filename);
+        }
+
         WorkspaceFileEntity before = workspaceFileService.getFile(agentId, filename);
         WorkspaceFileEntity saved = workspaceFileService.saveFile(agentId, filename, content != null ? content : "");
+        provenancePublisher.publishRequired(agentId, null,
+            MemorySurfaceType.DIRECT_FILE_TOOL,
+            MemoryOperation.WRITE,
+            filename,
+            before == null ? "create" : "overwrite",
+            content != null ? content : "",
+            java.util.Map.of("writer", "WorkspaceMemoryTool"));
 
         JSONObject result = new JSONObject();
         result.set("agentId", agentId);
@@ -161,6 +182,12 @@ public class WorkspaceMemoryTool {
             return error("oldText 和 newText 相同，无需替换");
         }
 
+        // WP-3: governance gate — edit is a write mutation.
+        if (!governanceFilter.isAllowed(MemorySurfaceType.DIRECT_FILE_TOOL, MemoryOperation.WRITE, filename)) {
+            log.warn("[WP-3] Edit blocked by governance: surface=DIRECT_FILE_TOOL, operation=WRITE, path={}", filename);
+            return error("[WP-3] 记忆编辑被安全策略拦截: " + filename);
+        }
+
         WorkspaceFileEntity existing = workspaceFileService.getFile(agentId, filename);
         if (existing == null) {
             return error("工作区文件不存在: " + filename);
@@ -184,6 +211,13 @@ public class WorkspaceMemoryTool {
         }
 
         workspaceFileService.saveFile(agentId, filename, updated);
+    provenancePublisher.publishRequired(agentId, null,
+        MemorySurfaceType.DIRECT_FILE_TOOL,
+        MemoryOperation.WRITE,
+        filename,
+        "edit",
+        updated,
+        java.util.Map.of("writer", "WorkspaceMemoryTool", "replaceAll", String.valueOf(replaceAllFlag)));
 
         JSONObject result = new JSONObject();
         result.set("agentId", agentId);

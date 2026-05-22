@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS mate_agent (
     icon           VARCHAR(256),
     tags           VARCHAR(256),
     workspace_id   BIGINT       NOT NULL DEFAULT 1,
+    home_subtitle  VARCHAR(512),
+    home_quick_starts_json JSON,
     create_time    DATETIME     NOT NULL,
     update_time    DATETIME     NOT NULL,
     deleted        INT          NOT NULL DEFAULT 0
@@ -157,6 +159,10 @@ CREATE TABLE IF NOT EXISTS mate_conversation (
     last_active_time DATETIME,
     stream_status    VARCHAR(16)  NOT NULL DEFAULT 'idle',
     workspace_id     BIGINT       NOT NULL DEFAULT 1,
+    working_directory VARCHAR(1024) DEFAULT NULL,
+    runtime_mode     VARCHAR(32)  NOT NULL DEFAULT 'default',
+    runtime_provider_id VARCHAR(64) DEFAULT NULL,
+    runtime_model_name VARCHAR(128) DEFAULT NULL,
     create_time      DATETIME     NOT NULL,
     update_time      DATETIME     NOT NULL,
     deleted          INT          NOT NULL DEFAULT 0,
@@ -189,6 +195,7 @@ CREATE TABLE IF NOT EXISTS mate_message (
 CREATE TABLE IF NOT EXISTS mate_plan (
     id              BIGINT       NOT NULL PRIMARY KEY,
     agent_id        VARCHAR(64),
+    conversation_id VARCHAR(64),
     goal            TEXT,
     status          VARCHAR(32)  NOT NULL DEFAULT 'pending',
     total_steps     INT          NOT NULL DEFAULT 0,
@@ -200,6 +207,8 @@ CREATE TABLE IF NOT EXISTS mate_plan (
     update_time     DATETIME     NOT NULL,
     deleted         INT          NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE INDEX idx_plan_conversation_status ON mate_plan(conversation_id, status, create_time);
 
 -- 子计划步骤表
 CREATE TABLE IF NOT EXISTS mate_sub_plan (
@@ -315,6 +324,10 @@ CREATE TABLE IF NOT EXISTS mate_tool_approval (
     summary             TEXT,
     findings_json       TEXT,
     max_severity        VARCHAR(16),
+    workspace_id        BIGINT,
+    project_path        VARCHAR(1024),
+    approval_key        VARCHAR(64),
+    grant_scope         VARCHAR(32),
     status              VARCHAR(32)  NOT NULL DEFAULT 'PENDING',
     resolved_by         VARCHAR(64),
     created_at          DATETIME     NOT NULL,
@@ -325,7 +338,8 @@ CREATE TABLE IF NOT EXISTS mate_tool_approval (
     deleted             INT          NOT NULL DEFAULT 0,
     INDEX idx_tool_approval_conv (conversation_id),
     INDEX idx_tool_approval_status (status),
-    INDEX idx_tool_approval_pending_id (pending_id)
+    INDEX idx_tool_approval_pending_id (pending_id),
+    INDEX idx_tool_approval_grant_lookup (user_id, tool_name, approval_key, grant_scope)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 安全规则表

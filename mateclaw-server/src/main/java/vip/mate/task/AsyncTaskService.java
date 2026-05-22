@@ -6,13 +6,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.task.model.AsyncTaskEntity;
 import vip.mate.task.model.AsyncTaskInfo;
 import vip.mate.task.repository.AsyncTaskMapper;
-import vip.mate.workspace.conversation.event.ConversationDeletedEvent;
 
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
@@ -36,12 +34,9 @@ public class AsyncTaskService implements ApplicationRunner {
     private final AsyncTaskMapper asyncTaskMapper;
     private final ChatStreamTracker streamTracker;
 
-    /** Polling thread pool. Bumped from 2 to 8 in P0 — image+video+future generative
-     *  tasks all share this pool, and per-task work (poll HTTP + DB write + file
-     *  download in completion callbacks) is non-trivial; 2 threads saturate
-     *  immediately under any concurrent load. */
+    /** 轮询线程池（小池，2 线程足够） */
     private final ScheduledExecutorService pollExecutor =
-            Executors.newScheduledThreadPool(8, r -> {
+            Executors.newScheduledThreadPool(2, r -> {
                 Thread t = new Thread(r, "async-task-poll");
                 t.setDaemon(true);
                 return t;
@@ -49,33 +44,6 @@ public class AsyncTaskService implements ApplicationRunner {
 
     /** 活跃轮询任务，key = taskId */
     private final ConcurrentHashMap<String, ScheduledFuture<?>> activePolls = new ConcurrentHashMap<>();
-
-    /** Reverse mapping taskId → conversationId so a {@link ConversationDeletedEvent}
-     *  listener can cancel every poller belonging to the deleted conversation
-     *  without scanning DB (the {@code mate_async_task} rows are gone by the
-     *  time the after-commit event fires). Populated in {@link #startPolling};
-     *  cleared in {@link #cancelPolling}. */
-    private final ConcurrentHashMap<String, String> pollTaskToConv = new ConcurrentHashMap<>();
-
-    /** Conversations whose deletion has fanned out to this service. Workers
-     *  consult {@link #isConversationCanceled} before persisting anything tied
-     *  to a conversation — the music virtual-thread worker, image/video poll
-     *  completion handlers, and any future provider-level callback are
-     *  asynchronous and may finish AFTER the conversation row + attachment
-     *  directory have already been wiped. Without this gate they would
-     *  recreate the directory + a dangling {@code mate_message} row.
-     *  <p>
-     *  Value = expiry epoch-ms. Entries older than {@link #CANCEL_RETENTION_MS}
-     *  are reaped on each event and on each lookup so the map cannot grow
-     *  without bound. The retention window is comfortably longer than
-     *  {@link #MAX_POLL_DURATION_MINUTES} and the music worker's ~120s upstream
-     *  HTTP timeout, so any in-flight worker for a deleted conversation will
-     *  still see the cancel flag when it tries to write back. */
-    private final ConcurrentHashMap<String, Long> canceledConversations = new ConcurrentHashMap<>();
-
-    /** 30 minutes — covers MAX_POLL_DURATION_MINUTES (15) + music worker's
-     *  ~2 min upstream blocking call with comfortable headroom. */
-    private static final long CANCEL_RETENTION_MS = 30L * 60 * 1000;
 
     /** 每用户最多并行任务数 */
     private static final int MAX_ACTIVE_TASKS_PER_USER = 3;
@@ -210,9 +178,6 @@ public class AsyncTaskService implements ApplicationRunner {
         }, 3, POLL_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
         activePolls.put(taskId, future);
-        if (task.getConversationId() != null) {
-            pollTaskToConv.put(taskId, task.getConversationId());
-        }
         log.info("[AsyncTask] Started polling for task {} (interval={}s, timeout={}min)",
                 taskId, POLL_INTERVAL_SECONDS, MAX_POLL_DURATION_MINUTES);
     }
@@ -222,49 +187,6 @@ public class AsyncTaskService implements ApplicationRunner {
         if (future != null) {
             future.cancel(false);
         }
-        pollTaskToConv.remove(taskId);
-    }
-
-    // ==================== Conversation-deleted fan-out ====================
-
-    /**
-     * Returns true if this conversation was deleted recently enough that any
-     * still-running async worker (music virtual-thread, image/video poll
-     * completion, …) must abort before writing a file or persisting a
-     * message — see {@link #canceledConversations}.
-     * <p>
-     * Sweeps stale entries on read so the map stays small.
-     */
-    public boolean isConversationCanceled(String conversationId) {
-        if (conversationId == null) return false;
-        sweepCanceled();
-        return canceledConversations.containsKey(conversationId);
-    }
-
-    @EventListener
-    public void onConversationDeleted(ConversationDeletedEvent event) {
-        String convId = event.conversationId();
-        if (convId == null) return;
-
-        canceledConversations.put(convId, System.currentTimeMillis() + CANCEL_RETENTION_MS);
-
-        int cancelled = 0;
-        for (Map.Entry<String, String> entry : pollTaskToConv.entrySet()) {
-            if (convId.equals(entry.getValue())) {
-                cancelPolling(entry.getKey());
-                cancelled++;
-            }
-        }
-        if (cancelled > 0) {
-            log.info("[AsyncTask] Cancelled {} active poller(s) for deleted conversation {}",
-                    cancelled, convId);
-        }
-        sweepCanceled();
-    }
-
-    private void sweepCanceled() {
-        long now = System.currentTimeMillis();
-        canceledConversations.entrySet().removeIf(e -> e.getValue() < now);
     }
 
     // ==================== 状态更新 ====================
@@ -345,27 +267,29 @@ public class AsyncTaskService implements ApplicationRunner {
 
     public void broadcastTaskEvent(AsyncTaskEntity task, String eventName,
                                      boolean success, String videoUrl, String imageUrl, String errorMessage) {
-        Map<String, Object> extra = new HashMap<>();
-        if (videoUrl != null) extra.put("videoUrl", videoUrl);
-        if (imageUrl != null) extra.put("imageUrl", imageUrl);
-        broadcastTaskEventWithData(task, eventName, success, extra, errorMessage);
-    }
-
-    /**
-     * Generic task-event broadcaster. Use this for any media kind where the URL
-     * field name varies (audioUrl, modelUrl, ...) — pass it via {@code extraData}.
-     * Named distinctly from {@link #broadcastTaskEvent} to avoid overload
-     * ambiguity when callers pass {@code null} for the 4th argument.
-     */
-    public void broadcastTaskEventWithData(AsyncTaskEntity task, String eventName,
-                                             boolean success, Map<String, Object> extraData,
-                                             String errorMessage) {
         Map<String, Object> data = new HashMap<>();
         data.put("taskId", task.getTaskId());
         data.put("taskType", task.getTaskType());
         data.put("success", success);
-        if (extraData != null) data.putAll(extraData);
+        if (videoUrl != null) data.put("videoUrl", videoUrl);
+        if (imageUrl != null) data.put("imageUrl", imageUrl);
         if (errorMessage != null) data.put("errorMessage", errorMessage);
+        streamTracker.broadcastObject(task.getConversationId(), eventName, data);
+    }
+
+    public void broadcastTaskEventWithData(AsyncTaskEntity task, String eventName,
+                                           boolean success, Map<String, ?> extraData,
+                                           String errorMessage) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("taskId", task.getTaskId());
+        data.put("taskType", task.getTaskType());
+        data.put("success", success);
+        if (extraData != null && !extraData.isEmpty()) {
+            data.putAll(extraData);
+        }
+        if (errorMessage != null) {
+            data.put("errorMessage", errorMessage);
+        }
         streamTracker.broadcastObject(task.getConversationId(), eventName, data);
     }
 

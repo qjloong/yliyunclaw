@@ -13,6 +13,79 @@
       </button>
     </div>
 
+    <div class="invite-card">
+      <div class="invite-card__copy">
+        <div class="invite-card__title">{{ t('security.members.invites.title') }}</div>
+        <div class="invite-card__desc">{{ t('security.members.invites.desc') }}</div>
+      </div>
+      <div class="invite-card__controls">
+        <select v-model="inviteRole" class="config-select invite-role-select">
+          <option value="admin">{{ t('security.members.roles.admin') }}</option>
+          <option value="member">{{ t('security.members.roles.member') }}</option>
+          <option value="viewer">{{ t('security.members.roles.viewer') }}</option>
+        </select>
+        <button class="btn-secondary" @click="createInviteLink" :disabled="inviteLoading">
+          {{ inviteLoading ? t('security.members.invites.generating') : t('security.members.invites.generate') }}
+        </button>
+      </div>
+      <div v-if="generatedInviteLink" class="invite-link-box">
+        <input :value="generatedInviteLink" class="form-input invite-link-input" readonly />
+        <button class="btn-primary" @click="copyInviteLink">{{ t('security.members.invites.copy') }}</button>
+      </div>
+      <div v-if="generatedInviteMeta?.expiresAt" class="form-hint invite-meta">
+        {{ t('security.members.invites.expiresAt', { date: formatDateTime(generatedInviteMeta.expiresAt) }) }}
+      </div>
+    </div>
+
+    <div class="invite-list-card">
+      <div class="invite-list-card__header">
+        <div>
+          <div class="invite-card__title">{{ t('security.members.invites.activeTitle') }}</div>
+          <div class="invite-card__desc">{{ t('security.members.invites.activeDesc') }}</div>
+        </div>
+        <button class="btn-secondary" @click="fetchInvites" :disabled="invitesLoading">
+          {{ invitesLoading ? t('security.members.loading') : t('common.refresh') }}
+        </button>
+      </div>
+      <div v-if="invitesLoading" class="empty-state invite-empty">{{ t('security.members.loading') }}</div>
+      <div v-else-if="invites.length === 0" class="empty-state invite-empty">{{ t('security.members.invites.empty') }}</div>
+      <table v-else class="rules-table invite-table">
+        <thead>
+          <tr>
+            <th>{{ t('security.members.invites.columns.role') }}</th>
+            <th>{{ t('security.members.invites.columns.status') }}</th>
+            <th>{{ t('security.members.invites.columns.uses') }}</th>
+            <th>{{ t('security.members.invites.columns.inviter') }}</th>
+            <th>{{ t('security.members.invites.columns.expires') }}</th>
+            <th style="width: 90px;">{{ t('security.members.columns.actions') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="invite in invites" :key="invite.id">
+            <td>{{ t(`security.members.roles.${invite.role}`) }}</td>
+            <td>
+              <span class="invite-status" :class="`is-${invite.status}`">
+                {{ t(`security.members.invites.status.${invite.status || 'active'}`) }}
+              </span>
+            </td>
+            <td>{{ invite.useCount || 0 }} / {{ invite.maxUses || 1 }}</td>
+            <td>{{ invite.inviterUsername || '-' }}</td>
+            <td class="date-cell">{{ formatDateTime(invite.expiresAt) }}</td>
+            <td>
+              <button
+                v-if="invite.status === 'active'"
+                class="action-btn danger"
+                @click="revokeInvite(invite)"
+                :title="t('security.members.invites.revoke')"
+              >
+                {{ t('security.members.invites.revoke') }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <!-- Members Table -->
     <div class="rules-table-wrapper">
       <div v-if="loading" class="empty-state">{{ t('security.members.loading') }}</div>
@@ -40,7 +113,7 @@
             <td>
               <select
                 :value="member.role"
-                @change="updateRole(member, ($event.target as HTMLSelectElement).value)"
+                @change="handleRoleChange(member, $event)"
                 :disabled="member.role === 'owner'"
                 class="config-select"
               >
@@ -117,11 +190,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { workspaceTeamApi } from '@/api/index'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+import { mcConfirm } from '@/components/common/useConfirm'
 
 const { t } = useI18n()
 
@@ -135,16 +209,42 @@ interface Member {
   createTime: string
 }
 
+interface WorkspaceInvite {
+  id: number
+  workspaceId: number
+  role: string
+  status: string
+  maxUses: number
+  useCount: number
+  inviterUsername?: string
+  expiresAt?: string
+  createTime?: string
+}
+
 const store = useWorkspaceStore()
 const members = ref<Member[]>([])
+const invites = ref<WorkspaceInvite[]>([])
 const loading = ref(false)
+const invitesLoading = ref(false)
 const showAddDialog = ref(false)
+const inviteRole = ref('member')
+const inviteLoading = ref(false)
+const generatedInviteLink = ref('')
+const generatedInviteMeta = ref<{ expiresAt?: string; role?: string } | null>(null)
 
 const defaultForm = () => ({ username: '', password: '', nickname: '', role: 'member' })
 const newMemberForm = reactive(defaultForm())
 
 onMounted(() => {
   fetchMembers()
+  fetchInvites()
+})
+
+watch(() => store.currentWorkspaceId, () => {
+  generatedInviteLink.value = ''
+  generatedInviteMeta.value = null
+  fetchMembers()
+  fetchInvites()
 })
 
 async function fetchMembers() {
@@ -158,6 +258,20 @@ async function fetchMembers() {
     ElMessage.error(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchInvites() {
+  const wsId = store.currentWorkspaceId
+  if (!wsId) return
+  invitesLoading.value = true
+  try {
+    const res: any = await workspaceTeamApi.listInvites(wsId)
+    invites.value = res.data || []
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || t('security.members.messages.inviteLoadFailed'))
+  } finally {
+    invitesLoading.value = false
   }
 }
 
@@ -192,10 +306,72 @@ async function updateRole(member: Member, role: string) {
   }
 }
 
+function handleRoleChange(member: Member, event: Event) {
+  const target = event.target as HTMLSelectElement | null
+  if (!target) return
+  void updateRole(member, target.value)
+}
+
+async function createInviteLink() {
+  const wsId = store.currentWorkspaceId
+  if (!wsId) return
+  inviteLoading.value = true
+  try {
+    const res: any = await workspaceTeamApi.createInviteLink(wsId, { role: inviteRole.value })
+    const data = res.data || {}
+    if (!data.token) throw new Error('missing token')
+    generatedInviteLink.value = `${window.location.origin}/workspace-invite?token=${encodeURIComponent(data.token)}`
+    generatedInviteMeta.value = data
+    await fetchInvites()
+    ElMessage.success(t('security.members.messages.inviteCreated'))
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || t('security.members.messages.inviteCreateFailed'))
+  } finally {
+    inviteLoading.value = false
+  }
+}
+
+async function revokeInvite(invite: WorkspaceInvite) {
+  const wsId = store.currentWorkspaceId
+  if (!wsId) return
+  const confirmed = await mcConfirm({
+    title: t('security.members.invites.revoke'),
+    message: t('security.members.messages.inviteRevokeConfirm'),
+    confirmText: t('security.members.actions.confirm'),
+    cancelText: t('security.members.actions.cancel'),
+    tone: 'danger',
+  })
+  if (!confirmed) return
+  try {
+    await workspaceTeamApi.revokeInvite(wsId, invite.id)
+    ElMessage.success(t('security.members.messages.inviteRevoked'))
+    await fetchInvites()
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || t('security.members.messages.inviteRevokeFailed'))
+  }
+}
+
+async function copyInviteLink() {
+  if (!generatedInviteLink.value) return
+  try {
+    await navigator.clipboard.writeText(generatedInviteLink.value)
+    ElMessage.success(t('security.members.messages.inviteCopied'))
+  } catch {
+    ElMessage.error(t('security.members.messages.inviteCopyFailed'))
+  }
+}
+
 async function removeMember(member: Member) {
   const wsId = store.currentWorkspaceId
   if (!wsId) return
-  if (!confirm(t('security.members.messages.removeConfirm'))) return
+  const confirmed = await mcConfirm({
+    title: t('security.members.actions.remove'),
+    message: t('security.members.messages.removeConfirm'),
+    confirmText: t('security.members.actions.confirm'),
+    cancelText: t('security.members.actions.cancel'),
+    tone: 'danger',
+  })
+  if (!confirmed) return
   try {
     await workspaceTeamApi.removeMember(wsId, member.userId)
     ElMessage.success(t('security.members.messages.removeSuccess'))
@@ -208,6 +384,11 @@ async function removeMember(member: Member) {
 function formatDate(dateStr: string) {
   if (!dateStr) return '-'
   return new Date(dateStr).toLocaleDateString()
+}
+
+function formatDateTime(dateStr?: string) {
+  if (!dateStr) return '-'
+  return new Date(dateStr).toLocaleString()
 }
 </script>
 
@@ -273,5 +454,100 @@ function formatDate(dateStr: string) {
   margin-top: 4px;
   font-size: 12px;
   color: var(--mc-text-tertiary);
+}
+
+.invite-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--mc-border);
+  border-radius: 14px;
+  background: var(--mc-bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.invite-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+}
+
+.invite-card__desc {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--mc-text-secondary);
+}
+
+.invite-card__controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.invite-role-select {
+  min-width: 140px;
+}
+
+.invite-link-box {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.invite-link-input {
+  flex: 1;
+}
+
+.invite-meta {
+  margin-top: -4px;
+}
+
+.invite-list-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--mc-border);
+  border-radius: 14px;
+  background: var(--mc-bg-elevated);
+}
+
+.invite-list-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.invite-table {
+  margin-top: 8px;
+}
+
+.invite-empty {
+  padding: 14px 0;
+}
+
+.invite-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(64, 158, 255, 0.1);
+  color: #409eff;
+}
+
+.invite-status.is-used,
+.invite-status.is-expired {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--mc-text-tertiary);
+}
+
+.invite-status.is-revoked {
+  background: rgba(245, 108, 108, 0.12);
+  color: var(--mc-danger, #f56c6c);
 }
 </style>

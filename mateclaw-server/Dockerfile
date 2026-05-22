@@ -4,12 +4,12 @@
 #   Builds the Vue 3 admin SPA and emits static files to /static inside the
 #   build container. These files are later copied into the JAR's classpath so
 #   Spring Boot serves the SPA at the root URL.
-FROM node:22-alpine AS frontend-builder
-# Pin pnpm to a major version so the Docker build doesn't break when the npm
-# `latest` tag jumps majors. pnpm v10+ blocks dependency lifecycle scripts by
-# default; the allowed packages live under `pnpm.onlyBuiltDependencies` in
-# mateclaw-ui/package.json.
-RUN npm install -g pnpm@10 --silent
+ARG NODE_BASE=node:22-alpine
+ARG MAVEN_BASE=maven:3.9-eclipse-temurin-21
+ARG RUNTIME_BASE=mcr.microsoft.com/playwright:v1.52.0-noble
+
+FROM ${NODE_BASE} AS frontend-builder
+RUN npm install -g pnpm --silent
 WORKDIR /frontend
 # Install dependencies first (layer cache)
 COPY mateclaw-ui/package.json mateclaw-ui/pnpm-lock.yaml ./
@@ -23,7 +23,7 @@ COPY mateclaw-ui/ ./
 RUN pnpm exec vite build --outDir /static --emptyOutDir
 
 # Stage 2 — Backend (Maven)
-FROM maven:3.9-eclipse-temurin-21 AS builder
+FROM ${MAVEN_BASE} AS builder
 
 # Optional Maven extra flags passed at build time.
 # Set MAVEN_FLAGS=-Paliyun-first in .env (or via --build-arg) to put Aliyun
@@ -37,7 +37,7 @@ COPY mateclaw-server/settings.xml /root/.m2/settings.xml
 WORKDIR /plugin-api
 COPY mateclaw-plugin-api/pom.xml ./pom.xml
 COPY mateclaw-plugin-api/src ./src
-RUN mvn install -Dmaven.test.skip=true -q ${MAVEN_FLAGS}
+RUN mvn install -DskipTests -q ${MAVEN_FLAGS}
 
 # Pre-fetch mateclaw-server dependencies (uses mirror, so this won't hang)
 WORKDIR /build
@@ -48,7 +48,7 @@ RUN mvn dependency:go-offline -q ${MAVEN_FLAGS}
 COPY mateclaw-server/src ./src
 COPY --from=frontend-builder /static ./src/main/resources/static
 
-RUN mvn package -Dmaven.test.skip=true -q ${MAVEN_FLAGS}
+RUN mvn package -DskipTests -Dmaven.test.skip=true -q ${MAVEN_FLAGS}
 
 # Stage 3 — Runtime
 #
@@ -61,7 +61,7 @@ RUN mvn package -Dmaven.test.skip=true -q ${MAVEN_FLAGS}
 # bump the Java dependency, bump this tag in lockstep — Microsoft rebuilds each
 # tag with the matching driver, so mismatched versions cause the java driver to
 # re-download browsers at runtime (defeating the whole point of this image).
-FROM mcr.microsoft.com/playwright:v1.52.0-noble
+FROM ${RUNTIME_BASE}
 WORKDIR /app
 
 # JDK 21 is NOT part of the base image (it ships Node for the JS driver).
@@ -100,5 +100,4 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
 
 COPY --from=builder /build/target/*.jar app.jar
 EXPOSE 18088
-EXPOSE 1455
 ENTRYPOINT ["java", "-jar", "-Dspring.profiles.active=mysql", "app.jar"]

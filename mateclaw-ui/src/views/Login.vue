@@ -2,8 +2,8 @@
   <div class="login-page">
     <div class="login-center">
       <div class="login-logo">
-        <img src="/logo/mateclaw_logo_s.png" alt="MateClaw" class="logo-image" />
-        <h1 class="logo-title">Mate<span class="logo-title-highlight">Claw</span></h1>
+        <img src="/logo/mateclaw_logo_s.png" alt="Meta Y" class="logo-image" />
+        <img src="/logo/text_logo.png" alt="Meta Y" class="logo-title-image" />
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">
@@ -51,18 +51,19 @@
         </button>
       </form>
 
-      <p class="login-hint" v-html="t('login.hint')"></p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { authApi } from '@/api/index'
+import { saveAuthSession } from '@/utils/auth'
 
 const router = useRouter()
+const route = useRoute()
 const { t } = useI18n()
 const loading = ref(false)
 const showPassword = ref(false)
@@ -76,11 +77,16 @@ async function handleLogin() {
   try {
     const res: any = await authApi.login(form)
     const data = res.data || res
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('userId', String(data.id || '1'))
-    localStorage.setItem('username', data.username || form.username)
-    localStorage.setItem('role', data.role || 'user')
-    router.push('/')
+    saveAuthSession({
+      token: data.token,
+      userId: data.id || '1',
+      username: data.username || form.username,
+      role: data.role || 'user',
+    })
+    const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+      ? route.query.redirect
+      : '/'
+    router.push(redirect)
   } catch (e: any) {
     errorMsg.value = typeof e === 'string' ? e : t('login.failed')
   } finally {
@@ -95,13 +101,13 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #FAF5F0 0%, #F5EDE5 100%);
+  background: linear-gradient(160deg, #f3f8ff 0%, #e2eeff 100%);
   padding: 24px;
 }
 
 :root.dark .login-page,
 html.dark .login-page {
-  background: linear-gradient(160deg, var(--mc-bg) 0%, #1A1210 100%);
+  background: linear-gradient(160deg, var(--mc-bg) 0%, #0b1220 100%);
 }
 
 .login-center {
@@ -116,29 +122,29 @@ html.dark .login-page {
 
 /* Logo */
 .login-logo {
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 20px;
 }
 
 .logo-image {
   display: block;
-  margin: 0 auto 16px;
-  width: 100px;
-  height: 100px;
+  width: 62px;
+  height: 62px;
   object-fit: contain;
-  filter: drop-shadow(0 6px 20px rgba(217, 119, 87, 0.3));
+  filter: drop-shadow(0 8px 24px rgba(59, 136, 255, 0.28));
   animation: breathe 3.5s ease-in-out infinite;
+  flex: 0 0 auto;
 }
 
-.logo-title {
-  font-size: 36px;
-  font-weight: 800;
-  color: var(--mc-text-primary);
-  margin: 0;
-  letter-spacing: -0.04em;
-}
-
-.logo-title-highlight {
-  color: var(--mc-primary);
+.logo-title-image {
+  display: block;
+  width: min(188px, 58vw);
+  height: auto;
+  object-fit: contain;
+  flex: 0 1 auto;
 }
 
 /* Form */
@@ -174,7 +180,7 @@ html.dark .login-page {
 .form-input:focus {
   border-color: var(--mc-primary);
   background: var(--mc-bg-elevated);
-  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.08);
+  box-shadow: 0 0 0 3px rgba(59, 136, 255, 0.12);
 }
 
 .eye-btn {
@@ -227,7 +233,7 @@ html.dark .login-page {
 
 .login-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(217, 119, 87, 0.3);
+  box-shadow: 0 10px 24px rgba(59, 136, 255, 0.28);
 }
 
 .login-btn:disabled {
@@ -258,23 +264,6 @@ html.dark .login-page {
   30% { transform: translateY(-5px); }
 }
 
-/* Hint */
-.login-hint {
-  text-align: center;
-  font-size: 12px;
-  color: var(--mc-text-tertiary);
-  margin: 0;
-  opacity: 0.7;
-}
-
-.login-hint :deep(code) {
-  background: var(--mc-inline-code-bg);
-  padding: 1px 6px;
-  border-radius: 4px;
-  color: var(--mc-inline-code-color);
-  font-size: 12px;
-}
-
 /* Breathing animation */
 @keyframes breathe {
   0%, 100% {
@@ -303,6 +292,19 @@ html.dark .login-page {
 @media (max-width: 480px) {
   .login-page {
     padding: 16px;
+  }
+
+  .login-logo {
+    gap: 10px;
+  }
+
+  .logo-image {
+    width: 52px;
+    height: 52px;
+  }
+
+  .logo-title-image {
+    width: min(170px, 60vw);
   }
 }
 </style>

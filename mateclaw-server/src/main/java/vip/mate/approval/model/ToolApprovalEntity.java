@@ -30,6 +30,10 @@ public class ToolApprovalEntity {
     private String summary;
     private String findingsJson;
     private String maxSeverity;
+    private Long workspaceId;
+    private String projectPath;
+    private String approvalKey;
+    private String grantScope;
     private String status;
     private String resolvedBy;
     private LocalDateTime createdAt;

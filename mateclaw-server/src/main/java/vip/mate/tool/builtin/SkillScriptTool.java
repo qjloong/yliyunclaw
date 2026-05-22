@@ -10,12 +10,10 @@ import vip.mate.skill.runtime.SkillFileAccessPolicy;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.SkillScriptExecutionService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
-import vip.mate.skill.secret.SkillSecretService;
 
 import java.nio.file.Path;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 技能脚本执行工具
@@ -29,7 +27,6 @@ public class SkillScriptTool {
     private final SkillRuntimeService runtimeService;
     private final SkillFileAccessPolicy accessPolicy;
     private final SkillScriptExecutionService executionService;
-    private final SkillSecretService skillSecretService;
 
     @vip.mate.tool.ConcurrencyUnsafe("script execution can have arbitrary side effects on the host process and filesystem")
     @Tool(description = """
@@ -39,10 +36,7 @@ public class SkillScriptTool {
         Parameters:
         - skillName: Name of the skill
         - scriptPath: Relative path to script under scripts/ directory (e.g., "scripts/run.py")
-        - args: Optional list of script arguments. Each element is passed as a separate
-                CLI argument exactly as written — no shell interpretation, no splitting.
-                For a JSON payload, wrap it as a single-element list, e.g.
-                ["{\\"date\\":\\"2026-05-12\\",\\"topic\\":\\"meeting\\"}"].
+        - args: Optional comma-separated arguments to pass to the script
 
         Returns: JSON with exitCode, stdout, stderr
 
@@ -59,45 +53,37 @@ public class SkillScriptTool {
         String scriptPath,
 
         @JsonProperty(required = false)
-        @JsonPropertyDescription("Optional list of script arguments. Each element is passed as one CLI arg verbatim. Wrap a JSON payload as a single-element list.")
-        List<String> args
+        @JsonPropertyDescription("Optional comma-separated script arguments")
+        String args
     ) {
         log.info("Executing skill script: skill={}, script={}, args={}", skillName, scriptPath, args);
 
-        // Look up active skill.
+        // 查找 active skill
         ResolvedSkill skill = runtimeService.findActiveSkill(skillName);
         if (skill == null) {
             return formatError("Skill '" + skillName + "' not found or not enabled");
         }
 
-        // Must be a directory-backed skill.
+        // 必须是目录型 skill
         if (skill.getSkillDir() == null) {
             return formatError("Skill '" + skillName + "' is database-based, no script execution available");
         }
 
-        // Validate script path (must live under scripts/).
+        // 验证脚本路径（必须在 scripts/ 下）
         Path resolvedPath = accessPolicy.validateScriptPath(skill.getSkillDir(), scriptPath);
         if (resolvedPath == null) {
             return formatError("Invalid or unsafe script path: " + scriptPath);
         }
 
-        // Pass args straight through. No splitting — arbitrary delimiters
-        // (notably commas inside JSON payloads) used to shatter a single
-        // logical argument into multiple positional args, which broke any
-        // skill expecting a JSON-encoded payload.
-        List<String> argList = (args == null || args.isEmpty()) ? null : args;
-
-        // RFC-091 settings bridge — pull this skill's stored secrets
-        // (e.g. AIRTABLE_API_KEY) and inject them as env vars for the
-        // subprocess. Decryption happens here, on the way to the child
-        // process; the plaintext never lives in the rendered SKILL.md.
-        Map<String, String> envVars = skill.getId() != null
-                ? skillSecretService.getDecrypted(skill.getId())
-                : Collections.emptyMap();
+        // 解析参数
+        List<String> argList = null;
+        if (args != null && !args.isBlank()) {
+            argList = Arrays.asList(args.split(","));
+        }
 
         // 执行脚本
         try {
-            SkillScriptExecutionService.ScriptResult result = executionService.execute(resolvedPath, argList, envVars);
+            SkillScriptExecutionService.ScriptResult result = executionService.execute(resolvedPath, argList);
             return formatResult(result);
 
         } catch (Exception e) {

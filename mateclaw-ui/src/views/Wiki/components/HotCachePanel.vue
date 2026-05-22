@@ -133,7 +133,7 @@ async function onReset() {
   }
 }
 
-function formatTimestamp(iso: string | null): string {
+function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return t('common.never', 'Never')
   return new Date(iso).toLocaleString()
 }

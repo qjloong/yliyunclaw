@@ -138,12 +138,20 @@
               <td colspan="6">
                 <div class="findings-detail">
                   <div v-for="(finding, idx) in parseFindings(log.findingsJson)" :key="idx" class="finding-item">
-                    <span class="severity-badge severity-sm" :class="'severity-' + finding.severity?.toLowerCase()">
-                      {{ finding.severity }}
-                    </span>
-                    <span class="finding-category">{{ finding.category }}</span>
-                    <span class="finding-title">{{ finding.title }}</span>
-                    <span v-if="finding.remediation" class="finding-remediation">{{ finding.remediation }}</span>
+                    <div class="finding-item__head">
+                      <span class="severity-badge severity-sm" :class="'severity-' + finding.severity?.toLowerCase()">
+                        {{ finding.severity }}
+                      </span>
+                      <span class="finding-category">{{ finding.category }}</span>
+                      <span class="finding-title">{{ finding.title }}</span>
+                    </div>
+                    <div v-if="finding.description" class="finding-description">{{ finding.description }}</div>
+                    <div v-if="formatFindingContext(finding)" class="finding-context">
+                      {{ t('security.audit.findingContext') }} {{ formatFindingContext(finding) }}
+                    </div>
+                    <div v-if="finding.remediation" class="finding-remediation">
+                      {{ t('security.audit.findingRecovery') }} {{ finding.remediation }}
+                    </div>
                   </div>
                 </div>
               </td>
@@ -176,7 +184,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { securityApi } from '@/api'
 import { parseFindings, formatTime, truncateConvId } from '../composables/helpers'
-import type { AuditStats } from '@/types'
+import type { AuditStats, GuardFinding } from '@/types'
 
 const { t } = useI18n()
 
@@ -251,6 +259,25 @@ function toggleExpand(id: number) {
     expandedRows.value.add(id)
   }
   expandedRows.value = new Set(expandedRows.value)
+}
+
+function formatFindingContext(finding: GuardFinding): string {
+  const metadata = finding?.metadata || {}
+  const policy = metadata.workspacePolicy || {}
+  const parts: string[] = []
+  if (metadata.workspaceBasePath) {
+    parts.push(`${t('chat.approvalWorkspaceRootLabel')}: ${String(metadata.workspaceBasePath)}`)
+  }
+  if (finding.ruleId === 'WORKSPACE_ALLOWED_PATH_MISS' && Array.isArray(policy.allowedPaths) && policy.allowedPaths.length) {
+    parts.push(`${t('chat.approvalAllowedPathsLabel')}: ${policy.allowedPaths.slice(0, 3).join(', ')}`)
+  }
+  if (finding.ruleId === 'WORKSPACE_DENIED_PATH' && Array.isArray(policy.deniedPaths) && policy.deniedPaths.length) {
+    parts.push(`${t('chat.approvalDeniedPathsLabel')}: ${policy.deniedPaths.slice(0, 3).join(', ')}`)
+  }
+  if (finding.snippet) {
+    parts.push(`${t('chat.approvalAttemptedPathLabel')}: ${finding.snippet}`)
+  }
+  return parts.join(' · ')
 }
 
 onMounted(async () => {
@@ -424,9 +451,19 @@ onMounted(async () => {
 
 .finding-item {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--mc-bg-muted);
+}
+
+.finding-item__head {
+  display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  flex-wrap: wrap;
 }
 
 .finding-category {
@@ -436,7 +473,10 @@ onMounted(async () => {
 }
 
 .finding-title { color: var(--mc-text-primary); }
-.finding-remediation { color: var(--mc-text-tertiary); font-style: italic; }
+.finding-description,
+.finding-context,
+.finding-remediation { color: var(--mc-text-tertiary); }
+.finding-remediation { font-style: italic; }
 
 .pagination {
   display: flex;

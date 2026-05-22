@@ -6,21 +6,21 @@
   >
     <div ref="contentRef" class="message-list-content">
       <!-- 空状态 -->
-      <div v-if="messages.length === 0 && !loading" class="empty-state">
+      <div v-if="renderableMessages.length === 0 && !loading" class="empty-state">
         <slot name="empty" :title="title" :subtitle="subtitle" :suggestions="suggestions">
           <div class="welcome-screen">
             <div class="welcome-logo">
               <div class="welcome-logo__glow"></div>
-              <img src="/logo/mateclaw_logo_s.png" alt="MateClaw" class="welcome-logo__icon" />
+              <img src="/logo/mateclaw_logo_s.png" alt="Meta Y" class="welcome-logo__icon" />
             </div>
-            <h2 class="welcome-title">Mate<span class="welcome-title-highlight">Claw</span></h2>
+            <h2 class="welcome-title">Meta <span class="welcome-title-highlight">Y</span></h2>
             <p class="welcome-subtitle">{{ subtitle }}</p>
             <div v-if="suggestions.length" class="welcome-suggestions">
               <button
                 v-for="(s, i) in suggestions"
-                :key="s"
+                :key="suggestionKey(s, i)"
                 class="suggestion-card"
-                @click="$emit('suggestion-click', s)"
+                @click="$emit('suggestion-click', suggestionPrompt(s))"
               >
                 <span class="suggestion-card__icon">
                   <el-icon v-if="i % 4 === 0"><ChatDotRound /></el-icon>
@@ -28,7 +28,7 @@
                   <el-icon v-else-if="i % 4 === 2"><Monitor /></el-icon>
                   <el-icon v-else><DataLine /></el-icon>
                 </span>
-                <span class="suggestion-card__text">{{ s }}</span>
+                <span class="suggestion-card__text">{{ suggestionTitle(s) }}</span>
                 <el-icon class="suggestion-card__arrow"><Right /></el-icon>
               </button>
             </div>
@@ -49,25 +49,20 @@
           </button>
         </div>
 
-        <template v-for="(msg, index) in messages" :key="msg.id || index">
+        <template v-for="(msg, index) in renderableMessages">
           <!-- 压缩摘要消息特殊渲染 -->
           <CompressionSummary
             v-if="isCompressionSummary(msg)"
+            :key="msg.id || index"
             :message="msg"
           />
-          <!-- Cron-run 头部分隔卡（system 消息且以 📋 开头）—— 在
-               tasks_<wsId> / IM 镜像会话里把"这是哪个 cron 跑的"清晰标出来。
-               LLM 历史读取时会跳过 system 消息，所以不污染下次提示词。 -->
-          <div v-else-if="isCronHeader(msg)" class="cron-divider">
-            <div class="cron-divider__line"></div>
-            <span class="cron-divider__label">{{ msg.content }}</span>
-            <div class="cron-divider__line"></div>
-          </div>
           <!-- 普通消息气泡 -->
           <MessageBubble
             v-else
+            :key="msg.id || index"
             :message="msg"
-            :is-last="index === messages.length - 1"
+            :conversation-messages="renderableMessages"
+            :is-last="index === renderableMessages.length - 1"
             :assistant-icon="assistantIcon"
             :user-icon="userIcon"
             :show-cursor="showCursorForMessage(msg)"
@@ -80,13 +75,15 @@
       </template>
 
       <!-- 加载指示器：只在无消息时显示（有消息时由输入框显示停止按钮） -->
-      <div v-if="loading && messages.length === 0" class="loading-more">
+      <div v-if="loading && renderableMessages.length === 0" class="loading-more">
         <slot name="loading">
           <div class="typing-indicator">
             <span></span><span></span><span></span>
           </div>
         </slot>
       </div>
+
+      <div class="message-list-bottom-anchor" aria-hidden="true"></div>
     </div>
   </div>
 </template>
@@ -102,6 +99,11 @@ import CompressionSummary from './CompressionSummary.vue'
 import { useStickToBottom } from '@/composables/chat/useStickToBottom'
 import type { Message } from '@/types'
 
+export interface ChatHomeQuickStart {
+  title: string
+  prompt: string
+}
+
 interface Props {
   /** 消息列表 */
   messages: Message[]
@@ -116,7 +118,7 @@ interface Props {
   /** 副标题（空状态） */
   subtitle?: string
   /** 建议提示（空状态） */
-  suggestions?: string[]
+  suggestions?: Array<string | ChatHomeQuickStart>
   /** 是否自动滚动到底部 */
   autoScroll?: boolean
   /** 是否还有更早的消息可加载 */
@@ -129,13 +131,15 @@ const props = withDefaults(defineProps<Props>(), {
   loading: false,
   assistantIcon: '🤖',
   userIcon: 'U',
-  title: 'MateClaw',
+  title: 'Meta Y',
   subtitle: '',
   suggestions: () => [],
   autoScroll: true,
   hasMore: false,
   loadingOlder: false,
 })
+
+const renderableMessages = computed(() => props.messages.filter((msg) => msg.role !== 'tool'))
 
 const emit = defineEmits<{
   regenerate: [message: Message]
@@ -147,6 +151,18 @@ const emit = defineEmits<{
   'load-more': []
 }>()
 
+function suggestionTitle(suggestion: string | ChatHomeQuickStart) {
+  return typeof suggestion === 'string' ? suggestion : suggestion.title || suggestion.prompt
+}
+
+function suggestionPrompt(suggestion: string | ChatHomeQuickStart) {
+  return typeof suggestion === 'string' ? suggestion : suggestion.prompt || suggestion.title
+}
+
+function suggestionKey(suggestion: string | ChatHomeQuickStart, index: number) {
+  return `${index}:${suggestionTitle(suggestion)}`
+}
+
 // 判断消息是否为压缩摘要
 const isCompressionSummary = (msg: Message) => {
   if (msg.role !== 'system') return false
@@ -156,13 +172,6 @@ const isCompressionSummary = (msg: Message) => {
   } catch {
     return false
   }
-}
-
-// Cron-run header — system message inserted by CronJobLifecycleService.startRun
-// to label which job's run starts here. Pattern: leading "📋 ". Renders as a
-// labeled divider so users browsing tasks_<wsId> can distinguish runs.
-const isCronHeader = (msg: Message) => {
-  return msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith('📋 ')
 }
 
 // 智能滚动
@@ -176,7 +185,7 @@ const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom({
 const showCursorForMessage = (msg: Message) => {
   // 只有正在生成的最后一条助手消息显示光标
   const isLastAssistant = msg.role === 'assistant' && 
-    msg.id === props.messages[props.messages.length - 1]?.id
+    msg.id === renderableMessages.value[renderableMessages.value.length - 1]?.id
   return isLastAssistant && msg.status === 'generating'
 }
 
@@ -210,6 +219,7 @@ watch(
   padding: 18px 20px 12px;
   scroll-behavior: smooth;
   min-height: 0;
+  overflow-anchor: none;
 }
 
 .message-list::-webkit-scrollbar {
@@ -226,6 +236,13 @@ watch(
   flex-direction: column;
   gap: 14px;
   min-height: 100%;
+  overflow-anchor: none;
+}
+
+.message-list-bottom-anchor {
+  height: 1px;
+  width: 100%;
+  overflow-anchor: auto;
 }
 
 /* ==================== 空状态 / 欢迎屏 ==================== */
@@ -437,26 +454,5 @@ watch(
   .suggestion-card {
     padding: 10px 12px;
   }
-}
-
-/* Cron-run header divider — labeled separator between runs in tasks_<wsId>. */
-.cron-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 24px 6px;
-  user-select: none;
-}
-.cron-divider__line {
-  flex: 1;
-  height: 1px;
-  background: var(--mc-border-light, rgba(0, 0, 0, 0.08));
-}
-.cron-divider__label {
-  font-size: 12px;
-  color: var(--mc-text-tertiary, #999);
-  white-space: nowrap;
-  font-weight: 500;
-  letter-spacing: 0.2px;
 }
 </style>

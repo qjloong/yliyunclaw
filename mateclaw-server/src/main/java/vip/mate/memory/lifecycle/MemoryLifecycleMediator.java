@@ -4,6 +4,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.context.ChatOriginHolder;
+import vip.mate.agent.context.ContextRouterService;
 import vip.mate.memory.spi.MemoryManager;
 
 /**
@@ -31,6 +34,7 @@ import vip.mate.memory.spi.MemoryManager;
 public class MemoryLifecycleMediator {
 
     private final MemoryManager memoryManager;
+    private final ContextRouterService contextRouterService;
     private final ApplicationEventPublisher events;
 
     /**
@@ -42,7 +46,14 @@ public class MemoryLifecycleMediator {
      */
     public String beforeLlmCall(TurnContext ctx) {
         try {
-            String context = memoryManager.prefetchAll(ctx.agentId(), ctx.userQuery());
+            ChatOrigin origin = ChatOriginHolder.get();
+            String routedContext = contextRouterService.buildInjectionBlock(
+                ctx.agentId(),
+                ctx.conversationId(),
+                origin,
+                ctx.userQuery());
+            String memoryContext = memoryManager.prefetchAll(ctx.agentId(), ctx.userQuery());
+            String context = mergeContexts(routedContext, memoryContext);
             events.publishEvent(new TurnStartedEvent(ctx));
             log.debug("[Memory] beforeLlmCall: agent={}, contextLen={}", ctx.agentId(),
                     context != null ? context.length() : 0);
@@ -80,5 +91,17 @@ public class MemoryLifecycleMediator {
         } catch (Exception e) {
             log.debug("[Memory] onSessionEnd dispatch failed (non-fatal): {}", e.getMessage());
         }
+    }
+
+    private String mergeContexts(String routedContext, String memoryContext) {
+        boolean hasRouted = routedContext != null && !routedContext.isBlank();
+        boolean hasMemory = memoryContext != null && !memoryContext.isBlank();
+        if (hasRouted && hasMemory) {
+            return routedContext + "\n\n" + memoryContext;
+        }
+        if (hasRouted) {
+            return routedContext;
+        }
+        return hasMemory ? memoryContext : "";
     }
 }

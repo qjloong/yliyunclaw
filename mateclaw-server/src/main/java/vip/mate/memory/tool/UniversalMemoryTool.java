@@ -6,14 +6,18 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
-import vip.mate.memory.event.MemoryWriteEvent;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
+import vip.mate.memory.governance.MemoryGovernanceFilter;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 import vip.mate.workspace.document.WorkspaceFileService;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * RFC-090 §11.3.1 — universal {@code remember()} tool.
@@ -40,7 +44,10 @@ public class UniversalMemoryTool {
             .ofPattern("yyyy-MM-dd HH:mm");
 
     private final WorkspaceFileService workspaceFileService;
-    private final ApplicationEventPublisher eventPublisher;
+    /** WP-3: write governance gate — blocks unauthorized universal remember operations. */
+    private final MemoryGovernanceFilter governanceFilter;
+        /** WP-3: standardized provenance/event emission for governed writes. */
+        private final MemoryWriteProvenancePublisher provenancePublisher;
 
     @Tool(description = """
             将一条自由形式的经验或洞察追加到 Agent 的长期记忆 (MEMORY.md)。
@@ -56,6 +63,12 @@ public class UniversalMemoryTool {
         if (agentId == null) return error("agentId 不能为空");
         if (content == null || content.isBlank()) return error("content 不能为空");
 
+        // WP-3: governance gate — universal remember is a write to canonical memory.
+        if (!governanceFilter.isAllowed(MemorySurfaceType.UNIVERSAL_TOOL, MemoryOperation.WRITE, MEMORY_FILENAME)) {
+            log.warn("[WP-3] remember() blocked by governance: surface=UNIVERSAL_TOOL, path={}", MEMORY_FILENAME);
+            return error("[WP-3] 记忆写入被安全策略拦截");
+        }
+
         try {
             WorkspaceFileEntity existing = workspaceFileService.getFile(agentId, MEMORY_FILENAME);
             String existingContent = existing != null && existing.getContent() != null
@@ -63,12 +76,18 @@ public class UniversalMemoryTool {
             String updated = appendLesson(existingContent, content, source);
             workspaceFileService.saveFile(agentId, MEMORY_FILENAME, updated);
 
-            // RFC-090 §14.3 — universal remember() targets MEMORY.md (the
-            // canonical file), so this IS a MemoryWriteEvent. Skill-local
-            // lessons go through SkillLessonWrittenEvent instead and do
-            // NOT touch this path.
-            eventPublisher.publishEvent(new MemoryWriteEvent(agentId, MEMORY_FILENAME,
-                    "remember", content));
+                Map<String, String> metadata = new LinkedHashMap<>();
+                metadata.put("writer", "UniversalMemoryTool");
+                if (source != null && !source.isBlank()) {
+                metadata.put("source", source.trim());
+                }
+                provenancePublisher.publishRequired(agentId, null,
+                    MemorySurfaceType.UNIVERSAL_TOOL,
+                    MemoryOperation.WRITE,
+                    MEMORY_FILENAME,
+                    "remember",
+                    updated,
+                    metadata);
 
             JSONObject result = new JSONObject();
             result.set("success", true);

@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.validation.BindException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
@@ -73,6 +74,15 @@ public class GlobalExceptionHandler {
                 .orElse("Validation failed");
         log.warn("Validation failed: {}", msg);
         return R.fail(400, msg);
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public R<Void> handleNoResourceFound(NoResourceFoundException e,
+                                         HttpServletRequest request,
+                                         HttpServletResponse response) {
+        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+        log.warn("Static resource not found: {} {}", request.getMethod(), request.getRequestURI());
+        return R.fail(404, "Not found");
     }
 
     @ExceptionHandler(Exception.class)

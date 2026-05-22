@@ -6,13 +6,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import vip.mate.auth.model.UserEntity;
+import vip.mate.auth.service.AuthService;
 import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.workspace.core.service.WorkspaceService;
 import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.event.WikiProcessingEvent;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
@@ -54,6 +58,8 @@ public class WikiController {
     private final WikiProperties properties;
     private final ApplicationEventPublisher eventPublisher;
     private final WikiProgressBus progressBus;
+    private final WorkspaceService workspaceService;
+    private final AuthService authService;
 
     // ==================== Knowledge Base ====================
 
@@ -90,29 +96,41 @@ public class WikiController {
                 .toList());
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "创建知识库")
     @PostMapping("/knowledge-bases")
     public R<WikiKnowledgeBaseEntity> createKB(@RequestBody Map<String, Object> body,
-                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                                Authentication auth) {
         String name = (String) body.get("name");
         String description = (String) body.get("description");
+        String externalKey = body.get("externalKey") != null ? body.get("externalKey").toString() : null;
         Long agentId = body.get("agentId") != null ? Long.valueOf(body.get("agentId").toString()) : null;
         long wsId = workspaceId != null ? workspaceId : 1L;
-        WikiKnowledgeBaseEntity kb = kbService.create(name, description, agentId, wsId);
+        if (externalKey != null && !externalKey.isBlank()) {
+            requireTemplateBindingPermission(wsId, auth);
+        }
+        UserEntity user = resolveCurrentUser(auth);
+        WikiKnowledgeBaseEntity kb = kbService.create(name, description, agentId, wsId, externalKey, user.getId());
         return R.ok(kb);
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "更新知识库")
     @PutMapping("/knowledge-bases/{id}")
     public R<WikiKnowledgeBaseEntity> updateKB(@PathVariable Long id, @RequestBody Map<String, Object> body,
-                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                                Authentication auth) {
         verifyKBWorkspace(id, workspaceId);
         String name = (String) body.get("name");
         String description = (String) body.get("description");
         Long agentId = body.get("agentId") != null ? Long.valueOf(body.get("agentId").toString()) : null;
-        kbService.update(id, name, description, agentId);
+        String externalKey = body.get("externalKey") != null ? body.get("externalKey").toString() : null;
+        long wsId = workspaceId != null ? workspaceId : 1L;
+        if (body.containsKey("externalKey")) {
+            requireTemplateBindingPermission(wsId, auth);
+        }
+        kbService.update(id, name, description, agentId, externalKey, body.containsKey("externalKey"));
         // RFC Embedding UI: 允许通过此接口绑定 / 解绑 embedding 模型
         if (body.containsKey("embeddingModelId")) {
             Object v = body.get("embeddingModelId");
@@ -129,8 +147,10 @@ public class WikiController {
     @Operation(summary = "删除知识库")
     @DeleteMapping("/knowledge-bases/{id}")
     public R<Void> deleteKB(@PathVariable Long id,
-                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                             Authentication auth) {
         verifyKBWorkspace(id, workspaceId);
+        requireKnowledgeBaseDeletePermission(id, workspaceId, auth);
         kbService.delete(id);
         return R.ok();
     }
@@ -146,7 +166,7 @@ public class WikiController {
         return R.ok(Map.of("content", kb.getConfigContent() != null ? kb.getConfigContent() : ""));
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "更新知识库配置")
     @PutMapping("/knowledge-bases/{id}/config")
     public R<Void> updateConfig(@PathVariable Long id, @RequestBody Map<String, String> body,
@@ -158,7 +178,7 @@ public class WikiController {
 
     // ==================== Directory Scan ====================
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "设置知识库关联目录")
     @PutMapping("/knowledge-bases/{id}/source-directory")
     public R<Void> setSourceDirectory(@PathVariable Long id, @RequestBody Map<String, String> body,
@@ -169,7 +189,7 @@ public class WikiController {
         return R.ok();
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "扫描关联目录导入文件")
     @PostMapping("/knowledge-bases/{id}/scan")
     public R<Map<String, Object>> scanDirectory(@PathVariable Long id,
@@ -216,7 +236,7 @@ public class WikiController {
         return R.ok(result);
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "添加文本材料")
     @PostMapping("/knowledge-bases/{kbId}/raw/text")
     public R<WikiRawMaterialEntity> addRawText(@PathVariable Long kbId, @RequestBody Map<String, String> body,
@@ -227,7 +247,7 @@ public class WikiController {
         return R.ok(rawService.addText(kbId, title, content));
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "上传文件材料")
     @PostMapping("/knowledge-bases/{kbId}/raw/upload")
     public R<WikiRawMaterialEntity> uploadRaw(@PathVariable Long kbId,
@@ -239,14 +259,11 @@ public class WikiController {
                 ? originalName.substring(originalName.lastIndexOf(".") + 1).toLowerCase()
                 : "txt";
 
-        // Resolve source type from extension. Image extensions route to the
-        // vision-in pipeline at extraction time; everything else falls through
-        // to the existing text / pdf / docx handling.
+        // 确定 sourceType
         String sourceType = switch (extension) {
             case "pdf" -> "pdf";
             case "docx", "doc" -> "docx";
             case "txt", "md" -> "text";
-            case "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif" -> "image";
             default -> "text";
         };
 
@@ -261,7 +278,6 @@ public class WikiController {
             Path targetPath = uploadDir.resolve(System.currentTimeMillis() + "_" + originalName);
             file.transferTo(targetPath);
             return R.ok(rawService.addFile(kbId, originalName, sourceType,
-                    file.getContentType(),
                     targetPath.toString(), file.getSize()));
         }
     }
@@ -281,7 +297,7 @@ public class WikiController {
         return R.ok();
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "重新处理原始材料（force=true 时绕过 content_hash 短路）")
     @PostMapping("/knowledge-bases/{kbId}/raw/{rawId}/reprocess")
     public R<Void> reprocessRaw(@PathVariable Long kbId, @PathVariable Long rawId,
@@ -297,23 +313,6 @@ public class WikiController {
             rawService.setLastProcessedHash(rawId, null);
         }
         rawService.reprocess(rawId);
-        return R.ok();
-    }
-
-    @RequireWorkspaceRole("member")
-    @Operation(summary = "请求取消正在进行的处理（仅在 processing 状态有效）")
-    @PostMapping("/knowledge-bases/{kbId}/raw/{rawId}/cancel")
-    public R<Void> cancelRaw(@PathVariable Long kbId, @PathVariable Long rawId,
-                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        verifyKBWorkspace(kbId, workspaceId);
-        WikiRawMaterialEntity raw = rawService.getById(rawId);
-        if (raw == null || !kbId.equals(raw.getKbId())) {
-            return R.fail("Raw material not found in this knowledge base");
-        }
-        // requestCancel is idempotent: a no-op when the row is not processing,
-        // so repeated clicks (or a click after the run already finished) are
-        // safe and do not surface an error to the user.
-        rawService.requestCancel(rawId);
         return R.ok();
     }
 
@@ -415,7 +414,7 @@ public class WikiController {
         return R.ok(page);
     }
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "手动编辑 Wiki 页面")
     @PutMapping("/knowledge-bases/{kbId}/pages/{slug}")
     public R<WikiPageEntity> updatePage(@PathVariable Long kbId, @PathVariable String slug,
@@ -493,7 +492,7 @@ public class WikiController {
 
     // ==================== Processing ====================
 
-    @RequireWorkspaceRole("member")
+    @RequireWorkspaceRole("admin")
     @Operation(summary = "触发知识库处理（异步）；force=true 时清空所有 last_processed_hash 并重新入队全部材料")
     @PostMapping("/knowledge-bases/{kbId}/process")
     public R<Map<String, Object>> processKB(@PathVariable Long kbId,
@@ -608,5 +607,40 @@ public class WikiController {
         if (kb.getWorkspaceId() != null && !kb.getWorkspaceId().equals(wsId)) {
             throw new MateClawException("err.common.wrong_workspace", "资源不属于当前工作区");
         }
+    }
+
+    private void requireTemplateBindingPermission(Long workspaceId, Authentication auth) {
+        UserEntity user = resolveCurrentUser(auth);
+        if ("admin".equalsIgnoreCase(user.getRole())) {
+            return;
+        }
+        workspaceService.requirePermission(workspaceId, user.getId(), "admin");
+    }
+
+    private void requireKnowledgeBaseDeletePermission(Long kbId, Long workspaceId, Authentication auth) {
+        UserEntity user = resolveCurrentUser(auth);
+        if ("admin".equalsIgnoreCase(user.getRole())) {
+            return;
+        }
+        long wsId = workspaceId != null ? workspaceId : 1L;
+        if (workspaceService.hasPermission(wsId, user.getId(), "admin")) {
+            return;
+        }
+        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
+        if (kb != null && kb.getCreatorUserId() != null && kb.getCreatorUserId().equals(user.getId())) {
+            return;
+        }
+        throw new MateClawException("err.wiki.kb.delete_forbidden", 403, "Only the creator or an admin can delete this knowledge base");
+    }
+
+    private UserEntity resolveCurrentUser(Authentication auth) {
+        if (auth == null || !auth.isAuthenticated() || auth.getName() == null) {
+            throw new MateClawException(403, "authentication required");
+        }
+        UserEntity user = authService.findByUsername(auth.getName());
+        if (user == null) {
+            throw new MateClawException(403, "user not found");
+        }
+        return user;
     }
 }

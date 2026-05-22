@@ -115,7 +115,9 @@
                     <td class="cell-time">{{ formatTime(run.startedAt) }}</td>
                     <td class="cell-job">#{{ run.cronJobId }}</td>
                     <td>
-                      <span class="status-badge" :class="'status-' + run.status">{{ run.status }}</span>
+                      <span class="status-badge" :class="'status-' + runSummaryKey(run)" :title="runSummaryText(run)">
+                        {{ t('cronJobs.executionSummary.' + runSummaryKey(run)) }}
+                      </span>
                     </td>
                     <td class="cell-trigger">{{ run.triggerType }}</td>
                     <td class="cell-duration">{{ calcDuration(run) }}</td>
@@ -137,6 +139,7 @@ import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChatDotRound, DataLine, Document, Tools } from '@element-plus/icons-vue'
 import { dashboardApi } from '@/api'
+import type { CronJobRun } from '@/types'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
@@ -147,7 +150,7 @@ echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, Canvas
 const { t } = useI18n()
 
 const overview = ref<Record<string, any>>({})
-const recentRuns = ref<any[]>([])
+const recentRuns = ref<CronJobRun[]>([])
 const trendData = ref<any[]>([])
 const chartRef = ref<HTMLElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
@@ -265,7 +268,7 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function formatTime(dateStr: string) {
+function formatTime(dateStr?: string) {
   if (!dateStr) return '-'
   return new Date(dateStr).toLocaleString()
 }
@@ -275,6 +278,14 @@ function calcDuration(run: any): string {
   const ms = new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()
   if (ms < 1000) return ms + 'ms'
   return (ms / 1000).toFixed(1) + 's'
+}
+
+function runSummaryKey(run: CronJobRun): string {
+  return (run.executionSummaryStatus || run.status || 'NONE').toLowerCase()
+}
+
+function runSummaryText(run: CronJobRun): string {
+  return run.executionSummaryText || t('cronJobs.executionSummary.' + runSummaryKey(run))
 }
 </script>
 
@@ -414,9 +425,15 @@ function calcDuration(run: any): string {
 .cell-tokens { font-family: 'SF Mono', monospace; font-size: 12px; }
 
 .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.status-none { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
 .status-running { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
-.status-completed { background: rgba(16, 185, 129, 0.12); color: #10b981; }
+.status-awaiting_approval { background: rgba(245, 158, 11, 0.14); color: #b45309; }
+.status-permission_denied { background: rgba(249, 115, 22, 0.14); color: #c2410c; }
+.status-execution_failed,
 .status-failed { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.status-execution_succeeded,
+.status-completed,
+.status-succeeded { background: rgba(16, 185, 129, 0.12); color: #10b981; }
 
 .empty-state { padding: 48px; text-align: center; color: var(--mc-text-tertiary); font-size: 14px; }
 

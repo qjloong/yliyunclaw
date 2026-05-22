@@ -4,6 +4,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.contract.MemoryOperation;
+import vip.mate.memory.contract.MemorySurfaceType;
+import vip.mate.memory.governance.MemoryWriteProvenancePublisher;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 
@@ -30,6 +33,7 @@ public class MemoryArchiveService {
 
     private final WorkspaceFileService workspaceFileService;
     private final MemoryProperties properties;
+    private final MemoryWriteProvenancePublisher provenancePublisher;
 
     private static final Pattern DIARY_HEADER = Pattern.compile(
             "^## (\\d{4}-\\d{2}-\\d{2}) \\d{2}:\\d{2}.*$");
@@ -90,6 +94,13 @@ public class MemoryArchiveService {
                     ? "# Dreaming Archive " + entry.getKey() + "\n\n" + entry.getValue()
                     : existing + "\n" + entry.getValue();
             workspaceFileService.saveFile(agentId, archiveFilename, archiveContent);
+                provenancePublisher.publishRequired(agentId, null,
+                    MemorySurfaceType.ARCHIVE_MAINTENANCE,
+                    MemoryOperation.WRITE,
+                    archiveFilename,
+                    "archive-dreams-monthly",
+                    archiveContent,
+                    Map.of("writer", "MemoryArchiveService", "archiveMonth", entry.getKey()));
         }
 
         // Update DREAMS.md with only kept entries
@@ -100,6 +111,13 @@ public class MemoryArchiveService {
         workspaceFileService.saveFile(agentId, "DREAMS.md", newContent);
 
         int archivedMonths = archives.size();
+        provenancePublisher.publishRequired(agentId, null,
+                MemorySurfaceType.ARCHIVE_MAINTENANCE,
+                MemoryOperation.WRITE,
+                "DREAMS.md",
+                "archive-dreams-index",
+                newContent,
+                Map.of("writer", "MemoryArchiveService", "archivedMonths", String.valueOf(archivedMonths)));
         log.info("[Memory] Archived dream entries to {} monthly files for agent={}", archivedMonths, agentId);
     }
 
