@@ -1,0 +1,12 @@
+ARG RUNTIME_BASE=eclipse-temurin:21-jre
+
+FROM ${RUNTIME_BASE}
+
+WORKDIR /app
+
+ENV TZ=Asia/Shanghai \
+    JAVA_TOOL_OPTIONS="-Duser.timezone=Asia/Shanghai"
+
+EXPOSE 18088
+
+ENTRYPOINT ["java", "-Dspring.profiles.active=mysql", "-jar", "/app/app.jar"]

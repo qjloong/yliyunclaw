@@ -1,0 +1,1 @@
+ALTER TABLE mate_cron_job ADD COLUMN IF NOT EXISTS working_directory VARCHAR(1024);

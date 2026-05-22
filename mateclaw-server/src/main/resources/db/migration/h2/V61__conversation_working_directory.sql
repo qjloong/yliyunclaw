@@ -1,0 +1,1 @@
+ALTER TABLE mate_conversation ADD COLUMN IF NOT EXISTS working_directory VARCHAR(1024);

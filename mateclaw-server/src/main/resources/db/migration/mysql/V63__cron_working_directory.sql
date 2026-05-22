@@ -1,0 +1,5 @@
+SET @c := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mate_cron_job' AND COLUMN_NAME = 'working_directory');
+SET @s := IF(@c = 0, 'ALTER TABLE mate_cron_job ADD COLUMN working_directory VARCHAR(1024) DEFAULT NULL AFTER request_body', 'SELECT 1');
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

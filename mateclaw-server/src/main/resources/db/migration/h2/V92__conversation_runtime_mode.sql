@@ -1,0 +1,1 @@
+ALTER TABLE mate_conversation ADD COLUMN IF NOT EXISTS runtime_mode VARCHAR(32) DEFAULT 'default';

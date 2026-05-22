@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "MateClaw: Tail backend log",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "if (!(Test-Path 'logs/mateclaw.log')) { New-Item -ItemType File -Path 'logs/mateclaw.log' -Force | Out-Null }; Get-Content 'logs/mateclaw.log' -Wait -Tail 80"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "MateClaw: Tail backend error log",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "if (!(Test-Path 'logs/mateclaw-error.log')) { New-Item -ItemType File -Path 'logs/mateclaw-error.log' -Force | Out-Null }; Get-Content 'logs/mateclaw-error.log' -Wait -Tail 80"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "MateClaw: Tail backend debug log",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "if (!(Test-Path 'logs/mateclaw-debug.log')) { New-Item -ItemType File -Path 'logs/mateclaw-debug.log' -Force | Out-Null }; Get-Content 'logs/mateclaw-debug.log' -Wait -Tail 80"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}
