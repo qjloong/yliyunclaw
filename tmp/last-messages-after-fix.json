@@ -1,0 +1,56 @@
+﻿{
+    "code":  200,
+    "msg":  "æä½æå",
+    "data":  [
+                 {
+                     "id":  "2056015511436492801",
+                     "conversationId":  "conv_fix_test_1779027271460",
+                     "role":  "user",
+                     "content":  "???????????",
+                     "toolName":  null,
+                     "status":  "completed",
+                     "metadata":  {
+
+                                  },
+                     "promptTokens":  0,
+                     "completionTokens":  0,
+                     "createTime":  "2026-05-17T22:14:31.51271",
+                     "updateTime":  "2026-05-17T22:14:31.51271",
+                     "contentParts":  [
+                                          {
+                                              "type":  "text",
+                                              "text":  "???????????"
+                                          }
+                                      ]
+                 },
+                 {
+                     "id":  "2056015646090428418",
+                     "conversationId":  "conv_fix_test_1779027271460",
+                     "role":  "assistant",
+                     "content":  "â è¯·è¾å\u0085¥å\u0085·ä½çä»»å¡ç®æ ã",
+                     "toolName":  null,
+                     "status":  "completed",
+                     "metadata":  {
+                                      "segments":  [
+                                                       {
+                                                           "id":  "co-0",
+                                                           "type":  "content",
+                                                           "status":  "completed",
+                                                           "text":  "â è¯·è¾å\u0085¥å\u0085·ä½çä»»å¡ç®æ ã"
+                                                       }
+                                                   ],
+                                      "currentPhase":  "planning"
+                                  },
+                     "promptTokens":  1057,
+                     "completionTokens":  557,
+                     "createTime":  "2026-05-17T22:15:03.616534",
+                     "updateTime":  "2026-05-17T22:15:03.616534",
+                     "contentParts":  [
+                                          {
+                                              "type":  "text",
+                                              "text":  "â è¯·è¾å\u0085¥å\u0085·ä½çä»»å¡ç®æ ã"
+                                          }
+                                      ]
+                 }
+             ]
+}

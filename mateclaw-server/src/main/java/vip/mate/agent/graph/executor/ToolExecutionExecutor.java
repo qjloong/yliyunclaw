@@ -1,0 +1,1408 @@
+package vip.mate.agent.graph.executor;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.tool.ToolCallback;
+import vip.mate.auth.model.UserEntity;
+import vip.mate.auth.service.AuthService;
+import vip.mate.tool.builtin.ToolExecutionContext;
+import vip.mate.agent.AgentToolSet;
+import vip.mate.agent.GraphEventPublisher;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.graph.state.DirectToolOutput;
+import vip.mate.approval.ApprovalGrantService;
+import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.channel.web.ChatStreamTracker;
+import vip.mate.tool.guard.ToolExecutionGuardHelper;
+import vip.mate.tool.guard.ToolGuard;
+import vip.mate.tool.guard.ToolGuardResult;
+import vip.mate.tool.guard.model.GuardEvaluation;
+import vip.mate.policy.contract.EffectivePolicyContract;
+import vip.mate.policy.contract.PolicyDimension;
+import vip.mate.policy.resolver.EffectivePolicyResolver;
+import vip.mate.tool.guard.model.ToolInvocationContext;
+import vip.mate.tool.guard.service.ToolGuardService;
+import vip.mate.tool.metadata.ToolMetadataResolver;
+import vip.mate.tool.metadata.ToolRuntimeMetadata;
+import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.core.model.WorkspacePolicy;
+import vip.mate.workspace.core.service.WorkspaceService;
+
+import java.util.*;
+import java.util.Collections;
+import java.util.concurrent.*;
+
+/**
+ * 统一工具执行器（共享于 ActionNode 和 StepExecutionNode）
+ * <p>
+ * 两阶段执行模型：
+ * <ol>
+ *   <li><b>Phase 1 — 顺序 Guard + 分段</b>：按原始顺序逐个做 JSON 校验 → ToolGuard → barrier 判定 → callback 查找 + concurrencySafe 分类</li>
+ *   <li><b>Phase 2 — 分段并发执行</b>：barrier 之前的 safe 工具并行执行，unsafe 工具独占执行，结果按原始顺序返回</li>
+ * </ol>
+ * <p>
+ * 审批有前序语义：如果第 N 个工具需要审批，第 N+1、N+2 个工具不会执行。
+ *
+ * @author MateClaw Team
+ */
+@Slf4j
+public class ToolExecutionExecutor {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    // JDK 21 virtual threads: no blocking stall for I/O-bound tools.
+    // Each tool invocation gets its own lightweight carrier thread.
+    // Named threads (matching HookDispatcher convention) for log traceability.
+    private static final ExecutorService TOOL_EXECUTOR =
+            Executors.newThreadPerTaskExecutor(
+                    Thread.ofVirtual().name("tool-executor-", 0).factory());
+
+    /**
+     * Legacy hardcoded unsafe set, kept as a fallback when no
+     * {@link vip.mate.tool.ToolConcurrencyRegistry} is wired in (legacy tests,
+     * backwards-compatible constructors). New code should annotate the tool
+     * method with {@link vip.mate.tool.ConcurrencyUnsafe} instead of editing
+     * this list.
+     */
+    private static final Set<String> DEFAULT_UNSAFE_TOOLS = Set.of(
+            "browser_use", "BrowserUseTool", "write_file", "edit_file"
+    );
+
+    /**
+     * Layer 1 — hard truncation cap applied to every tool result before it
+     * reaches ToolResultStorage (Layer 2 spill) or the LLM prompt.
+     *
+     * <p>Two-level budget chain (RFC-008 / RFC-06 D-5):
+     * <pre>
+     *   raw tool result
+     *     → truncateToolResult(..., MAX_TOOL_RESULT_CHARS=8000)   // Layer 1: hard cap
+     *     → persistIfOversized(..., perResultThresholdChars=16000) // Layer 2: spill to disk
+     *     → enforceTurnBudget(..., perTurnBudgetChars=32000)      // Layer 3: per-turn aggregate
+     * </pre>
+     * Layer 1 runs first and is intentionally kept at 8000 to prevent oversized
+     * results from inflating the prompt. Layers 2/3 thresholds are configured in
+     * {@link ToolResultProperties} and application.yml.
+     */
+    private static final int MAX_TOOL_RESULT_CHARS = 8000;
+
+    /** 尾部错误模式检测 */
+    private static final java.util.regex.Pattern ERROR_TAIL_PATTERN = java.util.regex.Pattern.compile(
+            "(?i)\\b(error|exception|traceback|failed|fatal|panic|stack.?trace|errno)\\b");
+
+    /**
+     * RFC-052 §2.4: placeholder written into {@code ToolResponseMessage.content}
+     * for returnDirect tools. Intentionally English, short, and free of any
+     * tool-specific data so it is safe to enter prompt cache and gives the LLM
+     * a clear signal that the tool ran (vs failed).
+     */
+    static final String DIRECT_TOOL_PLACEHOLDER =
+            "[Tool result returned directly to user. Content withheld from model context per tool policy.]";
+
+    /**
+     * 智能截断工具结果：检测尾部是否含错误信息，动态调整 head/tail 比例。
+     * 错误信息在尾部时保留 80% tail，确保 agent 能看到错误原因。
+     */
+    static String truncateToolResult(String result, int maxChars) {
+        if (result == null || result.length() <= maxChars) return result;
+        int rawLen = result.length();
+        // 检测尾部 2000 字符是否含错误模式
+        String tailRegion = result.substring(Math.max(0, rawLen - 2000));
+        boolean errorDetected = ERROR_TAIL_PATTERN.matcher(tailRegion).find();
+        double headRatio = errorDetected ? 0.2 : 0.4;
+        if (errorDetected) {
+            log.info("[ToolExecutor] Error pattern detected in tail, preserving 80% tail (headRatio=0.2)");
+        }
+        int headLen = (int) (maxChars * headRatio);
+        int tailLen = maxChars - headLen - 80;
+        if (tailLen <= 0) tailLen = maxChars / 2;
+        log.info("[ToolExecutor] Truncated tool result from {} to {} chars (headRatio={})",
+                rawLen, maxChars, headRatio);
+        return result.substring(0, headLen)
+                + "\n\n... [结果已截断，原始 " + rawLen + " 字符，保留首尾关键片段] ...\n\n"
+                + result.substring(rawLen - tailLen);
+    }
+
+    private final Map<String, ToolCallback> toolCallbackMap;
+    private final ToolGuardService toolGuardService;
+    private final ToolGuard toolGuard; // legacy fallback
+    private final ApprovalWorkflowService approvalService;
+    private final ChatStreamTracker streamTracker;
+    private final vip.mate.config.ToolTimeoutProperties toolTimeoutProperties;
+    /** RFC-008 Phase 3 spill store; nullable so legacy constructors keep working. */
+    private final ToolResultStorage resultStorage;
+    /** RFC-008 Phase 4 metadata-driven concurrency classifier; nullable for legacy constructors. */
+    private final vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry;
+    private final WorkspaceService workspaceService;
+    private final ConversationService conversationService;
+    private final ApprovalGrantService approvalGrantService;
+    private final AuthService authService;
+    private final ToolMetadataResolver toolMetadataResolver;
+    /** WP-2: wired policy resolver — delegates merge to EffectivePolicyResolver + PolicyMergeHelper. */
+    private final EffectivePolicyResolver effectivePolicyResolver;
+    private final String templateMetadataJson;
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, null, null, null, null, null, null, null, null, null);
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, null, null, null, null, null, null, null, null);
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, concurrencyRegistry, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * @deprecated use the overload that also accepts {@link EffectivePolicyResolver}
+     */
+    @Deprecated
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService,
+                      ApprovalGrantService approvalGrantService,
+                      AuthService authService,
+                      ToolMetadataResolver toolMetadataResolver) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage,
+            concurrencyRegistry, workspaceService, conversationService, approvalGrantService, authService,
+            toolMetadataResolver, null, null);
+    }
+
+    /**
+     * @deprecated use the overload that also accepts {@link EffectivePolicyResolver}
+     */
+    @Deprecated
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService,
+                                  ApprovalGrantService approvalGrantService,
+                                  AuthService authService,
+                                  ToolMetadataResolver toolMetadataResolver,
+                                  String templateMetadataJson) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker,
+                toolTimeoutProperties, resultStorage, concurrencyRegistry,
+            workspaceService, conversationService, approvalGrantService,
+            authService, toolMetadataResolver, null, templateMetadataJson);
+    }
+
+    /**
+     * WP-2 entry point — wires {@link EffectivePolicyResolver} so that guard-context
+     * merges use {@link vip.mate.policy.resolver.PolicyMergeHelper} instead of the
+     * legacy inline logic, producing {@code policyProvenance} diagnostics.
+     */
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService,
+                                  ApprovalGrantService approvalGrantService,
+                                  AuthService authService,
+                                  ToolMetadataResolver toolMetadataResolver,
+                                  EffectivePolicyResolver effectivePolicyResolver,
+                                  String templateMetadataJson) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker,
+                toolTimeoutProperties, resultStorage, concurrencyRegistry,
+            workspaceService, conversationService, approvalGrantService,
+            authService, toolMetadataResolver, effectivePolicyResolver, templateMetadataJson);
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuard toolGuard,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
+        this.toolCallbackMap = toolSet.callbackByName();
+        this.toolGuardService = null;
+        this.toolGuard = toolGuard;
+        this.approvalService = approvalService;
+        this.streamTracker = streamTracker;
+        this.toolTimeoutProperties = null;
+        this.resultStorage = null;
+        this.concurrencyRegistry = null;
+        this.workspaceService = null;
+        this.conversationService = null;
+        this.approvalGrantService = null;
+        this.authService = null;
+        this.toolMetadataResolver = null;
+        this.effectivePolicyResolver = null;
+        this.templateMetadataJson = null;
+    }
+
+    private ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                   ToolGuard toolGuard, ApprovalWorkflowService approvalService,
+                                   ChatStreamTracker streamTracker,
+                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                   ToolResultStorage resultStorage,
+                                   vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                   WorkspaceService workspaceService,
+                                   ConversationService conversationService,
+                                   ApprovalGrantService approvalGrantService,
+                                   AuthService authService,
+                                   ToolMetadataResolver toolMetadataResolver,
+                                   EffectivePolicyResolver effectivePolicyResolver,
+                                   String templateMetadataJson) {
+        this.toolCallbackMap = toolSet.callbackByName();
+        this.toolGuardService = toolGuardService;
+        this.toolGuard = toolGuard;
+        this.approvalService = approvalService;
+        this.streamTracker = streamTracker;
+        this.toolTimeoutProperties = toolTimeoutProperties;
+        this.resultStorage = resultStorage;
+        this.concurrencyRegistry = concurrencyRegistry;
+        this.workspaceService = workspaceService;
+        this.conversationService = conversationService;
+        this.approvalGrantService = approvalGrantService;
+        this.authService = authService;
+        this.toolMetadataResolver = toolMetadataResolver;
+        this.effectivePolicyResolver = effectivePolicyResolver;
+        this.templateMetadataJson = templateMetadataJson;
+    }
+
+    private long getToolTimeoutMs(String toolName) {
+        if (toolTimeoutProperties != null) {
+            return toolTimeoutProperties.getTimeoutSeconds(toolName) * 1000L;
+        }
+        return 5 * 60 * 1000L; // default 5 min
+    }
+
+    /**
+     * 执行工具调用列表
+     *
+     * @param toolCalls      LLM 请求的工具调用列表
+     * @param conversationId 会话 ID
+     * @param agentId        Agent ID
+     * @param isReplay       是否为审批通过后的重放模式（跳过 ToolGuard）
+     * @return 执行结果
+     */
+    public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
+                                        String conversationId, String agentId,
+                                        boolean isReplay) {
+        return execute(toolCalls, conversationId, agentId, isReplay, "");
+    }
+
+    public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
+                                        String conversationId, String agentId,
+                                        boolean isReplay, String requesterId) {
+        return execute(toolCalls, conversationId, agentId, isReplay, requesterId, null);
+    }
+
+    public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
+                                        String conversationId, String agentId,
+                                        boolean isReplay, String requesterId,
+                                        String workspaceBasePath) {
+        return execute(toolCalls, conversationId, agentId, isReplay, requesterId,
+                workspaceBasePath, ChatOrigin.EMPTY);
+    }
+
+    /**
+     * RFC-063r §2.5: preferred overload — accepts a {@link ChatOrigin} that the
+     * top-level agent has enriched with agentId/workspace/channel context.
+     * Builds a Spring AI {@link ToolContext} per tool invocation so
+     * {@code @Tool} methods can read the origin via
+     * {@code ChatOrigin.from(toolContext)}.
+     *
+     * <p>During the PR-1 transition the legacy {@link ToolExecutionContext}
+     * ThreadLocal is also populated, so existing tools that read from it keep
+     * working unchanged. After all 8 callsites migrate, the ThreadLocal can be
+     * removed.
+     *
+     * <p><b>Thread safety</b>: this executor instance is shared across all
+     * concurrent invocations of a single agent (one executor per agent, per
+     * {@code AgentGraphBuilder.build}). Origin / requester / workspace are
+     * therefore <em>method-local</em> — they live as parameters all the way
+     * down into {@link PreparedToolCall} and never touch instance state. An
+     * earlier draft used {@code volatile} fields here; concurrent users hitting
+     * the same agent (Web + IM at once) raced on those fields and the channel
+     * binding was occasionally cross-contaminated. Do not reintroduce the
+     * fields — pass via parameters.
+     */
+    public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
+                                        String conversationId, String agentId,
+                                        boolean isReplay, String requesterId,
+                                        String workspaceBasePath,
+                                        ChatOrigin origin) {
+        ChatOrigin safeOrigin = origin != null ? origin : ChatOrigin.EMPTY;
+        List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
+        List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
+        // RFC-052: accumulate full-text outputs from returnDirect tools so the
+        // graph can route to FinalAnswerNode without re-entering the LLM.
+        List<DirectToolOutput> directOutputs = Collections.synchronizedList(new ArrayList<>());
+
+        events.add(GraphEventPublisher.phase("action", Map.of("toolCount", toolCalls.size())));
+
+        // ═══ Phase 1: 顺序 Guard + 分段 ═══
+        List<PreparedToolCall> preparedCalls = new ArrayList<>();
+        ApprovalBarrier barrier = null;
+
+        for (int i = 0; i < toolCalls.size(); i++) {
+            AssistantMessage.ToolCall toolCall = toolCalls.get(i);
+            String toolName = toolCall.name();
+            String arguments = toolCall.arguments();
+
+            events.add(GraphEventPublisher.toolStart(toolCall.id(), toolName, arguments));
+
+            // 0. 子会话工具拦截：委派上下文中的子 Agent 禁止调用特定工具
+            if (vip.mate.tool.builtin.DelegationContext.currentDepth() > 0) {
+                java.util.Set<String> denied = vip.mate.tool.builtin.DelegationContext.childDeniedTools();
+                if (denied.contains(toolName)) {
+                    String msg = "[安全限制] 子 Agent 不允许使用工具: " + toolName;
+                    log.info("[ToolExecutor] Child agent blocked from using tool: {}", toolName);
+                    events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
+                    allResponses.add(new org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse(
+                            toolCall.id(), toolName, msg));
+                    continue;
+                }
+            }
+
+            // 1. JSON 校验
+            if (arguments != null && !arguments.isBlank()) {
+                try {
+                    OBJECT_MAPPER.readTree(arguments);
+                } catch (Exception jsonEx) {
+                    log.warn("[ToolExecutor] Tool {} arguments invalid/truncated JSON (len={}): {}",
+                            toolName, arguments.length(), jsonEx.getMessage());
+                    String truncationError = normalizeToolExecutionError(jsonEx);
+                    events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, truncationError, false));
+                    allResponses.add(new ToolResponseMessage.ToolResponse(
+                            toolCall.id(), toolName, truncationError));
+                    continue;
+                }
+            }
+
+            // 2. ToolGuard 安全检查（replay 模式跳过）
+            if (!isReplay) {
+                Long workspaceId = resolveWorkspaceId(conversationId, safeOrigin);
+                GuardDecision decision = evaluateGuard(toolCall, toolName, arguments,
+                    conversationId, agentId, toolCalls, i, events, requesterId, workspaceId, safeOrigin);
+
+                if (decision.blocked) {
+                    allResponses.add(new ToolResponseMessage.ToolResponse(
+                            toolCall.id(), toolName, decision.response));
+                    continue;
+                }
+                if (decision.needsApproval) {
+                    // Barrier: 当前工具创建审批，后续工具不执行
+                    allResponses.add(new ToolResponseMessage.ToolResponse(
+                            toolCall.id(), toolName, decision.response));
+                    // 标记后续工具为等待审批
+                    for (int j = i + 1; j < toolCalls.size(); j++) {
+                        AssistantMessage.ToolCall remaining = toolCalls.get(j);
+                        allResponses.add(new ToolResponseMessage.ToolResponse(
+                                remaining.id(), remaining.name(),
+                                "[⏳ 等待审批] 前序工具等待审批中，本工具暂缓执行。"));
+                    }
+                    barrier = new ApprovalBarrier(decision.pendingId, toolName);
+                    break;
+                }
+            } else {
+                log.info("[ToolExecutor] Replay mode: skipping guard for pre-approved tool {}", toolName);
+            }
+
+            // 3. Callback 查找（跳过 provider 内置工具，如 Kimi 的 $web_search）
+            if (toolName.startsWith("$")) {
+                log.info("[ToolExecutor] Skipping provider builtin tool: {}", toolName);
+                allResponses.add(new ToolResponseMessage.ToolResponse(
+                        toolCall.id(), toolName, "Provider builtin tool executed server-side"));
+                continue;
+            }
+            ToolCallback callback = toolCallbackMap.get(toolName);
+            if (callback == null) {
+                log.warn("[ToolExecutor] Tool not found: {}", toolName);
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
+                allResponses.add(new ToolResponseMessage.ToolResponse(
+                        toolCall.id(), toolName, "Tool not found: " + toolName));
+                continue;
+            }
+
+            // 4. 分类: concurrencySafe
+            boolean safe = isConcurrencySafe(toolName);
+            preparedCalls.add(new PreparedToolCall(toolCall, callback, arguments, safe, allResponses.size(),
+                    conversationId, requesterId, workspaceBasePath, safeOrigin));
+            // 占位，Phase 2 填充
+            allResponses.add(null);
+        }
+
+        // ═══ Phase 2: 分段并发执行 ═══
+        if (!preparedCalls.isEmpty()) {
+            executePreparedCalls(preparedCalls, allResponses, events, directOutputs);
+        }
+
+        // Defensive: drop null placeholders (should never appear in practice).
+        allResponses.removeIf(Objects::isNull);
+
+        // RFC-008 Phase 3 Layer 3: enforce per-turn aggregate budget across all
+        // tool responses for this assistant turn. Spills the largest non-spilled
+        // response in turn until the cumulative size fits the budget.
+        if (resultStorage != null && !allResponses.isEmpty()) {
+            allResponses = new ArrayList<>(resultStorage.enforceTurnBudget(
+                    allResponses, conversationId, workspaceBasePath));
+        }
+
+        boolean hasApprovalPending = barrier != null;
+        return new ToolExecutionResult(allResponses, events, hasApprovalPending,
+                barrier != null ? barrier.pendingId : null,
+                barrier != null ? barrier.toolName : null,
+                List.copyOf(directOutputs));
+    }
+
+    /**
+     * Execute a pre-approved tool call (used by StepExecutionNode's replay path
+     * after a user approves a previously-blocked invocation).
+     *
+     * @param conversationId required for per-conversation spill scoping; when
+     *     blank, spill files would land in a shared {@code unknown/} directory
+     *     and break per-conversation cleanup.
+     * @param workspaceBasePath optional; when blank, spill falls back to tmp.
+     */
+    public ToolResponseMessage.ToolResponse executePreApproved(
+            AssistantMessage.ToolCall toolCall, String storedArguments,
+            List<GraphEventPublisher.GraphEvent> events,
+            String conversationId, String workspaceBasePath) {
+        return executePreApproved(toolCall, storedArguments, events, conversationId,
+                workspaceBasePath, null);
+    }
+
+    /**
+     * RFC-052 PR-2: returnDirect-aware variant. When the pre-approved tool
+     * declares {@code returnDirect=true}, the result is captured into
+     * {@code directOutputs} (verbatim), the SSE consumer gets a
+     * {@code tool_direct_result} event, and the {@link ToolResponseMessage}
+     * carries the placeholder so any subsequent LLM call can never see the
+     * full payload.
+     *
+     * @param directOutputs nullable; pass-through for callers that don't track
+     *     direct outputs (kept for legacy compatibility).
+     */
+    public ToolResponseMessage.ToolResponse executePreApproved(
+            AssistantMessage.ToolCall toolCall, String storedArguments,
+            List<GraphEventPublisher.GraphEvent> events,
+            String conversationId, String workspaceBasePath,
+            List<DirectToolOutput> directOutputs) {
+        String toolName = toolCall.name();
+        String callArguments = storedArguments != null ? storedArguments : toolCall.arguments();
+
+        ToolCallback callback = toolCallbackMap.get(toolName);
+        if (callback == null) {
+            log.warn("[ToolExecutor] Pre-approved tool not found: {}", toolName);
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
+            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, "Tool not found: " + toolName);
+        }
+
+        try {
+            log.info("[ToolExecutor] Executing pre-approved tool: {}", toolName);
+            // RFC-063r §2.5: forward ToolContext so the pre-approved tool can
+            // still observe the originating ChatOrigin (channel/workspace).
+            // Origin is method-local (see thread-safety note on execute());
+            // the legacy ThreadLocal that used to carry it across executePreApproved
+            // calls was a cross-conversation footgun and has been removed.
+            ChatOrigin replayOrigin = ChatOrigin.EMPTY
+                    .withConversationId(conversationId)
+                    .withWorkspace(null, workspaceBasePath);
+            String result = callback.call(callArguments, replayOrigin.toToolContext());
+            int rawLen = result != null ? result.length() : 0;
+
+            // RFC-052: pre-approved tool may itself be returnDirect — in that
+            // case its result must take the direct path (no spill, no LLM).
+            // Without this branch, an approved direct tool would leak its full
+            // content into the next LLM round-trip via the ToolResponseMessage.
+            if (isReturnDirect(callback)) {
+                String fullResult = result != null ? result : "";
+                log.info("[ToolExecutor] Pre-approved tool {} is returnDirect; bypassing " +
+                        "spill/truncate, broadcasting tool_direct_result ({} chars)", toolName, rawLen);
+                if (directOutputs != null) {
+                    directOutputs.add(new DirectToolOutput(
+                            toolCall.id(), toolName, fullResult, System.currentTimeMillis()));
+                }
+                events.add(GraphEventPublisher.toolDirectResult(
+                        toolCall.id(), toolName, fullResult));
+                persistToolMessageAsync(conversationId, toolName, "");
+                return new ToolResponseMessage.ToolResponse(
+                        toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
+            }
+
+            // Phase 3 Layer 2: spill before truncation when storage is wired.
+            // Use the caller-supplied conversationId so spill files inherit the
+            // same per-conversation directory layout as the non-replay path.
+            if (resultStorage != null && result != null) {
+                String spillConv = conversationId != null && !conversationId.isEmpty() ? conversationId : "unknown";
+                result = resultStorage.persistIfOversized(
+                        result, toolName, toolCall.id(), spillConv, workspaceBasePath);
+            }
+            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
+            log.info("[ToolExecutor] Pre-approved tool {} returned {} chars{}", toolName, rawLen,
+                    result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, result, true));
+            persistToolMessageAsync(conversationId, toolName, result);
+            return new ToolResponseMessage.ToolResponse(
+                    toolCall.id(), toolName, result != null ? result : "");
+        } catch (Exception e) {
+            log.error("[ToolExecutor] Pre-approved tool {} failed: {}", toolName, e.getMessage());
+            String safeError = isReturnDirect(callback)
+                    ? "Tool execution failed (details withheld per returnDirect policy)"
+                    : "Tool execution failed: " + e.getMessage();
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, safeError, false));
+            persistToolMessageAsync(conversationId, toolName, "");
+            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, safeError);
+        }
+    }
+
+    /**
+     * Backwards-compatible overload — replay spills land in a synthetic
+     * {@code unknown/} conversation bucket. New callers must use the
+     * {@link #executePreApproved(AssistantMessage.ToolCall, String, List, String, String)}
+     * variant so spill files are correctly scoped per conversation.
+     *
+     * @deprecated use the 5-arg overload with explicit {@code conversationId}
+     */
+    @Deprecated
+    public ToolResponseMessage.ToolResponse executePreApproved(
+            AssistantMessage.ToolCall toolCall, String storedArguments,
+            List<GraphEventPublisher.GraphEvent> events) {
+        // Workspace base path is no longer carried as instance state — legacy
+        // callers that don't supply one get unrestricted file access (matches
+        // pre-RFC behavior when WorkspacePathGuard.basePath was null).
+        return executePreApproved(toolCall, storedArguments, events, null, null);
+    }
+
+    // ==================== Phase 2: 并发执行 ====================
+
+    private void executePreparedCalls(List<PreparedToolCall> preparedCalls,
+                                       List<ToolResponseMessage.ToolResponse> allResponses,
+                                       List<GraphEventPublisher.GraphEvent> events,
+                                       List<DirectToolOutput> directOutputs) {
+        long execStartMs = System.currentTimeMillis();
+        if (!preparedCalls.isEmpty() && streamTracker != null) {
+            String conversationId = preparedCalls.get(0).conversationId;
+            String phase = classifyBatchPhase(preparedCalls);
+            streamTracker.updatePhase(conversationId, phase);
+            streamTracker.broadcastObject(conversationId, "phase", GraphEventPublisher.phase(phase, Map.of(
+                    "toolCount", preparedCalls.size()
+            )).data());
+        }
+        // 分组: 连续的 safe 工具可以并行，遇到 unsafe 工具则先等待所有 safe 完成再独占执行
+        List<List<PreparedToolCall>> batches = buildExecutionBatches(preparedCalls);
+
+        for (List<PreparedToolCall> batch : batches) {
+            if (batch.size() == 1) {
+                // 单个工具（safe 或 unsafe），直接执行
+                PreparedToolCall pc = batch.get(0);
+                ToolResponseMessage.ToolResponse response = executeSingleTool(pc, events, directOutputs);
+                allResponses.set(pc.resultIndex, response);
+            } else {
+                // 多个 safe 工具，并行执行
+                executeParallelBatch(batch, allResponses, events, directOutputs);
+            }
+        }
+
+        // D-6: emit tool execution perf summary
+        long toolExecMs = System.currentTimeMillis() - execStartMs;
+        events.add(GraphEventPublisher.perfSummary("tool_execution", Map.of(
+                "tool_exec_ms", toolExecMs,
+                "tool_count", preparedCalls.size(),
+                "batch_count", batches.size()
+        )));
+    }
+
+    /**
+     * 将 prepared calls 分成执行批次：
+     * - 连续的 safe 工具组成一个并行批次
+     * - unsafe 工具单独成为一个批次
+     */
+    private List<List<PreparedToolCall>> buildExecutionBatches(List<PreparedToolCall> preparedCalls) {
+        List<List<PreparedToolCall>> batches = new ArrayList<>();
+        List<PreparedToolCall> currentSafeBatch = new ArrayList<>();
+
+        for (PreparedToolCall pc : preparedCalls) {
+            if (pc.concurrencySafe) {
+                currentSafeBatch.add(pc);
+            } else {
+                // Flush pending safe batch
+                if (!currentSafeBatch.isEmpty()) {
+                    batches.add(new ArrayList<>(currentSafeBatch));
+                    currentSafeBatch.clear();
+                }
+                // Unsafe tool as solo batch
+                batches.add(List.of(pc));
+            }
+        }
+        // Flush remaining safe batch
+        if (!currentSafeBatch.isEmpty()) {
+            batches.add(currentSafeBatch);
+        }
+        return batches;
+    }
+
+    private void executeParallelBatch(List<PreparedToolCall> batch,
+                                       List<ToolResponseMessage.ToolResponse> allResponses,
+                                       List<GraphEventPublisher.GraphEvent> events,
+                                       List<DirectToolOutput> directOutputs) {
+        log.info("[ToolExecutor] Executing {} safe tools in parallel: {}",
+                batch.size(), batch.stream().map(pc -> pc.toolCall.name()).toList());
+        long batchStartMs = System.currentTimeMillis();
+
+        Map<Integer, CompletableFuture<ToolResponseMessage.ToolResponse>> futures = new LinkedHashMap<>();
+        for (PreparedToolCall pc : batch) {
+            CompletableFuture<ToolResponseMessage.ToolResponse> future =
+                    CompletableFuture.supplyAsync(() -> executeSingleTool(pc, events, directOutputs), TOOL_EXECUTOR);
+            futures.put(pc.resultIndex, future);
+        }
+
+        // 等待所有并行工具完成，按原始顺序填入结果
+        for (var entry : futures.entrySet()) {
+            try {
+                // 按工具名查找配置的超时时间
+                PreparedToolCall matchedPc = batch.stream()
+                        .filter(p -> p.resultIndex == entry.getKey()).findFirst().orElse(null);
+                long timeoutMs = getToolTimeoutMs(matchedPc != null ? matchedPc.toolCall.name() : null);
+                ToolResponseMessage.ToolResponse response = entry.getValue().get(timeoutMs, TimeUnit.MILLISECONDS);
+                allResponses.set(entry.getKey(), response);
+            } catch (Exception e) {
+                // 超时或异常 — 填入错误响应
+                PreparedToolCall pc = batch.stream()
+                        .filter(p -> p.resultIndex == entry.getKey())
+                        .findFirst().orElse(null);
+                String toolName = pc != null ? pc.toolCall.name() : "unknown";
+                String toolId = pc != null ? pc.toolCall.id() : "";
+                log.error("[ToolExecutor] Parallel tool {} failed: {}", toolName, e.getMessage());
+                allResponses.set(entry.getKey(), new ToolResponseMessage.ToolResponse(
+                        toolId, toolName, normalizeToolExecutionError(
+                        e instanceof ExecutionException ? (Exception) e.getCause() : (Exception) e)));
+            }
+        }
+        log.info("[ToolExecutor] Parallel batch completed: {} tools in {}ms",
+                batch.size(), System.currentTimeMillis() - batchStartMs);
+    }
+
+    private ToolResponseMessage.ToolResponse executeSingleTool(PreparedToolCall pc,
+                                                                List<GraphEventPublisher.GraphEvent> events,
+                                                                List<DirectToolOutput> directOutputs) {
+        String toolName = pc.toolCall.name();
+        try {
+            if (streamTracker != null) {
+                streamTracker.updateRunningTool(pc.conversationId, toolName);
+                streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_START,
+                        GraphEventPublisher.toolStart(pc.toolCall.id(), toolName, pc.arguments).data());
+            }
+            log.info("[ToolExecutor] Executing tool: {} with args: {}",
+                    toolName, pc.arguments != null && pc.arguments.length() > 200
+                            ? pc.arguments.substring(0, 200) + "..." : pc.arguments);
+
+            // RFC-063r §2.5 / PR-1 transition window: populate BOTH the explicit
+            // Spring AI ToolContext (preferred — read via ChatOrigin.from(ctx))
+            // AND the legacy ToolExecutionContext ThreadLocal so tools that have
+            // not yet migrated to ToolContext keep working unchanged.
+            ToolExecutionContext.set(pc.conversationId, pc.requesterId, pc.workspaceBasePath);
+            String result;
+            try {
+                ChatOrigin runtimeOrigin = pc.origin != null ? pc.origin : ChatOrigin.EMPTY;
+                runtimeOrigin = runtimeOrigin
+                        .withConversationId(pc.conversationId)
+                        .withWorkspace(runtimeOrigin.workspaceId(), pc.workspaceBasePath);
+                ToolContext toolContext = runtimeOrigin.toToolContext();
+                result = pc.callback.call(pc.arguments, toolContext);
+            } finally {
+                ToolExecutionContext.clear();
+            }
+
+            int rawLen = result != null ? result.length() : 0;
+            // RFC-052: returnDirect tools bypass spill / truncation / LLM context.
+            // Their full text goes to the user verbatim and is never persisted to
+            // a workspace cache file (spill could leak sensitive data).
+            if (isReturnDirect(pc.callback)) {
+                String fullResult = result != null ? result : "";
+                log.info("[ToolExecutor] Tool {} is returnDirect; bypassing spill/truncate, " +
+                        "broadcasting tool_direct_result ({} chars)", toolName, rawLen);
+                directOutputs.add(new DirectToolOutput(
+                        pc.toolCall.id(), toolName, fullResult, System.currentTimeMillis()));
+                GraphEventPublisher.GraphEvent directEvent =
+                        GraphEventPublisher.toolDirectResult(pc.toolCall.id(), toolName, fullResult);
+                events.add(directEvent);
+                if (streamTracker != null) {
+                    streamTracker.broadcastObject(pc.conversationId,
+                            GraphEventPublisher.EVENT_TOOL_DIRECT_RESULT, directEvent.data());
+                    streamTracker.updateRunningTool(pc.conversationId, null);
+                }
+                persistToolMessageAsync(pc.conversationId, toolName, "");
+                // Placeholder keeps the tool_call_id ↔ tool_response pairing valid
+                // for OpenAI-compatible providers, while withholding the data from
+                // any subsequent LLM round (the graph won't take a next round —
+                // see ObservationDispatcher RETURN_DIRECT_TRIGGERED branch).
+                return new ToolResponseMessage.ToolResponse(
+                        pc.toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
+            }
+
+            // RFC-008 Phase 3 Layer 2: spill oversized results to disk and replace
+            // with preview + path. Falls back to truncation when spilling is
+            // disabled or fails. Spill preserves the full output (read_file can
+            // retrieve it); truncation discards the tail.
+            if (resultStorage != null && result != null) {
+                result = resultStorage.persistIfOversized(
+                        result, toolName, pc.toolCall.id(), pc.conversationId, pc.workspaceBasePath);
+            }
+            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
+            log.info("[ToolExecutor] Tool {} returned {} chars{}", toolName, rawLen,
+                    result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
+            events.add(GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true));
+            if (streamTracker != null) {
+                streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_COMPLETE,
+                        GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true).data());
+                streamTracker.updateRunningTool(pc.conversationId, null);
+            }
+            persistToolMessageAsync(pc.conversationId, toolName, result);
+            return new ToolResponseMessage.ToolResponse(
+                    pc.toolCall.id(), toolName, result != null ? result : "");
+        } catch (Exception e) {
+            log.error("[ToolExecutor] Tool {} execution failed: {}", toolName, e.getMessage(), e);
+            // RFC-052: for returnDirect tools, even the error message is
+            // suspect — exception text may carry stack traces, SQL fragments,
+            // or other sensitive substrings that should not enter LLM context.
+            // Emit a generic placeholder instead. Full error still goes to logs
+            // for operator diagnosis.
+            String reportedError = isReturnDirect(pc.callback)
+                    ? "Tool execution failed (details withheld per returnDirect policy)"
+                    : normalizeToolExecutionError(e);
+            events.add(GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, reportedError, false));
+            if (streamTracker != null) {
+                streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_COMPLETE,
+                        GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, reportedError, false).data());
+                streamTracker.updateRunningTool(pc.conversationId, null);
+            }
+            persistToolMessageAsync(pc.conversationId, toolName, "");
+            return new ToolResponseMessage.ToolResponse(
+                    pc.toolCall.id(), toolName, reportedError);
+        }
+    }
+
+    /**
+     * 异步保存工具执行结果（role='tool'），不阻塞主流程。
+     * 使用 TOOL_EXECUTOR 虚拟线程池执行，失败仅记录日志。
+     */
+    private void persistToolMessageAsync(String conversationId, String toolName, String result) {
+        if (conversationService == null || conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+        String contentToSave = result != null ? result : "";
+        if (contentToSave.length() > 1000) {
+            contentToSave = contentToSave.substring(0, 1000) + "...";
+        }
+        final String finalContent = contentToSave;
+        CompletableFuture.runAsync(() -> {
+            try {
+                conversationService.saveToolMessage(conversationId, toolName, finalContent);
+                log.debug("[ToolExecutor] Persisted tool message: conversationId={}, toolName={}",
+                        conversationId, toolName);
+            } catch (Exception e) {
+                log.warn("[ToolExecutor] Failed to persist tool message async: {}", e.getMessage());
+            }
+        }, TOOL_EXECUTOR);
+    }
+
+    // ==================== Guard 评估 ====================
+
+    private GuardDecision evaluateGuard(AssistantMessage.ToolCall toolCall, String toolName, String arguments,
+                                         String conversationId, String agentId,
+                                         List<AssistantMessage.ToolCall> allToolCalls, int currentIndex,
+                                         List<GraphEventPublisher.GraphEvent> events, String requesterId,
+                                         Long workspaceId, ChatOrigin origin) {
+        boolean fullAccess = workspaceService != null && workspaceService.isProjectFullAccess(workspaceId);
+        ToolInvocationContext guardCtx = buildGuardContext(toolName, arguments, conversationId, agentId,
+            requesterId, workspaceId, origin != null ? origin.workspaceBasePath() : null, fullAccess);
+
+        if (toolGuardService != null) {
+            GuardEvaluation evaluation = toolGuardService.evaluate(guardCtx);
+
+            if (evaluation.shouldBlock()) {
+                log.warn("[ToolExecutor] Tool call BLOCKED: tool={}, summary={}", toolName, evaluation.summary());
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, evaluation.summary(), false));
+                return GuardDecision.blocked(
+                        "[安全拦截] " + evaluation.summary() + "。请使用更安全的替代方案。");
+            }
+
+            if (evaluation.shouldRequireApproval()) {
+                if (fullAccess) {
+                    log.info("[ToolExecutor] Approval bypassed by project full-access mode: tool={}, workspaceId={}",
+                            toolName, workspaceId);
+                    return GuardDecision.allowed();
+                }
+                if (approvalGrantService != null
+                        && approvalGrantService.hasReusableGrant(
+                        requesterId,
+                        conversationId,
+                        workspaceId,
+                        origin != null ? origin.workspaceBasePath() : null,
+                        toolName,
+                        evaluation)) {
+                    log.info("[ToolExecutor] Approval bypassed by reusable grant: tool={}, conversationId={}",
+                            toolName, conversationId);
+                    return GuardDecision.allowed();
+                }
+                List<AssistantMessage.ToolCall> remaining = allToolCalls.subList(currentIndex + 1, allToolCalls.size());
+                String approvalResponse = ToolExecutionGuardHelper.handleToolApproval(
+                        toolCall, toolName, arguments, evaluation,
+                        conversationId, agentId, requesterId, approvalService, streamTracker,
+                        events, remaining);
+                // Extract pendingId from response (format: "[APPROVAL_PENDING] tool=xxx awaiting user decision")
+                return GuardDecision.needsApproval(approvalResponse, extractPendingId(approvalResponse));
+            }
+        } else if (toolGuard != null) {
+            ToolGuardResult guardResult = toolGuard.check(toolName, arguments);
+
+            if (guardResult.isBlocked()) {
+                log.warn("[ToolExecutor] Tool call BLOCKED by ToolGuard: tool={}, reason={}", toolName, guardResult.reason());
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, guardResult.reason(), false));
+                return GuardDecision.blocked(
+                        "[安全拦截] " + guardResult.reason() + "。请使用更安全的替代方案。");
+            }
+
+            if (guardResult.needsApproval()) {
+                if (fullAccess) {
+                    log.info("[ToolExecutor] Legacy approval bypassed by project full-access mode: tool={}, workspaceId={}",
+                            toolName, workspaceId);
+                    return GuardDecision.allowed();
+                }
+                List<AssistantMessage.ToolCall> remaining = allToolCalls.subList(currentIndex + 1, allToolCalls.size());
+                String approvalResponse = ToolExecutionGuardHelper.handleToolApprovalLegacy(
+                        toolCall, toolName, arguments, guardResult,
+                        conversationId, agentId, requesterId, approvalService, streamTracker,
+                        events, remaining);
+                return GuardDecision.needsApproval(approvalResponse, extractPendingId(approvalResponse));
+            }
+        }
+
+        return GuardDecision.allowed();
+    }
+
+    private ToolInvocationContext buildGuardContext(String toolName,
+                                                    String arguments,
+                                                    String conversationId,
+                                                    String agentId,
+                                                    String requesterId,
+                                                    Long workspaceId,
+                                                        String workspaceBasePath,
+                                                    boolean fullAccess) {
+        Long userId = parseUserId(requesterId);
+        String accountRole = resolveAccountRole(requesterId, userId);
+        String workspaceRole = workspaceService != null && userId != null
+                ? workspaceService.getMembershipRoleCached(workspaceId, userId)
+                : null;
+        ToolRuntimeMetadata toolMetadata = resolveToolMetadata(toolName);
+        String workspacePolicyMode = fullAccess
+                ? WorkspaceService.PROJECT_PERMISSION_MODE_FULL
+                : WorkspaceService.PROJECT_PERMISSION_MODE_LIMITED;
+
+        // WP-2: prefer the wired EffectivePolicyResolver (produces provenance diagnostics).
+        // Fall back to legacy inline merge when resolver is not wired.
+        WorkspacePolicy workspacePolicy;
+        java.util.Map<PolicyDimension, EffectivePolicyContract.DimensionProvenance> provenance = null;
+        if (effectivePolicyResolver != null) {
+            try {
+                EffectivePolicyContract.PolicyResolutionResult result =
+                        effectivePolicyResolver.resolveEffectivePolicy(workspaceId, null, null);
+                workspacePolicy = result.effectivePolicy();
+                provenance = result.provenance();
+                // Build template policy for fullAccess passthrough (EffectivePolicyResolver
+                // skips merge when workspace is null — we still want template-only policy).
+                if (fullAccess && workspacePolicy != null) {
+                    workspacePolicy = mergeTemplatePolicy(workspacePolicy, workspaceBasePath, true);
+                }
+            } catch (Exception e) {
+                log.warn("[WP-2] EffectivePolicyResolver failed, falling back to inline merge: {}", e.getMessage());
+                workspacePolicy = buildWorkspacePolicyInline(workspaceId, workspaceBasePath, fullAccess);
+            }
+        } else {
+            workspacePolicy = buildWorkspacePolicyInline(workspaceId, workspaceBasePath, fullAccess);
+        }
+
+        return ToolInvocationContext.of(
+                toolName,
+                Map.of(),
+                arguments,
+                conversationId,
+                agentId,
+                null,
+                requesterId,
+                accountRole,
+                workspaceRole,
+                workspaceId,
+                workspaceBasePath,
+                workspacePolicyMode,
+                workspacePolicy,
+                toolMetadata,
+                provenance
+        );
+    }
+
+    /**
+     * Legacy inline merge — kept as fallback when {@link EffectivePolicyResolver}
+     * is not wired. Identical outcomes to {@link PolicyMergeHelper} for all
+     * non-provenance cases.
+     */
+    private WorkspacePolicy buildWorkspacePolicyInline(Long workspaceId, String workspaceBasePath,
+                                                       boolean fullAccess) {
+        WorkspacePolicy workspacePolicy = workspaceService != null
+                ? workspaceService.resolveWorkspacePolicy(workspaceId)
+                : null;
+        return mergeTemplatePolicy(workspacePolicy, workspaceBasePath, fullAccess);
+    }
+
+    private WorkspacePolicy mergeTemplatePolicy(WorkspacePolicy workspacePolicy,
+                                                String workspaceBasePath,
+                                                boolean fullAccess) {
+        if (fullAccess) {
+            return workspacePolicy;
+        }
+        WorkspacePolicy templatePolicy = parseTemplateWorkspacePolicy(workspaceBasePath);
+        if (templatePolicy == null) {
+            return workspacePolicy;
+        }
+        if (workspacePolicy == null) {
+            return templatePolicy;
+        }
+
+        WorkspacePolicy merged = new WorkspacePolicy();
+        merged.setSandboxMode(moreRestrictiveSandbox(workspacePolicy.getSandboxMode(), templatePolicy.getSandboxMode()));
+        merged.setApprovalPolicy(moreRestrictiveApproval(workspacePolicy.getApprovalPolicy(), templatePolicy.getApprovalPolicy()));
+        merged.setNetworkPolicy(moreRestrictiveNetwork(workspacePolicy.getNetworkPolicy(), templatePolicy.getNetworkPolicy()));
+        merged.setAllowedPaths(mergeAllowedPaths(workspacePolicy.getAllowedPaths(), templatePolicy.getAllowedPaths()));
+        merged.setDeniedPaths(unionLists(workspacePolicy.getDeniedPaths(), templatePolicy.getDeniedPaths()));
+        Map<String, String> riskOverrides = new LinkedHashMap<>();
+        if (workspacePolicy.getRiskOverrides() != null) {
+            riskOverrides.putAll(workspacePolicy.getRiskOverrides());
+        }
+        if (templatePolicy.getRiskOverrides() != null) {
+            riskOverrides.putAll(templatePolicy.getRiskOverrides());
+        }
+        merged.setRiskOverrides(riskOverrides);
+        return merged;
+    }
+
+    private WorkspacePolicy parseTemplateWorkspacePolicy(String workspaceBasePath) {
+        if (templateMetadataJson == null || templateMetadataJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode policyNode = OBJECT_MAPPER.readTree(templateMetadataJson)
+                    .path("template")
+                    .path("defaultWorkspacePolicy");
+            if (!policyNode.isObject()) {
+                return null;
+            }
+            WorkspacePolicy policy = new WorkspacePolicy();
+            policy.setSandboxMode(normalizeSandboxMode(policyNode.path("sandboxMode").asText(null)));
+            policy.setApprovalPolicy(normalizeApprovalPolicy(policyNode.path("approvalPolicy").asText(null)));
+            policy.setNetworkPolicy(normalizeNetworkPolicy(policyNode.path("networkPolicy").asText(null)));
+            policy.setAllowedPaths(readStringArray(policyNode.path("allowedPaths"), workspaceBasePath));
+            policy.setDeniedPaths(readStringArray(policyNode.path("deniedPaths"), workspaceBasePath));
+            policy.setRiskOverrides(readRiskOverrides(policyNode.path("riskOverrides"), policyNode.path("deniedActions")));
+            return policy;
+        } catch (Exception e) {
+            log.warn("[ToolExecutor] Failed to parse template workspace policy: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String normalizeSandboxMode(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT).replace('_', '-')) {
+            case "read-only", "readonly" -> WorkspacePolicy.SANDBOX_READ_ONLY;
+            case "full-access", "full" -> WorkspacePolicy.SANDBOX_FULL_ACCESS;
+            case "workspace-write", "workspace" -> WorkspacePolicy.SANDBOX_WORKSPACE_WRITE;
+            default -> value;
+        };
+    }
+
+    private String normalizeApprovalPolicy(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT).replace('_', '-')) {
+            case "strict" -> WorkspacePolicy.APPROVAL_STRICT;
+            default -> WorkspacePolicy.APPROVAL_DEFAULT;
+        };
+    }
+
+    private String normalizeNetworkPolicy(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT).replace('_', '-')) {
+            case "disabled" -> WorkspacePolicy.NETWORK_DISABLED;
+            case "restricted" -> WorkspacePolicy.NETWORK_RESTRICTED;
+            default -> WorkspacePolicy.NETWORK_INHERIT;
+        };
+    }
+
+    private String moreRestrictiveSandbox(String left, String right) {
+        int leftRank = sandboxRank(left);
+        int rightRank = sandboxRank(right);
+        return leftRank >= rightRank ? left : right;
+    }
+
+    private int sandboxRank(String value) {
+        if (WorkspacePolicy.SANDBOX_READ_ONLY.equalsIgnoreCase(value)) return 3;
+        if (WorkspacePolicy.SANDBOX_WORKSPACE_WRITE.equalsIgnoreCase(value)) return 2;
+        if (WorkspacePolicy.SANDBOX_FULL_ACCESS.equalsIgnoreCase(value)) return 1;
+        return 0;
+    }
+
+    private String moreRestrictiveApproval(String left, String right) {
+        if (WorkspacePolicy.APPROVAL_STRICT.equalsIgnoreCase(left)
+                || WorkspacePolicy.APPROVAL_STRICT.equalsIgnoreCase(right)) {
+            return WorkspacePolicy.APPROVAL_STRICT;
+        }
+        return left != null ? left : right;
+    }
+
+    private String moreRestrictiveNetwork(String left, String right) {
+        int leftRank = networkRank(left);
+        int rightRank = networkRank(right);
+        return leftRank >= rightRank ? left : right;
+    }
+
+    private int networkRank(String value) {
+        if (WorkspacePolicy.NETWORK_DISABLED.equalsIgnoreCase(value)) return 3;
+        if (WorkspacePolicy.NETWORK_RESTRICTED.equalsIgnoreCase(value)) return 2;
+        if (WorkspacePolicy.NETWORK_INHERIT.equalsIgnoreCase(value)) return 1;
+        return 0;
+    }
+
+    private List<String> mergeAllowedPaths(List<String> workspacePaths, List<String> templatePaths) {
+        if (templatePaths != null && !templatePaths.isEmpty()) {
+            return templatePaths;
+        }
+        return workspacePaths;
+    }
+
+    private List<String> unionLists(List<String> left, List<String> right) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (left != null) values.addAll(left);
+        if (right != null) values.addAll(right);
+        return values.isEmpty() ? null : new ArrayList<>(values);
+    }
+
+    private List<String> readStringArray(JsonNode node, String workspaceBasePath) {
+        if (node == null || !node.isArray()) {
+            return null;
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (!item.isValueNode() || item.asText().isBlank()) {
+                continue;
+            }
+            if (item.asText().contains("${workspace.") && (workspaceBasePath == null || workspaceBasePath.isBlank())) {
+                continue;
+            }
+            values.add(resolveWorkspacePlaceholder(item.asText(), workspaceBasePath));
+        }
+        return values.isEmpty() ? null : values;
+    }
+
+    private String resolveWorkspacePlaceholder(String value, String workspaceBasePath) {
+        if (workspaceBasePath == null || workspaceBasePath.isBlank()) {
+            return value;
+        }
+        return value
+                .replace("${workspace.root}", workspaceBasePath)
+                .replace("${workspace.basePath}", workspaceBasePath);
+    }
+
+    private Map<String, String> readRiskOverrides(JsonNode riskNode, JsonNode deniedActionsNode) {
+        Map<String, String> overrides = new LinkedHashMap<>();
+        if (riskNode != null && riskNode.isObject()) {
+            riskNode.fields().forEachRemaining(entry -> {
+                String decision = riskOverrideDecision(entry.getValue());
+                if (decision != null) {
+                    overrides.put(entry.getKey(), decision);
+                }
+            });
+        }
+        if (deniedActionsNode != null && deniedActionsNode.isArray()) {
+            for (JsonNode action : deniedActionsNode) {
+                if (action.isValueNode()) {
+                    addDeniedActionOverride(overrides, action.asText());
+                }
+            }
+        }
+        return overrides.isEmpty() ? null : overrides;
+    }
+
+    private String riskOverrideDecision(JsonNode value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isTextual()) {
+            return value.asText();
+        }
+        if (value.path("requiresApproval").asBoolean(false)) {
+            return "high";
+        }
+        String riskLevel = value.path("riskLevel").asText(null);
+        return riskLevel != null && !riskLevel.isBlank() ? riskLevel : null;
+    }
+
+    private void addDeniedActionOverride(Map<String, String> overrides, String action) {
+        if (action == null) {
+            return;
+        }
+        String normalized = action.trim().toLowerCase(Locale.ROOT);
+        if (normalized.contains("shell")) {
+            overrides.put("execute_shell_command", "block");
+            overrides.put("shell_execute", "block");
+            overrides.put("run_command", "block");
+        }
+        if (normalized.contains("network")) {
+            overrides.put("search", "block");
+            overrides.put("browser_use", "block");
+        }
+        if (normalized.contains("database_mutation")) {
+            overrides.put("execute_sql", "block");
+        }
+    }
+
+    private ToolRuntimeMetadata resolveToolMetadata(String toolName) {
+        ToolCallback callback = toolCallbackMap.get(toolName);
+        boolean concurrencySafe = isConcurrencySafe(toolName);
+        long timeoutMs = getToolTimeoutMs(toolName);
+        if (toolMetadataResolver == null) {
+            return new ToolRuntimeMetadata(
+                    toolName,
+                    vip.mate.tool.metadata.ToolSourceType.UNKNOWN,
+                    false,
+                    !concurrencySafe,
+                    vip.mate.tool.guard.model.GuardSeverity.MEDIUM,
+                    timeoutMs,
+                    false,
+                    concurrencySafe,
+                    isReturnDirect(callback)
+            );
+        }
+        return toolMetadataResolver.resolve(toolName, callback, concurrencySafe, timeoutMs);
+    }
+
+    private Long parseUserId(String requesterId) {
+        if (requesterId == null || requesterId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(requesterId);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String resolveAccountRole(String requesterId, Long userId) {
+        if ("system".equalsIgnoreCase(requesterId)) {
+            return "system";
+        }
+        if (userId == null || authService == null) {
+            return null;
+        }
+        try {
+            UserEntity user = authService.findById(userId);
+            return user != null ? user.getRole() : null;
+        } catch (Exception e) {
+            log.debug("[ToolExecutor] Failed to resolve account role for requester={}: {}", requesterId, e.getMessage());
+            return null;
+        }
+    }
+
+    // ==================== 辅助方法 ====================
+
+    /**
+     * RFC-052: a tool is "direct" when its {@link ToolCallback#getToolMetadata()}
+     * reports {@code returnDirect=true}. {@code @Tool(returnDirect=true)} maps
+     * here automatically; MCP tools rely on the
+     * {@code ReturnDirectMcpToolCallback} decorator to override the metadata
+     * (the upstream {@code SyncMcpToolCallback} returns the framework default
+     * of {@code false}).
+     */
+    private static boolean isReturnDirect(ToolCallback callback) {
+        try {
+            return callback.getToolMetadata() != null
+                    && callback.getToolMetadata().returnDirect();
+        } catch (Exception e) {
+            log.debug("[ToolExecutor] Failed to read returnDirect metadata: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Returns true when the tool can run in parallel with other safe tools.
+     * Consults the registry first (annotation-driven, populated at startup);
+     * falls back to the legacy hardcoded set for callers built without a
+     * registry (legacy constructor / unit tests).
+     */
+    private boolean isConcurrencySafe(String toolName) {
+        if (concurrencyRegistry != null && concurrencyRegistry.isUnsafe(toolName)) {
+            return false;
+        }
+        return !DEFAULT_UNSAFE_TOOLS.contains(toolName);
+    }
+
+    private String classifyBatchPhase(List<PreparedToolCall> preparedCalls) {
+        boolean memoryOnly = preparedCalls.stream().allMatch(pc ->
+                "read_workspace_memory_file".equals(pc.toolCall.name())
+                        || "list_workspace_memory_files".equals(pc.toolCall.name()));
+        return memoryOnly ? "reading_memory" : "executing_tool";
+    }
+
+    private String normalizeToolExecutionError(Exception e) {
+        String message = e != null && e.getMessage() != null ? e.getMessage() : "Unknown error";
+        String lower = message.toLowerCase(Locale.ROOT);
+
+        if (lower.contains("conversion from json")
+                || lower.contains("unexpected end-of-input")
+                || lower.contains("unexpected character escape sequence")
+                || lower.contains("json parse error")
+                || lower.contains("malformed json")) {
+            // Truncated tool_call args — typically from max_tokens being hit while
+            // streaming a large `content` field (e.g. renderDocx with 7000+ char
+            // markdown body). The fix MUST come from the model: re-emit the same
+            // tool call with smaller content per call, OR split the work across
+            // multiple sequential tool calls. We tell the LLM directly so the
+            // next reasoning iteration knows what to do — without this, models
+            // tend to fall back to narrating the result as final_answer text.
+            return "Tool execution failed: your tool_call arguments JSON was truncated mid-stream "
+                    + "(very likely you hit max_tokens while emitting a long content field). "
+                    + "Action required: re-call the SAME tool now in your next response, but "
+                    + "(1) make the content field shorter, OR (2) split the work into multiple "
+                    + "sequential tool calls (e.g. write the doc in 2-3 chunks via separate calls). "
+                    + "Do NOT describe the result as text — you must call the tool again to actually "
+                    + "produce the output.";
+        }
+
+        if (lower.contains("access denied") && lower.contains("path outside allowed directories")) {
+            // 提取目标路径和允许路径
+            return "Tool execution failed: target path is outside the allowed workspace directory.";
+        }
+
+        return "Tool execution failed: " + message;
+    }
+
+    /**
+     * 从 approval response 中提取 pendingId（best-effort）
+     */
+    private String extractPendingId(String approvalResponse) {
+        // handleToolApproval 内部已经创建了 pending，这里只做标记
+        return approvalResponse;
+    }
+
+    private Long resolveWorkspaceId(String conversationId, ChatOrigin origin) {
+        if (origin != null && origin.workspaceId() != null) {
+            return origin.workspaceId();
+        }
+        if (conversationService == null || conversationId == null || conversationId.isBlank()) {
+            return null;
+        }
+        var conversation = conversationService.getConversation(conversationId);
+        return conversation != null ? conversation.getWorkspaceId() : null;
+    }
+
+    // ==================== 内部数据类 ====================
+
+    private record PreparedToolCall(
+            AssistantMessage.ToolCall toolCall,
+            ToolCallback callback,
+            String arguments,
+            boolean concurrencySafe,
+            int resultIndex,
+            String conversationId,
+            String requesterId,
+            String workspaceBasePath,
+            ChatOrigin origin
+    ) {}
+
+    private record ApprovalBarrier(String pendingId, String toolName) {}
+
+    private static final class GuardDecision {
+        final boolean blocked;
+        final boolean needsApproval;
+        final String response;
+        final String pendingId;
+
+        private GuardDecision(boolean blocked, boolean needsApproval, String response, String pendingId) {
+            this.blocked = blocked;
+            this.needsApproval = needsApproval;
+            this.response = response;
+            this.pendingId = pendingId;
+        }
+
+        static GuardDecision allowed() { return new GuardDecision(false, false, null, null); }
+        static GuardDecision blocked(String response) { return new GuardDecision(true, false, response, null); }
+        static GuardDecision needsApproval(String response, String pendingId) {
+            return new GuardDecision(false, true, response, pendingId);
+        }
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry,
+                                  WorkspaceService workspaceService,
+                                  ConversationService conversationService) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties,
+            resultStorage, concurrencyRegistry, workspaceService, conversationService, null, null, null, null, null);
+    }
+
+    /**
+     * 工具执行结果
+     */
+    public record ToolExecutionResult(
+            /** 所有工具的响应（按原始顺序） */
+            List<ToolResponseMessage.ToolResponse> responses,
+            /** 执行过程中的事件 */
+            List<GraphEventPublisher.GraphEvent> events,
+            /** 是否有待审批的工具 */
+            boolean awaitingApproval,
+            /** 审批 pending ID（如果 awaitingApproval=true） */
+            String pendingId,
+            /** 触发审批 barrier 的工具名（如果 awaitingApproval=true） */
+            String barrierToolName,
+            /**
+             * RFC-052: full-text outputs from any returnDirect tools that ran
+             * in this batch. Non-empty list ⇒ graph must short-circuit to
+             * FinalAnswerNode without re-entering the LLM.
+             */
+            List<DirectToolOutput> directOutputs
+    ) {
+        /** Backwards-compatible constructor for callers that don't track direct outputs. */
+        public ToolExecutionResult(List<ToolResponseMessage.ToolResponse> responses,
+                                    List<GraphEventPublisher.GraphEvent> events,
+                                    boolean awaitingApproval,
+                                    String pendingId,
+                                    String barrierToolName) {
+            this(responses, events, awaitingApproval, pendingId, barrierToolName, List.of());
+        }
+
+        public boolean hasDirectOutputs() {
+            return directOutputs != null && !directOutputs.isEmpty();
+        }
+    }
+}

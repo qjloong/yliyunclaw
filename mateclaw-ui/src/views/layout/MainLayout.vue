@@ -1,0 +1,1703 @@
+<template>
+  <div class="app-layout">
+    <!-- 移动端背景遮罩 -->
+    <Transition name="fade">
+      <div v-if="isMobile && mobileMenuOpen" class="sidebar-backdrop" @click="mobileMenuOpen = false"></div>
+    </Transition>
+
+    <!-- 左侧导航栏 -->
+    <aside class="sidebar" :class="{ collapsed: sidebarCollapsed && !isMobile, 'mobile-open': mobileMenuOpen }">
+      <!-- Logo -->
+      <div class="sidebar-logo">
+        <div class="logo-icon">
+          <img src="/logo/mateclaw_logo_s.png" alt="Meta Y" class="logo-img" />
+        </div>
+        <transition name="fade">
+          <div v-if="!effectiveCollapsed" class="logo-text">
+            <span class="logo-name">Meta <span class="logo-name-highlight">Y</span></span>
+            <span class="logo-version">v{{ appVersion }}</span>
+          </div>
+        </transition>
+        <button
+          class="collapse-btn"
+          :title="sidebarToggleLabel"
+          :aria-label="sidebarToggleLabel"
+          @click="toggleSidebar"
+        >
+          <svg v-if="!effectiveCollapsed" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 工作区切换 -->
+      <WorkspaceSwitcher :collapsed="effectiveCollapsed" />
+
+      <!-- 导航菜单 -->
+      <nav class="sidebar-nav">
+        <div v-for="group in sidebarNavGroups" :key="group.key" class="nav-group">
+          <div v-if="!effectiveCollapsed" class="nav-group-title">{{ group.label }}</div>
+          <router-link
+            v-for="item in group.items"
+            :key="item.path"
+            :to="item.path"
+            class="nav-item"
+            :class="{ active: isNavItemActive(item) }"
+            :title="effectiveCollapsed ? item.label : ''"
+            @click="onNavClick"
+          >
+            <span class="nav-icon" v-html="item.icon"></span>
+            <span v-if="!effectiveCollapsed" class="nav-label">{{ item.label }}</span>
+          </router-link>
+        </div>
+      </nav>
+
+      <!-- 底部 -->
+      <div class="sidebar-footer">
+        <template v-if="!sidebarCollapsed || isMobile">
+          <button v-if="showClientDownload" class="client-download-card" type="button" @click="openClientDownload">
+            <span class="client-download-card__icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="12" rx="2"/>
+                <path d="M8 20h8"/>
+                <path d="M12 16v4"/>
+              </svg>
+            </span>
+            <span class="client-download-card__copy">
+              <span class="client-download-card__title">{{ t('nav.downloadClient') }}</span>
+              <span class="client-download-card__hint">{{ t('nav.downloadClientHint') }}</span>
+            </span>
+            <span class="client-download-card__arrow">›</span>
+          </button>
+          <!-- Doctor 健康指示器 -->
+          <button v-if="isAdmin" class="health-indicator" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
+            <span class="health-dot"></span>
+            <span class="health-label">{{ t('doctor.title') }}</span>
+          </button>
+
+          <div class="sidebar-utility-card">
+            <div class="compact-utility-row">
+              <span class="compact-utility-title">{{ t('nav.themeLabel') }}</span>
+              <div class="theme-toggle-row theme-toggle-row--compact">
+                <button
+                  v-for="opt in themeOptions"
+                  :key="opt.value"
+                  class="theme-btn theme-btn--compact"
+                  :class="{ active: themeStore.mode === opt.value }"
+                  :title="opt.label"
+                  @click="themeStore.setMode(opt.value)"
+                >
+                  <span v-html="opt.icon"></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="compact-utility-row compact-utility-row--stacked">
+              <span class="compact-utility-title">{{ t('nav.themeStyleLabel') }}</span>
+              <div class="preset-toggle-row preset-toggle-row--compact">
+                <button
+                  v-for="opt in themePresetOptions"
+                  :key="opt.value"
+                  class="preset-btn"
+                  :class="{ active: themeStore.preset === opt.value }"
+                  @click="themeStore.setPreset(opt.value)"
+                >
+                  <span class="preset-swatch" :class="`preset-swatch--${opt.value}`"></span>
+                  <span class="preset-btn-label">{{ opt.label }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="compact-utility-row">
+              <span class="compact-utility-title">{{ t('nav.languageLabel') }}</span>
+              <div class="language-toggle-row language-toggle-row--compact">
+                <button
+                  v-for="opt in localeOptions"
+                  :key="opt.value"
+                  class="language-btn language-btn--compact"
+                  :class="{ active: currentLocaleValue === opt.value }"
+                  @click="changeLocale(opt.value)"
+                >
+                  <span class="language-abbr">{{ opt.short }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button ref="footerTriggerRef" class="user-info user-info--button" :class="{ 'is-open': footerPanelOpen }" @click.stop="toggleFooterPanel()">
+            <div class="user-avatar">{{ userInitial }}</div>
+            <div class="user-detail">
+              <div class="user-name">{{ username }}</div>
+              <div class="user-role">{{ roleLabel }}</div>
+            </div>
+            <span class="user-info__chevron" :class="{ 'is-open': footerPanelOpen }">›</span>
+          </button>
+        </template>
+
+        <template v-else>
+          <div class="collapsed-footer-actions">
+            <button v-if="showClientDownload" class="footer-icon-btn footer-icon-btn--client" @click="openClientDownload" :title="t('nav.downloadClient')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="12" rx="2"/>
+                <path d="M8 20h8"/>
+                <path d="M12 16v4"/>
+              </svg>
+            </button>
+            <button v-if="isAdmin" class="footer-icon-btn" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
+              <span class="health-dot"></span>
+            </button>
+            <button ref="footerTriggerRef" class="footer-icon-btn footer-icon-btn--user" :title="username" @click.stop="toggleFooterPanel()">
+              <span class="footer-user-initial">{{ userInitial }}</span>
+            </button>
+          </div>
+        </template>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <!-- 移动端顶部栏 -->
+      <div v-if="isMobile" class="mobile-topbar">
+        <button class="mobile-menu-btn" @click="mobileMenuOpen = true" :title="t('common.expandSidebar')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <span class="mobile-topbar-title">Meta <span class="logo-name-highlight">Y</span></span>
+      </div>
+      <!-- RFC-074 PR-1 fix: include route.path in the key so two different
+           keepAlive routes (e.g. /channels and /settings/models) don't collide
+           on the same vnode slot. Without this, switching between two keep-alive
+           routes leaves both component trees mounted because Vue sees identical
+           keys and patches in place. The comment must live OUTSIDE <keep-alive>
+           — KeepAlive treats comments as children and rejects "more than one". -->
+      <router-view v-slot="{ Component, route }">
+        <keep-alive>
+          <component :is="Component" :key="`${workspaceRouteKey}:${route.path}`" v-if="route.meta?.keepAlive" />
+        </keep-alive>
+        <component :is="Component" :key="`${workspaceRouteKey}:${route.path}`" v-if="!route.meta?.keepAlive" />
+      </router-view>
+    </main>
+
+    <OnboardingWizard v-if="showOnboarding" @close="showOnboarding = false" />
+    <DoctorDrawer :visible="showDoctor" @close="showDoctor = false" @status="onHealthStatus" />
+
+    <Teleport to="body">
+      <div
+        v-if="footerPanelOpen"
+        ref="footerPanelRef"
+        class="account-flyout account-flyout--portal"
+        :class="{ 'account-flyout--mobile': isMobile }"
+        :style="footerPanelStyle"
+        @click.stop
+      >
+        <div class="account-flyout__kicker">{{ t('settings.title') }}</div>
+
+        <div class="account-flyout__header">
+          <div class="account-flyout__avatar">{{ userInitial }}</div>
+          <div class="account-flyout__identity">
+            <div class="account-flyout__name">{{ username }}</div>
+            <div class="account-flyout__meta">{{ roleLabel }}</div>
+          </div>
+        </div>
+
+        <div v-for="group in accountMenuGroups" :key="group.key" class="account-flyout__section">
+          <div class="account-flyout__section-title">{{ group.label }}</div>
+          <div class="account-flyout__group-card">
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="account-flyout__item"
+              :class="{ active: isNavItemActive(item) }"
+              @click="navigateTo(item.path)"
+            >
+              <span class="account-flyout__item-icon" v-html="item.icon"></span>
+              <span class="account-flyout__item-label">{{ item.label }}</span>
+              <span class="account-flyout__item-arrow">›</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="account-flyout__divider"></div>
+
+        <div class="account-flyout__group-card">
+          <button class="account-flyout__item" @click="openChangePassword()">
+            <span class="account-flyout__item-icon"><el-icon :size="16"><Lock /></el-icon></span>
+            <span class="account-flyout__item-label">{{ t('auth.changePassword') }}</span>
+            <span class="account-flyout__item-arrow">›</span>
+          </button>
+          <button class="account-flyout__item account-flyout__item--danger" @click="logout()">
+            <span class="account-flyout__item-icon"><el-icon :size="16"><SwitchButton /></el-icon></span>
+            <span class="account-flyout__item-label">{{ t('nav.logout') }}</span>
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <ChangePasswordDialog :visible="showChangePassword" @update:visible="showChangePassword = $event" />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useThemeStore } from '../../stores/useThemeStore'
+import type { ThemeMode, ThemePreset } from '../../stores/useThemeStore'
+import { http, settingsApi, setupApi } from '../../api/index'
+import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
+import { applyLocale, currentLocale, type AppLocale } from '../../i18n'
+import { SwitchButton, Lock } from '@element-plus/icons-vue'
+import { canAccessAdminConsole } from '../../utils/access'
+import { logoutAndRedirect } from '../../utils/auth'
+import { isDesktopRuntime } from '../../utils/desktop'
+
+const appVersion = (window as unknown as Window & { __APP_VERSION__: string }).__APP_VERSION__
+const OnboardingWizard = defineAsyncComponent(() => import('../Onboarding/OnboardingWizard.vue').then((m: any) => m.default ?? m))
+const DoctorDrawer = defineAsyncComponent(() => import('../Doctor/DoctorDrawer.vue').then((m: any) => m.default ?? m))
+const WorkspaceSwitcher = defineAsyncComponent(() => import('../../components/workspace/WorkspaceSwitcher.vue').then((m: any) => m.default ?? m))
+const ChangePasswordDialog = defineAsyncComponent(() => import('../../components/ChangePasswordDialog.vue').then((m: any) => m.default ?? m))
+
+const router = useRouter()
+const route = useRoute()
+const { t } = useI18n()
+const themeStore = useThemeStore()
+const workspaceStore = useWorkspaceStore()
+const sidebarCollapsed = ref(localStorage.getItem('mc-sidebar-collapsed') === 'true')
+const footerPanelOpen = ref(false)
+const footerPanelRef = ref<HTMLElement | null>(null)
+const footerTriggerRef = ref<HTMLElement | null>(null)
+const footerPanelStyle = ref<Record<string, string>>({})
+const desktopDownloadUrl = computed(() => {
+  const configured = import.meta.env.VITE_DESKTOP_DOWNLOAD_URL
+  return configured && String(configured).trim() ? String(configured).trim() : '/downloads/MetaY-Desktop.exe'
+})
+const showClientDownload = computed(() => !isDesktopRuntime())
+
+type NavItem = { path: string; label: string; icon: string; adminOnly?: boolean }
+type NavGroup = { key: string; label: string; items: NavItem[] }
+
+// Workspace 切换时通过 key 变化让 router-view 重新挂载，避免 hard reload 破坏运行状态
+const workspaceRouteKey = computed(() => `ws-${workspaceStore.currentWorkspaceId ?? 'none'}`)
+const showOnboarding = ref(false)
+const showDoctor = ref(false)
+const healthStatus = ref('unknown')
+
+function onHealthStatus(status: string) {
+  healthStatus.value = status
+}
+
+async function fetchHealthStatus() {
+  try {
+    const res: any = await http.get('/system/health')
+    const data = res?.data || res
+    healthStatus.value = data?.overall || 'healthy'
+  } catch {
+    healthStatus.value = 'unknown'
+  }
+}
+
+// 移动端状态
+const isMobile = ref(false)
+const mobileMenuOpen = ref(false)
+let mobileQuery: MediaQueryList | null = null
+// 中等屏幕自动折叠（≤1024px）
+let mediumQuery: MediaQueryList | null = null
+const userExplicitCollapse = ref(localStorage.getItem('mc-sidebar-collapsed') === 'true')
+
+function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
+  isMobile.value = e.matches
+  if (!e.matches) mobileMenuOpen.value = false
+  if (e.matches) footerPanelOpen.value = false
+}
+
+function handleMediumChange(e: MediaQueryListEvent | MediaQueryList) {
+  if (e.matches && !userExplicitCollapse.value) {
+    sidebarCollapsed.value = true
+  } else if (!e.matches && !userExplicitCollapse.value) {
+    sidebarCollapsed.value = false
+  }
+}
+
+onMounted(async () => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+  window.addEventListener('resize', updateFooterPanelPosition)
+  window.addEventListener('scroll', updateFooterPanelPosition, true)
+  mobileQuery = window.matchMedia('(max-width: 768px)')
+  handleMobileChange(mobileQuery)
+  mobileQuery.addEventListener('change', handleMobileChange)
+
+  mediumQuery = window.matchMedia('(max-width: 1024px)')
+  handleMediumChange(mediumQuery)
+  mediumQuery.addEventListener('change', handleMediumChange)
+
+  // Check onboarding status
+  if (!localStorage.getItem('mc-onboarding-done')) {
+    try {
+      const res: any = await setupApi.onboardingStatus()
+      if (res?.data && !res.data.hasDefaultModel) {
+        showOnboarding.value = true
+      }
+    } catch {
+      // If endpoint doesn't exist yet, skip onboarding
+    }
+  }
+
+  // Fetch initial health status for sidebar indicator
+  fetchHealthStatus()
+})
+
+onBeforeUnmount(() => {
+  mobileQuery?.removeEventListener('change', handleMobileChange)
+  mediumQuery?.removeEventListener('change', handleMediumChange)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  window.removeEventListener('resize', updateFooterPanelPosition)
+  window.removeEventListener('scroll', updateFooterPanelPosition, true)
+})
+
+function onNavClick() {
+  if (isMobile.value) mobileMenuOpen.value = false
+}
+
+function openClientDownload() {
+  window.open(desktopDownloadUrl.value, '_blank', 'noopener,noreferrer')
+}
+
+const username = computed(() => localStorage.getItem('username') || 'User')
+const role = computed(() => localStorage.getItem('role') || 'user')
+const isAdmin = computed(() => canAccessAdminConsole())
+const userInitial = computed(() => username.value.charAt(0).toUpperCase())
+const roleLabel = computed(() => role.value === 'admin' ? t('nav.roleAdmin') : t('nav.roleUser'))
+const effectiveCollapsed = computed(() => sidebarCollapsed.value && !isMobile.value)
+const sidebarToggleLabel = computed(() => sidebarCollapsed.value ? t('common.expandSidebar') : t('common.collapseSidebar'))
+const currentLocaleValue = computed(() => currentLocale.value)
+
+const themeOptions = computed<{ value: ThemeMode; label: string; icon: string }[]>(() => [
+  {
+    value: 'light',
+    label: t('nav.themeLight'),
+    icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+  },
+  {
+    value: 'dark',
+    label: t('nav.themeDark'),
+    icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+  },
+  {
+    value: 'system',
+    label: t('nav.themeSystem'),
+    icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  },
+])
+
+const themePresetOptions = computed<{ value: ThemePreset; label: string }[]>(() => [
+  {
+    value: 'default',
+    label: t('nav.themePresetDefault'),
+  },
+  {
+    value: 'blue',
+    label: t('nav.themePresetBlue'),
+  },
+])
+
+const localeOptions = computed<{ value: AppLocale; label: string; short: string }[]>(() => [
+  { value: 'zh-CN', label: t('settings.languageOptions.zhCN'), short: '中' },
+  { value: 'en-US', label: t('settings.languageOptions.enUS'), short: 'EN' },
+])
+
+const navGroups = computed<NavGroup[]>(() => [
+  {
+    key: 'core',
+    label: t('nav.core'),
+    items: [
+      {
+        path: '/dashboard',
+        label: t('nav.dashboard', 'Dashboard'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`,
+      },
+      {
+        path: '/chat',
+        label: t('nav.chat'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+      },
+      {
+        path: '/agents',
+        label: t('nav.agents'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>`,
+      },
+      {
+        path: '/wiki',
+        label: t('nav.wiki'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`,
+      },
+      {
+        path: '/memory',
+        label: t('nav.memory'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14H8a4 4 0 0 0-4 4v2h16v-2a4 4 0 0 0-4-4z"/><line x1="12" y1="11" x2="12" y2="14"/></svg>`,
+      },
+    ],
+  },
+  {
+    key: 'connect',
+    label: t('nav.connect'),
+    items: [
+      {
+        path: '/channels',
+        label: t('nav.channels'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.73a16 16 0 0 0 6.29 6.29l1.62-1.62a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`,
+      },
+      {
+        path: '/skills',
+        label: t('nav.skills'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
+      },
+      {
+        path: '/tools',
+        label: t('nav.tools'),
+        adminOnly: true,
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+      },
+      {
+        path: '/plugins',
+        label: t('nav.plugins'),
+        adminOnly: true,
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 3h-8v4h8V3z"/></svg>`,
+      },
+    ],
+  },
+  {
+    key: 'system',
+    label: t('nav.system'),
+    items: [
+      {
+        path: '/settings/models',
+        label: t('nav.settings'),
+        adminOnly: true,
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>`,
+      },
+      {
+        path: '/security',
+        label: t('nav.security'),
+        adminOnly: true,
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+      },
+    ],
+  },
+])
+
+const visibleNavGroups = computed(() => navGroups.value
+  .map(group => ({
+    ...group,
+    items: group.items.filter(item => !item.adminOnly || isAdmin.value),
+  }))
+  .filter(group => group.items.length > 0))
+const sidebarNavGroups = computed(() => visibleNavGroups.value.filter((group) => group.key === 'core'))
+const accountMenuGroups = computed(() => visibleNavGroups.value.filter((group) => group.key !== 'core'))
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  userExplicitCollapse.value = sidebarCollapsed.value
+  localStorage.setItem('mc-sidebar-collapsed', String(sidebarCollapsed.value))
+  if (!sidebarCollapsed.value) {
+    footerPanelOpen.value = false
+  }
+}
+
+function isNavItemActive(item: { path: string; label: string }) {
+  if (item.path.startsWith('/settings')) {
+    return route.path.startsWith('/settings')
+  }
+  if (item.path === '/security') {
+    return route.path.startsWith('/security')
+  }
+  return route.path === item.path
+}
+
+const showChangePassword = ref(false)
+
+function toggleFooterPanel() {
+  footerPanelOpen.value = !footerPanelOpen.value
+  if (footerPanelOpen.value) {
+    nextTick(updateFooterPanelPosition)
+  }
+}
+
+function openChangePassword() {
+  footerPanelOpen.value = false
+  showChangePassword.value = true
+}
+
+function navigateTo(path: string) {
+  footerPanelOpen.value = false
+  if (route.path !== path) {
+    router.push(path)
+  }
+}
+
+function logout() {
+  footerPanelOpen.value = false
+  logoutAndRedirect('/login')
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!footerPanelOpen.value) return
+  const target = event.target as Node | null
+  if (!target) return
+  const clickedPanel = footerPanelRef.value?.contains(target)
+  const clickedTrigger = footerTriggerRef.value?.contains(target)
+  if (!clickedPanel && !clickedTrigger) {
+    footerPanelOpen.value = false
+  }
+}
+
+function updateFooterPanelPosition() {
+  if (!footerPanelOpen.value) return
+  const trigger = footerTriggerRef.value
+  const panel = footerPanelRef.value
+  if (!trigger || !panel) return
+
+  const triggerRect = trigger.getBoundingClientRect()
+  const panelRect = panel.getBoundingClientRect()
+  const gap = 10
+  const viewportPadding = 12
+
+  if (isMobile.value) {
+    const left = Math.max(viewportPadding, Math.min(triggerRect.left, window.innerWidth - panelRect.width - viewportPadding))
+    const top = Math.max(viewportPadding, triggerRect.top - panelRect.height - gap)
+    footerPanelStyle.value = {
+      left: `${left}px`,
+      top: `${top}px`,
+      '--account-flyout-arrow-left': `${Math.max(24, Math.min(panelRect.width - 24, triggerRect.left + triggerRect.width / 2 - left))}px`,
+    }
+    return
+  }
+
+  const desiredLeft = triggerRect.right + gap
+  const maxLeft = window.innerWidth - panelRect.width - viewportPadding
+  const left = Math.max(viewportPadding, Math.min(desiredLeft, maxLeft))
+  const desiredTop = triggerRect.bottom - panelRect.height
+  const maxTop = window.innerHeight - panelRect.height - viewportPadding
+  const top = Math.max(viewportPadding, Math.min(desiredTop, maxTop))
+  const arrowTop = Math.max(24, Math.min(panelRect.height - 24, triggerRect.top + triggerRect.height / 2 - top))
+
+  footerPanelStyle.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+    '--account-flyout-arrow-top': `${arrowTop}px`,
+  }
+}
+
+async function changeLocale(locale: AppLocale) {
+  await applyLocale(locale)
+  footerPanelOpen.value = false
+  try {
+    await settingsApi.update({ language: locale })
+  } catch {
+    // keep local preference even if backend persistence fails
+  }
+}
+
+watch(() => route.fullPath, () => {
+  footerPanelOpen.value = false
+  if (isMobile.value) mobileMenuOpen.value = false
+})
+
+watch([footerPanelOpen, isMobile], async ([open]) => {
+  if (!open) return
+  await nextTick()
+  updateFooterPanelPosition()
+})
+
+watch(() => sidebarCollapsed.value, (collapsed) => {
+  if (!collapsed) footerPanelOpen.value = false
+})
+
+watch(() => workspaceStore.currentWorkspaceId, () => {
+  footerPanelOpen.value = false
+})
+</script>
+
+<style scoped>
+.app-layout {
+  display: flex;
+  height: 100vh;
+  background: var(--mc-bg);
+  overflow: hidden;
+  position: relative;
+}
+
+.app-layout::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(217, 109, 70, 0.12), transparent 22%),
+    radial-gradient(circle at bottom right, rgba(24, 74, 69, 0.08), transparent 18%);
+  pointer-events: none;
+}
+
+:global(html.dark) .app-layout::before {
+  background:
+    radial-gradient(circle at top left, rgba(235, 143, 101, 0.14), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(92, 166, 157, 0.08), transparent 20%);
+}
+
+/* ===== 侧边栏 ===== */
+.sidebar {
+  width: 236px;
+  min-width: 236px;
+  margin: 14px 0 14px 14px;
+  background:
+    linear-gradient(180deg, var(--mc-panel-top), var(--mc-panel-bottom));
+  border: 1px solid var(--mc-sidebar-border);
+  border-radius: 28px;
+  box-shadow: var(--mc-shadow-soft);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s ease, min-width 0.2s ease;
+  overflow-x: visible;
+  overflow-y: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.sidebar.collapsed {
+  width: 74px;
+  min-width: 74px;
+}
+
+.sidebar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--mc-glow);
+  pointer-events: none;
+}
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--mc-border-light);
+  gap: 12px;
+  min-height: 64px;
+}
+
+.sidebar.collapsed .sidebar-logo {
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px 10px;
+  gap: 6px;
+  min-height: 92px;
+}
+
+.logo-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(217, 109, 70, 0.18), rgba(24, 74, 69, 0.08));
+  border: 1px solid rgba(217, 109, 70, 0.14);
+}
+
+.logo-img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 18px rgba(217, 109, 70, 0.22));
+}
+
+.logo-emoji { font-size: 16px; }
+
+.logo-text { flex: 1; overflow: hidden; }
+
+.logo-name {
+  display: block;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--mc-sidebar-logo-name);
+  white-space: nowrap;
+  letter-spacing: -0.03em;
+}
+
+.logo-name-highlight {
+  color: var(--mc-primary);
+}
+
+.logo-version {
+  display: block;
+  font-size: 10px;
+  color: var(--mc-text-tertiary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.collapse-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--mc-border-light);
+  background: var(--mc-bg-muted);
+  cursor: pointer;
+  color: var(--mc-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  flex-shrink: 0;
+  padding: 0;
+  margin-left: auto;
+}
+
+.collapse-btn:hover {
+  background: var(--mc-sidebar-hover);
+  color: var(--mc-text-primary);
+}
+
+.sidebar.collapsed .collapse-btn {
+  width: 32px;
+  height: 32px;
+  margin-left: 0;
+  background: var(--mc-bg-sunken);
+  border: 1px solid var(--mc-border-light);
+  color: var(--mc-sidebar-text-active);
+}
+
+.sidebar.collapsed .collapse-btn:hover {
+  background: var(--mc-sidebar-hover);
+  border-color: var(--mc-border);
+}
+
+/* 导航 */
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0 4px;
+  scrollbar-width: none;
+}
+
+.sidebar-nav::-webkit-scrollbar { width: 4px; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: var(--mc-border); border-radius: 2px; }
+.sidebar-nav::-webkit-scrollbar { display: none; }
+
+.nav-group { margin-bottom: 2px; }
+
+.nav-group-title {
+  padding: 8px 18px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mc-sidebar-group-title);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--mc-sidebar-text);
+  text-decoration: none;
+  font-size: 13px;
+  border-radius: 13px;
+  margin: 2px 10px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+}
+
+.nav-item:hover {
+  background: var(--mc-sidebar-hover);
+  color: var(--mc-text-primary);
+}
+
+.nav-item.active {
+  background: var(--mc-sidebar-active);
+  color: var(--mc-sidebar-text-active);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(217, 109, 70, 0.08);
+}
+
+/* Active indicator bar removed — active state uses bg color + font weight only */
+
+.nav-icon { display: flex; align-items: center; flex-shrink: 0; }
+.nav-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* 底部 */
+.sidebar-footer {
+  border-top: 1px solid var(--mc-border-light);
+  padding: 10px 12px 12px;
+  background: var(--mc-sidebar-footer-bg);
+  backdrop-filter: blur(14px);
+  position: relative;
+  z-index: 5;
+}
+
+.client-download-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--mc-primary) 18%, var(--mc-border-light));
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mc-primary) 10%, transparent), color-mix(in srgb, var(--mc-accent) 8%, transparent));
+  color: var(--mc-text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.client-download-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--mc-primary) 38%, var(--mc-border-light));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mc-primary) 16%, transparent), color-mix(in srgb, var(--mc-accent) 12%, transparent));
+}
+
+.client-download-card__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mc-primary);
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border-light);
+  flex: 0 0 auto;
+}
+
+.client-download-card__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.client-download-card__title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--mc-text-primary);
+}
+
+.client-download-card__hint {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--mc-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.client-download-card__arrow {
+  color: var(--mc-text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.health-indicator { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid var(--mc-border-light); background: var(--mc-bg-muted); border-radius: 12px; cursor: pointer; color: var(--mc-text-secondary); font-size: 12px; margin-bottom: 8px; }
+.health-indicator:hover { background: var(--mc-bg-sunken); }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.health-indicator.healthy .health-dot { background: var(--mc-success); }
+.health-indicator.warning .health-dot { background: var(--mc-primary); }
+.health-indicator.error .health-dot { background: var(--mc-danger); }
+.health-indicator.unknown .health-dot { background: var(--mc-text-tertiary); }
+
+.sidebar-utility-card {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--mc-border-light);
+  background: color-mix(in srgb, var(--mc-sidebar-footer-bg) 74%, transparent);
+}
+
+.compact-utility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compact-utility-row + .compact-utility-row {
+  margin-top: 6px;
+}
+
+.compact-utility-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--mc-text-secondary);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.utility-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--mc-text-tertiary); margin: 0 0 8px; padding-left: 2px; }
+
+/* 主题切换 */
+.theme-toggle-row {
+  display: flex;
+  gap: 2px;
+  background: var(--mc-bg-muted);
+  border-radius: 14px;
+  padding: 4px;
+  margin-bottom: 12px;
+  border: 1px solid var(--mc-border-light);
+}
+
+.theme-toggle-row--compact {
+  margin-bottom: 0;
+  padding: 2px;
+  gap: 3px;
+  border-radius: 999px;
+}
+
+.preset-toggle-row {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-toggle-row--compact {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+}
+
+.language-toggle-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.language-toggle-row--compact {
+  display: flex;
+  gap: 6px;
+}
+
+.theme-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 4px;
+  border: none;
+  background: transparent;
+  color: var(--mc-text-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.theme-btn--compact {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.theme-btn:hover {
+  color: var(--mc-text-secondary);
+}
+
+.theme-btn.active {
+  background: var(--mc-bg-elevated);
+  color: var(--mc-text-primary);
+  box-shadow: var(--mc-shadow-soft);
+}
+
+.theme-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-utility-row--stacked {
+  align-items: stretch;
+}
+
+.preset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--mc-text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preset-btn:hover {
+  color: var(--mc-text-secondary);
+}
+
+.preset-btn.active {
+  background: var(--mc-bg-elevated);
+  color: var(--mc-text-primary);
+  box-shadow: var(--mc-shadow-soft);
+}
+
+.preset-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.preset-swatch--default {
+  background: linear-gradient(135deg, #d96d46, #bb4f27);
+}
+
+.preset-swatch--blue {
+  background: linear-gradient(135deg, #3b88ff, #2f72de);
+}
+
+.language-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--mc-border-light);
+  background: var(--mc-bg-muted);
+  color: var(--mc-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.language-btn:hover {
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-primary);
+}
+
+.language-btn.active {
+  border-color: rgba(217, 109, 70, 0.18);
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+}
+
+.language-abbr {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--mc-panel-raised);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.language-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.language-btn--compact {
+  width: 34px;
+  min-width: 34px;
+  justify-content: center;
+  padding: 4px 0;
+  border-radius: 999px;
+}
+
+.language-btn--compact .language-abbr {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: 14px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+}
+
+.user-info--button {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.user-info--button:hover {
+  background: var(--mc-bg-sunken);
+}
+
+.user-info--button.is-open {
+  background: var(--mc-primary-bg);
+  border-color: color-mix(in srgb, var(--mc-primary) 18%, var(--mc-border-light));
+}
+
+.user-avatar {
+  width: 30px;
+  height: 30px;
+  background: linear-gradient(135deg, var(--mc-primary), var(--mc-accent));
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.user-detail { flex: 1; overflow: hidden; }
+
+.user-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--mc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-role { font-size: 10px; color: var(--mc-text-tertiary); }
+
+.user-info__chevron {
+  margin-left: auto;
+  color: var(--mc-text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.user-info__chevron.is-open {
+  transform: rotate(180deg);
+  color: var(--mc-primary);
+}
+
+.collapsed-footer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.footer-icon-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  border: 1px solid var(--mc-border-light);
+  background: var(--mc-bg-muted);
+  color: var(--mc-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.footer-icon-btn:hover {
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-primary);
+}
+
+.footer-icon-btn.healthy .health-dot { background: var(--mc-success); }
+.footer-icon-btn.warning .health-dot { background: var(--mc-primary); }
+.footer-icon-btn.error .health-dot { background: var(--mc-danger); }
+.footer-icon-btn.unknown .health-dot { background: var(--mc-text-tertiary); }
+
+.footer-icon-btn--user {
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+  border-color: color-mix(in srgb, var(--mc-primary) 20%, var(--mc-border-light));
+}
+
+.footer-user-initial {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.footer-icon-btn--accent {
+  color: var(--mc-primary);
+  background: var(--mc-primary-bg);
+  border-color: rgba(217, 109, 70, 0.18);
+}
+
+.account-flyout {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 286px;
+  transform: none;
+  padding: 12px;
+  border-radius: 22px;
+  border: 1px solid var(--mc-border);
+  background: color-mix(in srgb, var(--mc-sidebar-floating-bg) 88%, white 12%);
+  box-shadow: 0 22px 50px rgba(19, 36, 66, 0.14);
+  backdrop-filter: blur(22px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 4000;
+}
+
+.account-flyout::after {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: var(--account-flyout-arrow-top, 28px);
+  width: 14px;
+  height: 14px;
+  border-left: 1px solid var(--mc-border);
+  border-top: 1px solid var(--mc-border);
+  background: color-mix(in srgb, var(--mc-sidebar-floating-bg) 88%, white 12%);
+  transform: rotate(45deg);
+}
+
+.account-flyout--portal {
+  pointer-events: auto;
+}
+
+.account-flyout--mobile {
+  width: calc(100% - 16px);
+}
+
+.account-flyout--mobile::after {
+  left: var(--account-flyout-arrow-left, 32px);
+  top: auto;
+  bottom: -7px;
+  border-left: none;
+  border-top: none;
+  border-right: 1px solid var(--mc-border);
+  border-bottom: 1px solid var(--mc-border);
+}
+
+.account-flyout__kicker {
+  padding: 2px 4px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mc-text-tertiary);
+  letter-spacing: 0.06em;
+}
+
+.account-flyout__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--mc-bg-elevated) 78%, var(--mc-bg-muted));
+  border: 1px solid var(--mc-border-light);
+}
+
+.account-flyout__avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--mc-primary), var(--mc-accent));
+}
+
+.account-flyout__identity {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-flyout__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-flyout__meta {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+}
+
+.account-flyout__section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.account-flyout__section-title {
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--mc-text-tertiary);
+}
+
+.account-flyout__group-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid var(--mc-border-light);
+  background: color-mix(in srgb, var(--mc-bg-elevated) 82%, var(--mc-bg-muted));
+  overflow: hidden;
+}
+
+.account-flyout__divider {
+  height: 1px;
+  background: var(--mc-border-light);
+  margin: 2px 4px;
+}
+
+.account-flyout__item {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mc-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.account-flyout__item + .account-flyout__item {
+  border-top: 1px solid var(--mc-border-light);
+}
+
+.account-flyout__item:hover {
+  background: color-mix(in srgb, var(--mc-bg-muted) 88%, white 12%);
+  color: var(--mc-text-primary);
+}
+
+.account-flyout__item.active {
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+}
+
+.account-flyout__item.active + .account-flyout__item {
+  border-top-color: color-mix(in srgb, var(--mc-primary) 12%, var(--mc-border-light));
+}
+
+.account-flyout__item--danger:hover {
+  background: var(--mc-danger-bg);
+  color: var(--mc-danger);
+}
+
+.account-flyout__item-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.account-flyout__item-label {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.account-flyout__item-arrow {
+  flex-shrink: 0;
+  font-size: 14px;
+  color: var(--mc-text-tertiary);
+  opacity: 0.75;
+}
+
+.sidebar-utility-panel {
+  position: absolute;
+  left: calc(100% + 14px);
+  bottom: 16px;
+  width: 236px;
+  padding: 14px;
+  border-radius: 22px;
+  background: var(--mc-sidebar-floating-bg);
+  border: 1px solid var(--mc-border);
+  box-shadow: var(--mc-shadow-medium);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  backdrop-filter: blur(18px);
+}
+
+.panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel-option-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--mc-border-light);
+  background: var(--mc-bg-muted);
+  color: var(--mc-text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.panel-option-btn:hover {
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-primary);
+}
+
+.panel-option-btn.active {
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+  border-color: rgba(217, 109, 70, 0.18);
+}
+
+.panel-option-icon {
+  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.panel-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+}
+
+.panel-user-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.logout-btn--panel {
+  flex-shrink: 0;
+}
+
+/* ===== 主内容区 ===== */
+.main-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+  padding: 14px 14px 14px 18px;
+}
+
+/* ===== 移动端元素（桌面端隐藏） ===== */
+.sidebar-backdrop {
+  display: none;
+}
+
+.mobile-topbar {
+  display: none;
+}
+
+/* 动画 */
+.fade-enter-active,
+.fade-leave-active { transition: opacity 0.15s ease; }
+.fade-enter-from,
+.fade-leave-to { opacity: 0; }
+
+/* ===== 移动端适配 ===== */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 1000;
+    width: 260px;
+    min-width: 260px;
+    margin: 10px;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: var(--mc-shadow-medium);
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
+  }
+
+  .sidebar.collapsed {
+    width: 260px;
+    min-width: 260px;
+  }
+
+  .collapse-btn {
+    display: none;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    background: var(--mc-surface-overlay);
+    border: 1px solid var(--mc-border);
+    border-radius: 18px;
+    box-shadow: var(--mc-shadow-soft);
+    flex-shrink: 0;
+  }
+
+  .mobile-topbar-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--mc-text-primary);
+  }
+
+  .mobile-menu-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--mc-border);
+    background: var(--mc-bg-elevated);
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--mc-text-primary);
+    flex-shrink: 0;
+  }
+
+  .mobile-menu-btn:hover {
+    background: var(--mc-bg-sunken);
+  }
+
+  .sidebar-utility-panel {
+    display: none;
+  }
+
+  .account-flyout--mobile {
+    width: calc(100% - 16px);
+  }
+
+  .account-flyout--mobile::after {
+    right: auto;
+    left: var(--account-flyout-arrow-left, 32px);
+    bottom: -7px;
+  }
+
+  .sidebar-utility-card {
+    padding: 10px;
+  }
+
+  .compact-utility-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .theme-toggle-row--compact,
+  .language-toggle-row--compact {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .theme-btn--compact,
+  .language-btn--compact {
+    flex: 1;
+    width: auto;
+  }
+
+  .sidebar-footer {
+    background: transparent;
+    backdrop-filter: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .mobile-topbar {
+    padding: 8px 10px;
+    margin: 0 0 8px;
+    border-radius: 12px;
+    gap: 8px;
+  }
+
+  .mobile-topbar-title {
+    font-size: 14px;
+  }
+
+  .mobile-menu-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .main-content {
+    padding: 8px;
+  }
+}
+</style>

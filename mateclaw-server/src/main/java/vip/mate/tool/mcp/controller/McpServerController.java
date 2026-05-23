@@ -1,0 +1,86 @@
+package vip.mate.tool.mcp.controller;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+import vip.mate.common.result.R;
+import vip.mate.tool.mcp.model.McpServerEntity;
+import vip.mate.tool.mcp.runtime.McpClientManager.ConnectionResult;
+import vip.mate.tool.mcp.service.McpServerService;
+
+import java.util.List;
+
+/**
+ * MCP Server 管理接口
+ * <p>
+ * 安全说明：MCP Server 配置涉及注册外部可执行进程（stdio command）和远程服务端点，
+ * 属于系统管理级能力。当前所有 /api/v1/** 接口均需 authenticated（见 SecurityConfig），
+ * 且系统仅有 admin 角色，因此已满足 admin-only 要求。
+ * 若后续引入多用户/多角色，必须在此类上增加 @PreAuthorize("hasRole('ADMIN')") 并启用
+ * {@code @EnableMethodSecurity}。
+ *
+ * @author MateClaw Team
+ */
+@Tag(name = "MCP Server 管理")
+@RestController
+@RequestMapping("/api/v1/mcp/servers")
+@RequiredArgsConstructor
+public class McpServerController {
+
+    private final McpServerService mcpServerService;
+
+    @Operation(summary = "获取 MCP Server 列表")
+    @GetMapping
+    public R<List<McpServerEntity>> list() {
+        return R.ok(mcpServerService.sanitizeList(mcpServerService.listAll()));
+    }
+
+    @Operation(summary = "获取 MCP Server 详情")
+    @GetMapping("/{id}")
+    public R<McpServerEntity> get(@PathVariable Long id) {
+        return R.ok(mcpServerService.sanitize(mcpServerService.getById(id)));
+    }
+
+    @Operation(summary = "创建 MCP Server")
+    @PostMapping
+    public R<McpServerEntity> create(@RequestBody McpServerEntity entity) {
+        McpServerEntity created = mcpServerService.create(entity);
+        return R.ok(mcpServerService.sanitize(created));
+    }
+
+    @Operation(summary = "更新 MCP Server")
+    @PutMapping("/{id}")
+    public R<McpServerEntity> update(@PathVariable Long id, @RequestBody McpServerEntity entity) {
+        McpServerEntity updated = mcpServerService.update(id, entity);
+        return R.ok(mcpServerService.sanitize(updated));
+    }
+
+    @Operation(summary = "删除 MCP Server")
+    @DeleteMapping("/{id}")
+    public R<Void> delete(@PathVariable Long id) {
+        mcpServerService.delete(id);
+        return R.ok();
+    }
+
+    @Operation(summary = "启用/禁用 MCP Server")
+    @PutMapping("/{id}/toggle")
+    public R<McpServerEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled) {
+        McpServerEntity toggled = mcpServerService.toggle(id, enabled);
+        return R.ok(mcpServerService.sanitize(toggled));
+    }
+
+    @Operation(summary = "测试 MCP Server 连接")
+    @PostMapping("/{id}/test")
+    public R<ConnectionResult> test(@PathVariable Long id) {
+        ConnectionResult result = mcpServerService.testConnectionById(id);
+        return R.ok(result);
+    }
+
+    @Operation(summary = "刷新所有 MCP Server 连接")
+    @PostMapping("/refresh")
+    public R<Void> refresh() {
+        mcpServerService.refreshAll();
+        return R.ok();
+    }
+}

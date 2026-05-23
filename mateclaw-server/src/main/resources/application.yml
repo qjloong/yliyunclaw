@@ -1,0 +1,231 @@
+server:
+  port: 18088
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: mateclaw-server
+  messages:
+    basename: messages
+    encoding: UTF-8
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 200MB
+  threads:
+    virtual:
+      enabled: true
+  profiles:
+    active: dev
+
+  # 数据源（默认 H2，生产切换为 mysql profile）
+  datasource:
+    url: jdbc:h2:file:./data/mateclaw;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  # SQL 初始化由 DatabaseBootstrapRunner 接管，关闭 Spring 自动执行
+  sql:
+    init:
+      mode: never
+
+  # Flyway 数据库版本迁移
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: "1"
+    locations:
+      - classpath:db/migration/h2
+    validate-on-migrate: true
+    clean-disabled: true
+
+  h2:
+    console:
+      enabled: ${H2_CONSOLE_ENABLED:false}
+      path: /h2-console
+
+  # Spring AI Alibaba (DashScope) - Spring AI Alibaba 1.1.x 配置路径
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:your-dashscope-api-key-here}
+      chat:
+        options:
+          model: qwen-max
+          temperature: 0.7
+          max-tokens: 4096
+    # Spring AI 1.1.x 会话记忆配置（使用内嵌 H2 时无需额外配置）
+    chat:
+      observations:
+        log-prompt: false
+        log-completion: false
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: embedded
+    # Spring AI Retry 配置：429/503/529 归为可重试（TransientAiException），启用指数退避
+    # RFC-012 M1：max-attempts 从 5 调到 2，避免与 wiki 层 callLlmWithResilientRetry 的 5×N 嵌套放大；
+    # 真正的重试主控权交给业务层（wiki / agent），Spring AI 仅负责"一次性瞬时抖动"的快速重试
+    retry:
+      max-attempts: 2
+      on-http-codes: 429, 503, 529
+      backoff:
+        initial-interval: 3000
+        multiplier: 3
+        max-interval: 60000
+    # 禁用 Spring AI MCP Client 自动配置（由 McpClientManager 自行管理生命周期）
+    mcp:
+      client:
+        enabled: false
+
+# MyBatis Plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+# SpringDoc OpenAPI
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+# MateClaw 自定义配置
+mateclaw:
+  jwt:
+    secret: ${JWT_SECRET:MateClaw-JWT-Secret-Key-2024-Please-Change-In-Production}
+    # Keep desktop/web sessions signed in by default. The frontend persists the
+    # token and the auth filter renews it when it is close to expiry.
+    expiration: ${JWT_EXPIRATION:2592000000} # 30 days
+    renewal-threshold: ${JWT_RENEWAL_THRESHOLD:604800000} # 7 days
+  # 搜索配置已迁移至数据库（mate_system_setting 表），通过 UI 系统设置管理
+  # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
+  mcp:
+    enabled: true
+  skill:
+    workspace:
+      root: ${user.home}/.mateclaw/skills
+      auto-init: true
+      delete-policy: archive
+    hub:
+      base-url: https://clawhub.ai
+      search-path: /api/v1/search
+      http-timeout: 15
+      http-retries: 3
+  plugin:
+    enabled: true
+    user-dir: ${user.home}/.mateclaw/plugins
+  # RFC-017: 声明式 Hook 系统
+  hooks:
+    enabled: true
+    global-rate-limit: 200       # 全局每秒最大派发数
+    global-concurrency: 32       # 同时活跃的派发任务上限
+    dispatch-deadline: 5s        # 单事件派发硬预算
+    trusted-domains: []          # HttpAction 允许调用的域名（精确或后缀匹配），留空禁用 HTTP
+    http:
+      connect-timeout: 2s
+      read-timeout: 3s
+    audit:
+      enabled: true              # 每次派发写 mate_hook_run
+      retain-days: 7
+  # RFC-014: Anthropic prompt cache 标记
+  llm:
+    cache:
+      enabled: true                # 总开关；false 时全部走 NoOp
+      min-prompt-tokens: 1024      # 累计 prompt token 低于此值则跳过缓存（避免 cache write 倒亏）
+      max-breakpoints: 4           # 单请求最多打几个 cache_control 断点（Anthropic 上限 4）
+      ttl: DEFAULT                 # DEFAULT(5min) | EXTENDED_1H（需要 anthropic-beta header）
+      include-tools-block: true    # 工具 schema 段是否独立打断点（CONVERSATION_HISTORY 策略）
+      adaptive:
+        enabled: true              # 自适应降级（连续 miss 后短路到 NoOp，冷却后恢复）
+        miss-threshold: 5
+        cool-down-ms: 60000
+    # RFC-009 P3.3: per-provider health tracker for the multi-model failover chain.
+    # When a provider hits failure-threshold consecutive failures it enters a cooldown
+    # window during which the chain walker skips it, avoiding repeated 5-retry stalls
+    # against a known-broken provider on every conversation turn.
+    failover:
+      health:
+        enabled: true
+        failure-threshold: 3
+        cooldown-ms: 300000
+
+# MateY Agent 配置
+mate:
+  agent:
+    graph:
+      observation:
+        # 与 GraphObservationProperties.java 默认值对齐，参考 openclaw token-budget 设计
+        max-single-observation-chars: 16000
+        max-total-observation-chars: 200000
+        large-result-threshold: 32000
+        min-rounds-for-summarize: 25
+        head-ratio: 0.4
+        truncation-marker: "\n\n... [内容已截断，共 %d 字符，保留前后关键片段] ...\n\n"
+    tool:
+      timeout:
+        default-timeout-seconds: 300
+        per-category:
+          shell: 120
+          web: 30
+    # RFC-008 Phase 3: tool-result three-layer budget (per-result spill + per-turn aggregate budget).
+    # Layer 1 (per-tool cap) lives inside individual tools; Layer 2 spills oversized
+    # single results to disk; Layer 3 enforces an aggregate cap on the combined
+    # response size of one tool turn. The full output is preserved on disk and
+    # the in-context preview points the agent at the spill file (read_file tool).
+    tool-result:
+      enabled: true
+      per-result-threshold-chars: 16000   # was 4000 — prevents WebSearch spill-to-disk
+      per-turn-budget-chars: 32000        # was 16000 — headroom for multi-tool turns
+      preview-head-chars: 800
+      storage-base-dir: ""
+      # Retrieval-style tools that must NEVER be spilled. Spilling read_file's
+      # output causes a recursion: the agent reads the spill path, that read also
+      # exceeds the threshold, gets spilled to a new path, agent reads that one,
+      # ad infinitum until MAX_TOOL_CALLS_PER_STEP is hit. Add MCP-provided
+      # readers here if they have the same role.
+      excluded-tools:
+        - read_file
+        - read_workspace_memory_file
+    conversation:
+      window:
+        # 测试时临时调低：2000 token ≈ 2000 中文字，3 轮对话即可触发压缩
+        # 生产环境应改回 128000
+        default-max-input-tokens: 128000
+        compact-trigger-ratio: 0.75
+        preserve-recent-pairs: 2
+        summary-max-tokens: 300
+  # Wiki 知识库配置
+  wiki:
+    enabled: true                       # 是否启用 Wiki 知识库功能
+    max-chunk-size: 30000               # LLM 单次处理最大字符数（超过则分块）
+    max-context-chars: 10000            # 注入 Agent prompt 的 Wiki 摘要最大字符数
+    max-pages-per-raw: 15               # 单个原始材料最多生成的 Wiki 页面数
+    max-parallel-phase-b-pages: 3       # RFC-012 follow-up #3：单 chunk 内 phase B 阶段并行处理的 page 数
+    auto-process-on-upload: true        # 上传原始材料后是否自动触发 AI 消化
+    upload-dir: ./data/wiki-uploads     # 上传文件存储目录
+    max-scan-files: 500                 # 目录扫描最大文件数
+    max-scan-file-size: 52428800        # 扫描时跳过大于此大小的文件（字节，默认 50MB）
+  # Dream v2 feature flags — production defaults after GA validation
+  memory:
+    # Phase 1: lifecycle mediator wiring
+    lifecycle-mediator-enabled: true
+    dream:
+      focused-enabled: true
+      archive-enabled: true
+      archive-keep-days: 30
+      max-candidates-per-dream: 100
+    # Phase 2: SOUL auto-evolution and provider decorators
+    soul-update-interval: 20                   # 20 writes trigger one SOUL.md LLM update (0 = off)
+    provider-retry-attempts: 1                 # 1 = no retry (enable when external providers added)
+    provider-metrics-enabled: false            # actuator dependency now present; enable when external providers added
+    # Phase 3: fact projection
+    fact:
+      projection-enabled: true
+      projection-rebuild-cron: "0 */30 * * * ?"
+      llm-extraction-enabled: false            # placeholder impl, enable after Phase 3 L4+
+      contradiction-check-enabled: false       # experimental simple detection, enable after LLM batch impl
+      trust-half-life-days: 60
+      forget-enabled: true
