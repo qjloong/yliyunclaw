@@ -159,8 +159,8 @@ JWT_SECRET=长度足够的随机密钥
 如果有域名：
 
 ```env
-MATECLAW_PUBLIC_URL=https://metay.example.com
-MATECLAW_CORS_ALLOWED_ORIGINS=https://metay.example.com
+MATECLAW_PUBLIC_URL=https://meta.ylicloud.com:8080
+MATECLAW_CORS_ALLOWED_ORIGINS=https://meta.ylicloud.com:8080
 ```
 
 说明：`MATECLAW_*` 是当前后端兼容环境变量名，属于技术配置名，不影响产品显示为 Meta Y。
@@ -381,7 +381,10 @@ curl http://127.0.0.1:18080/actuator/health
 
 ## 9.1 本地打包，手动上传更新
 
-推荐日常发布使用 `docker/package-release.ps1`。该脚本只在本机生成发布产物，不连接服务器、不上传、不重启。
+推荐日常发布使用打包脚本生成发布产物，不连接服务器、不上传、不重启。
+
+- **Windows**：`docker/package-release.ps1`
+- **macOS**：`docker/package-release-mac.sh`
 
 ### 9.1.1 一键打包全部
 
@@ -401,6 +404,8 @@ http://meta.ylicloud.com:8080
 
 执行命令：
 
+**Windows：**
+
 ```powershell
 cd D:\project\ai\mateclaw-dev
 .\docker\package-release.ps1 `
@@ -409,33 +414,78 @@ cd D:\project\ai\mateclaw-dev
   -DesktopTarget dist:portable
 ```
 
+**macOS：**
+
+```bash
+cd ~/projects/ai/yliyunclaw
+./docker/package-release-mac.sh \
+  -Component all \
+  -BackendUrl "http://meta.ylicloud.com:8080" \
+  -DesktopTarget dist
+```
+
 输出目录示例：
+
+**Windows：**
 
 ```text
 D:\project\ai\mateclaw-dev\.release\manual-YYYYMMDD-HHMMSS
+```
+
+**macOS：**
+
+```text
+~/projects/ai/yliyunclaw/.release/manual-YYYYMMDD-HHMMSS
 ```
 
 ### 9.1.2 单独打包
 
 只打包后端：
 
+**Windows：**
+
 ```powershell
 .\docker\package-release.ps1 -Component backend
 ```
 
+**macOS：**
+
+```bash
+./docker/package-release-mac.sh -Component backend
+```
+
 只打包前端：
+
+**Windows：**
 
 ```powershell
 .\docker\package-release.ps1 -Component frontend
 ```
 
+**macOS：**
+
+```bash
+./docker/package-release-mac.sh -Component frontend
+```
+
 只打包客户端，并写入正式服务地址：
+
+**Windows：**
 
 ```powershell
 .\docker\package-release.ps1 `
   -Component app `
   -BackendUrl "http://meta.ylicloud.com:8080" `
   -DesktopTarget dist:portable
+```
+
+**macOS：**
+
+```bash
+./docker/package-release-mac.sh \
+  -Component app \
+  -BackendUrl "http://meta.ylicloud.com:8080" \
+  -DesktopTarget dist
 ```
 
 ### 9.1.3 上传到服务器
@@ -448,12 +498,25 @@ scp -r D:\project\ai\mateclaw-dev\.release\manual-YYYYMMDD-HHMMSS root@192.168.0
 
 如果使用其他工具上传，保持目录结构不变即可。上传后的服务器目录应类似：
 
+**Windows 产物：**
+
 ```text
 /opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/app.jar
 /opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/static.tar.gz
 /opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/MetaY-Desktop.exe
 /opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/server-update.sh
 ```
+
+**macOS 产物：**
+
+```text
+/opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/app.jar
+/opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/static.tar.gz
+/opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/MetaY-Desktop.dmg
+/opt/yliyunclaw/packages/manual-YYYYMMDD-HHMMSS/server-update.sh
+```
+
+若使用 `-DesktopTarget pack`，产物为 `MetaY-Desktop.app` 目录而非 `.dmg`。
 
 ### 9.1.4 服务器执行更新并重启
 
@@ -478,7 +541,7 @@ bash server-update.sh /opt/yliyunclaw/docker
 2. 备份旧的 `runtime/static`。
 3. 替换后端 jar。
 4. 替换前端静态资源，保留 `runtime/static/downloads` 目录。
-5. 替换客户端下载文件为 `runtime/static/downloads/MetaY-Desktop.exe`。
+5. 替换客户端下载文件为 `runtime/static/downloads/MetaY-Desktop.exe`（Windows）或 `MetaY-Desktop.dmg` / `MetaY-Desktop.app`（macOS）。
 6. 重启 `yliyunclaw-server`。
 7. 执行本机健康检查。
 
@@ -492,11 +555,21 @@ bash server-update.sh /opt/yliyunclaw/docker
 
 客户端发布后下载地址：
 
+**Windows：**
+
 ```text
 http://meta.ylicloud.com:8080/downloads/MetaY-Desktop.exe
 ```
 
+**macOS：**
+
+```text
+http://meta.ylicloud.com:8080/downloads/MetaY-Desktop.dmg
+```
+
 ### 9.1.5 常用参数
+
+**Windows（`package-release.ps1`）：**
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -504,6 +577,19 @@ http://meta.ylicloud.com:8080/downloads/MetaY-Desktop.exe
 | `-BackendUrl` | `http://meta.ylicloud.com:8080` | 写入桌面客户端的默认服务地址。 |
 | `-DesktopTarget` | `dist:portable` | Electron 打包目标。常用 `dist:portable`、`dist:nsis`、`dist`。 |
 | `-OutputDir` | `.release\manual-时间戳` | 本地发布产物输出目录。 |
+| `-RemoteDockerDir` | `/opt/yliyunclaw/docker` | 生成到 `README.txt` 和 `server-update.sh` 的默认服务器运行目录。 |
+| `-SkipBuild` | false | 复用已有构建产物时使用。 |
+| `-MavenCommand` | 自动检测 | 指定 Maven 命令路径。 |
+| `-MavenSettings` | 自动检测 `mateclaw-server/settings.xml` | 指定 Maven settings 文件。 |
+
+**macOS（`package-release-mac.sh`）：**
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `-Component` | `all` | `all` / `backend` / `frontend` / `app`。 |
+| `-BackendUrl` | `http://meta.ylicloud.com:8080` | 写入桌面客户端的默认服务地址。 |
+| `-DesktopTarget` | `dist` | Electron 打包目标。常用 `dist`（dmg+zip）、`dist:dmg`、`pack`（生成 `.app` 目录）。 |
+| `-OutputDir` | `.release/manual-时间戳` | 本地发布产物输出目录。 |
 | `-RemoteDockerDir` | `/opt/yliyunclaw/docker` | 生成到 `README.txt` 和 `server-update.sh` 的默认服务器运行目录。 |
 | `-SkipBuild` | false | 复用已有构建产物时使用。 |
 | `-MavenCommand` | 自动检测 | 指定 Maven 命令路径。 |
@@ -667,7 +753,7 @@ http://192.168.0.50:18080/downloads/MetaY-Desktop.exe
   -Component all `
   -ServerHost "10.0.0.12" `
   -RemoteDockerDir "/opt/yliyunclaw/docker" `
-  -BackendUrl "https://metay.example.com"
+  -BackendUrl "https://meta.ylicloud.com:8080"
 ```
 
 ## 10. 数据库备份与恢复
@@ -727,12 +813,23 @@ docker-compose --env-file .env -f docker-compose.runtime.yml restart yliyunclaw-
 
 在开发/打包机器执行：
 
+**Windows：**
+
 ```powershell
 cd D:\project\ai\mateclaw-dev
-.\docker\package-client.ps1 -BackendUrl "https://metay.example.com" -Target dist
+.\docker\package-client.ps1 -BackendUrl "https://meta.ylicloud.com:8080" -Target dist
+```
+
+**macOS：**
+
+```bash
+cd ~/projects/ai/yliyunclaw
+./docker/package-client-mac.sh -BackendUrl "https://meta.ylicloud.com:8080" -Target dist
 ```
 
 如果要直接发布到测试服务器，可以使用：
+
+**Windows：**
 
 ```powershell
 .\docker\publish-test.ps1 -Component app -BackendUrl "http://192.168.0.50:18080"
@@ -740,8 +837,16 @@ cd D:\project\ai\mateclaw-dev
 
 输出目录：
 
+**Windows：**
+
 ```text
 mateclaw-desktop\release
+```
+
+**macOS：**
+
+```text
+mateclaw-desktop/release
 ```
 
 ### 12.2 客户端连接地址
@@ -821,16 +926,16 @@ docker-compose --env-file .env -f docker-compose.runtime.yml down -v
 ```nginx
 server {
     listen 80;
-    server_name metay.example.com;
+    server_name meta.ylicloud.com:8080;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name metay.example.com;
+    server_name meta.ylicloud.com:8080;
 
-    ssl_certificate /etc/letsencrypt/live/metay.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/metay.example.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/meta.ylicloud.com:8080/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/meta.ylicloud.com:8080/privkey.pem;
 
     client_max_body_size 200m;
 
@@ -849,8 +954,8 @@ server {
 启用 HTTPS 后，`.env` 推荐：
 
 ```env
-MATECLAW_PUBLIC_URL=https://metay.example.com
-MATECLAW_CORS_ALLOWED_ORIGINS=https://metay.example.com
+MATECLAW_PUBLIC_URL=https://meta.ylicloud.com:8080
+MATECLAW_CORS_ALLOWED_ORIGINS=https://meta.ylicloud.com:8080
 ```
 
 然后重启：
