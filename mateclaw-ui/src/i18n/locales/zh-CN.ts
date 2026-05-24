@@ -437,7 +437,7 @@ export default {
     },
     shortcuts: {
       commandHeader: '快捷命令',
-      mentionHeader: '上下文引用',
+      mentionHeader: '上下文引用与能力',
       noMatch: '没有匹配项',
       attachmentsUnsupported: '请先移除附件，再执行快捷命令',
       modeUsage: '用法：/mode default、/mode plan 或 /mode coding',
@@ -459,6 +459,20 @@ export default {
       mentionWorkspaceLabel: '当前 workspace',
       mentionProjectLabel: '当前 project',
       mentionAgentLabel: '当前 Agent',
+      groupBoundSkills: '已绑定 Skill',
+      groupSystemSkills: '系统 Skill',
+      groupBoundTools: '已绑定 Tool',
+      groupSystemTools: '系统 Tool',
+      groupExternal: '外部 Skill',
+      importSkillLabel: '搜索并导入外部 Skill',
+      importSkillWithQuery: '搜索并导入 “{query}” Skill',
+      importSkillDescription: '打开 Skill 导入面板并快速搜索外部能力',
+      selectionSkill: '本条消息优先 Skill',
+      selectionTool: '本条消息优先 Tool',
+      selectionBound: '当前 Agent 已绑定',
+      selectionSystem: '系统可用',
+      selectionSkillToast: '已选择 Skill：{label}（仅作用于下一条消息）',
+      selectionToolToast: '已选择 Tool：{label}（仅作用于下一条消息）',
     },
     composer: {
       addMenu: '更多操作',
@@ -2640,6 +2654,7 @@ export default {
     list_workspace_memory_files: '列出记忆文件',
 
     // Files & shell
+    selected_skill: '所选 Skill',
     read_file: '读取文件',
     execute_shell_command: '执行命令',
     extract_document_text: '提取文档内容',

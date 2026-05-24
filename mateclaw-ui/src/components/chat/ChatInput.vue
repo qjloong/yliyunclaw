@@ -116,46 +116,66 @@
         <div class="shortcut-panel__header">
           {{ activeShortcutKind === 'mention' ? t('chat.shortcuts.mentionHeader') : t('chat.shortcuts.commandHeader') }}
         </div>
-        <button
-          v-for="(item, index) in filteredShortcutItems"
-          :key="item.id"
-          type="button"
-          class="shortcut-item"
-          :class="{ 'is-active': index === activeShortcutIndex }"
-          @mousedown.prevent
-          @click="applyShortcut(item)"
-        >
-          <span class="shortcut-item__icon">{{ item.icon || (activeShortcutKind === 'mention' ? '@' : '/') }}</span>
-          <span class="shortcut-item__body">
-            <span class="shortcut-item__label">{{ item.label }}</span>
-            <span v-if="item.description" class="shortcut-item__desc">{{ item.description }}</span>
-          </span>
-          <span class="shortcut-item__value">{{ item.value }}</span>
-        </button>
-        <div v-if="filteredShortcutItems.length === 0" class="shortcut-panel__empty">
+        <div v-if="filteredShortcutItems.length > 0" class="shortcut-panel__list">
+          <button
+            v-for="(item, index) in filteredShortcutItems"
+            :key="item.id"
+            type="button"
+            class="shortcut-item"
+            :class="{ 'is-active': index === activeShortcutIndex }"
+            @mousedown.prevent
+            @click="applyShortcut(item)"
+          >
+            <span class="shortcut-item__icon">{{ item.icon || (activeShortcutKind === 'mention' ? '@' : '/') }}</span>
+            <span class="shortcut-item__body">
+              <span class="shortcut-item__label-row">
+                <span class="shortcut-item__label">{{ item.label }}</span>
+                <span v-if="item.group" class="shortcut-item__group">{{ item.group }}</span>
+              </span>
+              <span v-if="item.description" class="shortcut-item__desc">{{ item.description }}</span>
+            </span>
+            <span v-if="!item.skipInsert" class="shortcut-item__value">{{ item.value }}</span>
+          </button>
+        </div>
+        <div v-else class="shortcut-panel__empty">
           {{ t('chat.shortcuts.noMatch') }}
         </div>
       </div>
 
       <div class="input-area">
-        <textarea
-          ref="textareaRef"
-          v-model="inputValue"
-          class="chat-textarea"
-          :placeholder="inputPlaceholder"
-          :disabled="disabled"
-          :maxlength="maxLength"
-          rows="1"
-          @keydown="handleKeydown"
-          @compositionstart="isComposing = true"
-          @compositionend="isComposing = false"
-          @focus="handleFocus"
-          @blur="handleBlur"
-          @input="handleInput"
-          @click="syncShortcutState"
-          @keyup="handleKeyup"
-          @paste="handlePaste"
-        ></textarea>
+        <div class="input-main">
+          <div v-if="executionSelection" class="execution-token">
+            <span class="execution-token__icon">{{ executionSelection.type === 'skill' ? '🧩' : '🛠' }}</span>
+            <span class="execution-token__value">{{ executionSelectionDisplay }}</span>
+            <button
+              type="button"
+              class="execution-token__clear"
+              :title="t('common.close')"
+              @click="emit('clear-execution-selection')"
+            >
+              ×
+            </button>
+          </div>
+
+          <textarea
+            ref="textareaRef"
+            v-model="inputValue"
+            class="chat-textarea"
+            :placeholder="inputPlaceholder"
+            :disabled="disabled"
+            :maxlength="maxLength"
+            rows="1"
+            @keydown="handleKeydown"
+            @compositionstart="isComposing = true"
+            @compositionend="isComposing = false"
+            @focus="handleFocus"
+            @blur="handleBlur"
+            @input="handleInput"
+            @click="syncShortcutState"
+            @keyup="handleKeyup"
+            @paste="handlePaste"
+          ></textarea>
+        </div>
 
         <div class="input-actions">
           <button
@@ -247,7 +267,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CloseBold, MagicStick, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
 import { useToolLabel } from '@/composables/useToolLabel'
-import type { ApprovalDecisionPayload, ApprovalDecisionScope, ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage, ChatShortcutItem } from '@/types'
+import type { ApprovalDecisionPayload, ApprovalDecisionScope, ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage, ChatExecutionSelection, ChatShortcutItem } from '@/types'
 
 interface ActiveShortcutQuery {
   kind: 'command' | 'mention'
@@ -299,6 +319,8 @@ interface Props {
   shortcutCommands?: ChatShortcutItem[]
   /** @ 引用候选 */
   shortcutMentions?: ChatShortcutItem[]
+  /** 当前一次性优先执行选择 */
+  executionSelection?: ChatExecutionSelection | null
   /**
    * RFC-049 PR-1-UI: 当前 runtime 模型是否支持 reasoning_effort。false 时按钮灰掉，
    * 不响应点击，tooltip 提示当前模型不支持深度思考。默认 true 以保持向后兼容。
@@ -327,6 +349,7 @@ const props = withDefaults(defineProps<Props>(), {
   thinkingEnabled: false,
   shortcutCommands: () => [],
   shortcutMentions: () => [],
+  executionSelection: null,
   thinkingSupported: true,
 })
 
@@ -341,6 +364,8 @@ const emit = defineEmits<{
   deny: [pendingId: string]
   talk: []
   'toggle-thinking': []
+  'shortcut-select': [item: ChatShortcutItem]
+  'clear-execution-selection': []
 }>()
 
 const { t } = useI18n()
@@ -395,6 +420,11 @@ const filteredShortcutItems = computed(() => {
 })
 
 const shortcutPanelVisible = computed(() => !!activeShortcutQuery.value)
+
+const executionSelectionDisplay = computed(() => {
+  if (!props.executionSelection) return ''
+  return `@${props.executionSelection.type}:${String(props.executionSelection.key || props.executionSelection.label || '').trim()}`
+})
 
 // 处理提交
 const handleSubmit = () => {
@@ -495,6 +525,18 @@ function setCaret(position: number) {
 function applyShortcut(item: ChatShortcutItem) {
   const query = activeShortcutQuery.value
   if (!query) return
+  emit('shortcut-select', item)
+  if (item.skipInsert) {
+    if (item.consumeQueryOnSelect) {
+      const nextValue = `${inputValue.value.slice(0, query.start)}${inputValue.value.slice(query.end)}`
+      emit('update:modelValue', nextValue)
+      closeShortcutPanel()
+      setCaret(query.start)
+      return
+    }
+    closeShortcutPanel()
+    return
+  }
   const replacement = `${item.value}${item.suffix ?? ' '}`
   const nextValue = `${inputValue.value.slice(0, query.start)}${replacement}${inputValue.value.slice(query.end)}`
   emit('update:modelValue', nextValue)
@@ -768,12 +810,70 @@ defineExpose({
   transition: box-shadow 0.15s;
 }
 
+.input-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.execution-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(217, 119, 87, 0.12);
+  border: 1px solid rgba(217, 119, 87, 0.24);
+  color: var(--mc-primary-hover, #C1572B);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.execution-token__icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.execution-token__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
+.execution-token__clear {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(217, 119, 87, 0.16);
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 12px;
+}
+
+.execution-token__clear:hover {
+  background: rgba(217, 119, 87, 0.24);
+}
+
 .chat-input-wrapper.is-focused .input-area {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1), 0 0 0 2px rgba(217, 119, 87, 0.25);
 }
 
 .chat-textarea {
   flex: 1;
+  width: 100%;
   border: none;
   background: transparent;
   resize: none;
@@ -1050,11 +1150,14 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 4px;
+  width: auto;
+  max-height: min(33vh, 320px);
   padding: 6px;
   border-radius: 12px;
   background: var(--mc-input-bg, #ffffff);
   border: 1px solid var(--mc-border, #e2e8f0);
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+  overflow: hidden;
 }
 
 .shortcut-panel__header {
@@ -1064,6 +1167,29 @@ defineExpose({
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--mc-text-tertiary, #94a3b8);
+}
+
+.shortcut-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.shortcut-panel__list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.shortcut-panel__list::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+}
+
+.shortcut-panel__list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .shortcut-item {
@@ -1099,6 +1225,25 @@ defineExpose({
   flex-shrink: 0;
 }
 
+.shortcut-item__label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+
+.shortcut-item__group {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mc-primary-hover, #C1572B);
+  background: rgba(217, 119, 87, 0.12);
+  border: 1px solid rgba(217, 119, 87, 0.18);
+}
 .shortcut-item__body {
   min-width: 0;
   display: flex;
@@ -1114,8 +1259,12 @@ defineExpose({
 }
 
 .shortcut-item__desc {
+  display: block;
   font-size: 11px;
   color: var(--mc-text-secondary, #64748b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shortcut-item__value {
@@ -1176,6 +1325,14 @@ defineExpose({
     gap: 8px;
     padding: 7px 8px 7px 10px;
     border-radius: 14px;
+  }
+
+  .input-main {
+    gap: 6px;
+  }
+
+  .shortcut-panel {
+    max-height: min(40vh, 280px);
   }
 
   .shortcut-item {

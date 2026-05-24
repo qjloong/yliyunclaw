@@ -3336,7 +3336,7 @@ Define the exact boundary of the new routing layer so it stays additive to the c
 #### Acceptance checks
 
 - routing stays additive to current runtime
-- task selection and provider/model dispatch are included
+- task selection and provider/model dispatch are included 
 - policy, context, and template redesign are kept out |
 
 #### WP1x-01 first-pass routing-boundary table

@@ -93,6 +93,8 @@ deploy/.env
 # docker
 docker/runtime
 docker/searxng
+docker/runtime/app/app.jar
+docker/runtime/static/downloads/MetaY-Desktop.exe
 
 # Claude Code local settings
 CLAUDE.md

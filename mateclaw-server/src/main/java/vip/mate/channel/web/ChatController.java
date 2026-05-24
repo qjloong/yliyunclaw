@@ -39,10 +39,12 @@ import reactor.core.Disposable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -251,7 +253,7 @@ public class ChatController {
             AtomicBoolean approvalEmitterDone = new AtomicBoolean(false);
 
             sseExecutor.execute(() -> {
-                StreamAccumulator accumulator = new StreamAccumulator();
+                StreamAccumulator accumulator = new StreamAccumulator(null);
                 AtomicBoolean finalized = new AtomicBoolean(false);
                 try {
                     // 广播 approval_resolved 事件
@@ -489,7 +491,7 @@ public class ChatController {
         AtomicBoolean emitterDone = new AtomicBoolean(false);
 
         sseExecutor.execute(() -> {
-            StreamAccumulator accumulator = new StreamAccumulator();
+            StreamAccumulator accumulator = new StreamAccumulator(request.getExecutionSelection());
             AtomicBoolean finalized = new AtomicBoolean(false);
             try {
                 ConversationEntity conversation = conversationService.getOrCreateConversation(
@@ -512,7 +514,7 @@ public class ChatController {
                     return;
                 }
                 List<MessageContentPart> requestParts = normalizeRequestParts(request);
-                String promptText = buildPromptText(message, requestParts);
+                String promptText = buildPromptText(message, requestParts, request.getExecutionSelection());
                 conversationService.saveMessage(conversationId, "user", message, requestParts);
                 conversationService.updateStreamStatus(conversationId, "running");
 
@@ -531,7 +533,8 @@ public class ChatController {
                         username,
                         conversation.getWorkspaceId(),
                         effectiveWorkingDirectory)
-                        .withInvocationMetadata(buildInvocationMetadata(request.getMockTaskMetadata()));
+                        .withInvocationMetadata(buildInvocationMetadata(
+                                request.getMockTaskMetadata(), request.getExecutionSelection()));
                 Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId,
                     username, request.getThinkingLevel(), effectiveRuntimeMode,
                     effectiveRuntimeModelSelection.runtimeProviderId(),
@@ -948,7 +951,8 @@ public class ChatController {
         boolean queued = streamTracker.enqueueMessage(conversationId, message, agentId, false, contentParts,
             effectiveRuntimeMode,
             effectiveRuntimeModelSelection.runtimeProviderId(),
-            effectiveRuntimeModelSelection.runtimeModelName());
+            effectiveRuntimeModelSelection.runtimeModelName(),
+            request.getExecutionSelection());
         log.info("Enqueued follow-up message during running turn: conversationId={}, user={}, queueSize={}, awaitingApproval={}",
                 conversationId, username, streamTracker.getQueueSize(conversationId), isAwaitingApproval);
 
@@ -976,6 +980,8 @@ public class ChatController {
         private String runtimeModelName;
         /** 模板样例任务元数据，当前仅用于前后端字段保持一致。 */
         private MockTaskMetadata mockTaskMetadata;
+        /** 本条排队消息的技能 / 工具优先选择（仅当前 turn 生效） */
+        private ChatExecutionSelection executionSelection;
     }
 
     /**
@@ -1010,7 +1016,7 @@ public class ChatController {
         }
         conversationService.saveMessage(request.getConversationId(), "user", request.getMessage(), request.getContentParts());
 
-        String promptText = buildPromptText(request.getMessage(), request.getContentParts());
+        String promptText = buildPromptText(request.getMessage(), request.getContentParts(), request.getExecutionSelection());
         String response = agentService.chat(
                 agentId,
                 promptText,
@@ -1022,7 +1028,8 @@ public class ChatController {
                         request.getConversationId(),
                         username,
                         conversation.getWorkspaceId(),
-                        effectiveWorkingDirectory));
+                    effectiveWorkingDirectory)
+                    .withInvocationMetadata(buildInvocationMetadata(null, request.getExecutionSelection())));
         conversationService.saveMessage(request.getConversationId(), "assistant", response);
         completionPublisher.publish(agentId, request.getConversationId(), request.getMessage(), response, "web");
         return R.ok(response);
@@ -1123,6 +1130,8 @@ public class ChatController {
         private String runtimeProviderId;
         /** 会话级运行时模型覆盖；为空时跟随系统默认模型 */
         private String runtimeModelName;
+        /** 本条消息的技能 / 工具优先选择（仅当前 turn 生效） */
+        private ChatExecutionSelection executionSelection;
     }
 
     @lombok.Data
@@ -1160,6 +1169,8 @@ public class ChatController {
         private String approvalScope;
         /** 模板样例任务元数据，用于 HarnessRun 自动关联与验收显示 */
         private MockTaskMetadata mockTaskMetadata;
+        /** 本条消息的技能 / 工具优先选择（仅当前 turn 生效） */
+        private ChatExecutionSelection executionSelection;
     }
 
     @lombok.Data
@@ -1172,9 +1183,35 @@ public class ChatController {
         private List<String> expected;
     }
 
-    private Map<String, Object> buildInvocationMetadata(MockTaskMetadata mockTask) {
+    private Map<String, Object> buildInvocationMetadata(MockTaskMetadata mockTask,
+                                                        ChatExecutionSelection executionSelection) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (executionSelection != null && executionSelection.hasSelection()) {
+            Map<String, Object> selection = new LinkedHashMap<>();
+            if (executionSelection.getType() != null && !executionSelection.getType().isBlank()) {
+                selection.put("type", executionSelection.getType().trim());
+            }
+            if (executionSelection.getKey() != null && !executionSelection.getKey().isBlank()) {
+                selection.put("key", executionSelection.getKey().trim());
+            }
+            if (executionSelection.getLabel() != null && !executionSelection.getLabel().isBlank()) {
+                selection.put("label", executionSelection.getLabel().trim());
+            }
+            if (executionSelection.getSource() != null && !executionSelection.getSource().isBlank()) {
+                selection.put("source", executionSelection.getSource().trim());
+            }
+            if (executionSelection.getFallbackAllowed() != null) {
+                selection.put("fallbackAllowed", executionSelection.getFallbackAllowed());
+            }
+            if (executionSelection.getBoundToAgent() != null) {
+                selection.put("boundToAgent", executionSelection.getBoundToAgent());
+            }
+            if (!selection.isEmpty()) {
+                metadata.put("executionSelection", selection);
+            }
+        }
         if (mockTask == null) {
-            return Map.of();
+            return metadata;
         }
         Map<String, Object> task = new LinkedHashMap<>();
         if (mockTask.getTemplateId() != null && !mockTask.getTemplateId().isBlank()) {
@@ -1203,12 +1240,11 @@ public class ChatController {
             task.put("expected", expected);
         }
         if (task.isEmpty()) {
-            return Map.of();
+            return metadata;
         }
-        return Map.of(
-                "templateMock", true,
-                "mockTask", task
-        );
+        metadata.put("templateMock", true);
+        metadata.put("mockTask", task);
+        return metadata;
     }
 
     /**
@@ -1270,7 +1306,7 @@ public class ChatController {
         streamTracker.attach(conversationId, emitter);
 
         // 启动新的流（复用现有 sseExecutor.execute 的逻辑模式）
-        StreamAccumulator accumulator = new StreamAccumulator();
+        StreamAccumulator accumulator = new StreamAccumulator(preConsumedInput.executionSelection());
         AtomicBoolean finalized = new AtomicBoolean(false);
 
         broadcastEvent(conversationId, "message_start", Map.of("role", "assistant"));
@@ -1287,8 +1323,13 @@ public class ChatController {
                 conversationId,
                 requesterId,
                 queuedConversation != null ? queuedConversation.getWorkspaceId() : null,
-                queuedWorkingDirectory);
-        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId,
+            queuedWorkingDirectory)
+            .withInvocationMetadata(buildInvocationMetadata(null, preConsumedInput.executionSelection()));
+        String queuedPromptText = buildPromptText(
+            queuedMessage,
+            preConsumedInput.contentParts(),
+            preConsumedInput.executionSelection());
+        Disposable disposable = agentService.chatStructuredStream(agentId, queuedPromptText, conversationId,
             requesterId, null, preConsumedInput.runtimeMode(),
             preConsumedInput.runtimeProviderId(), preConsumedInput.runtimeModelName(), queuedOrigin)
                 .doOnNext(delta -> {
@@ -1546,11 +1587,16 @@ public class ChatController {
         return List.of(textPart);
     }
 
-    private String buildPromptText(String message, List<MessageContentPart> parts) {
+    private String buildPromptText(String message, List<MessageContentPart> parts,
+                                   ChatExecutionSelection executionSelection) {
         if (parts == null || parts.isEmpty()) {
-            return message != null ? message : "";
+            StringBuilder plainBuilder = new StringBuilder();
+            appendExecutionSelectionHint(plainBuilder, executionSelection);
+            appendPromptLine(plainBuilder, message != null ? message : "");
+            return plainBuilder.toString().trim();
         }
         StringBuilder builder = new StringBuilder();
+        appendExecutionSelectionHint(builder, executionSelection);
         for (MessageContentPart part : parts) {
             if (part == null || part.getType() == null) {
                 continue;
@@ -1564,6 +1610,24 @@ public class ChatController {
             }
         }
         return builder.toString().trim();
+    }
+
+    private void appendExecutionSelectionHint(StringBuilder builder, ChatExecutionSelection executionSelection) {
+        if (executionSelection == null || !executionSelection.hasSelection()) {
+            return;
+        }
+        String label = executionSelection.getLabel() != null && !executionSelection.getLabel().isBlank()
+                ? executionSelection.getLabel().trim()
+                : executionSelection.getKey().trim();
+        if (executionSelection.isSkill()) {
+            appendPromptLine(builder, "本轮执行提示：用户已显式选择 Skill「" + label + "」。请优先使用该 Skill 或其对应能力来处理当前任务；若确实不足，再谨慎回退到其他可用能力。");
+            appendPromptLine(builder, "若当前任务涉及附件、文件、报表或二进制文档，禁止只根据文件名、上下文提示或猜测直接输出内容；必须先调用与该 Skill 相关的实际工具或脚本读取/处理材料，再基于调用结果回答。");
+            appendPromptLine(builder, "请在最终回答中明确说明本轮实际使用了哪个 Skill / Tool；如果未能成功调用相关能力，也要如实说明。");
+            return;
+        }
+        if (executionSelection.isTool()) {
+            appendPromptLine(builder, "本轮执行提示：用户已显式选择 Tool「" + label + "」。请优先使用该 Tool 完成当前任务；若该 Tool 无法独立完成，再谨慎回退到其他可用能力。");
+        }
     }
 
     private void appendPromptLine(StringBuilder builder, String text) {
@@ -1709,6 +1773,8 @@ public class ChatController {
      * 的真实交错顺序，toolCalls 是 segments 中 tool_call 类型的平铺视图。
      */
     private final class StreamAccumulator {
+        private static final String SELECTED_SKILL_TRACE_TOOL = "selected_skill";
+        private final ChatExecutionSelection executionSelection;
         private final StringBuilder content = new StringBuilder();
         private final StringBuilder thinking = new StringBuilder();
         private final List<Map<String, Object>> toolCalls = new ArrayList<>();
@@ -1732,14 +1798,80 @@ public class ChatController {
         private List<String> planSteps = List.of();
         private Integer currentPlanStep = null;
         private Map<String, Object> pendingApproval = null;
+        private final Set<String> selectedSkillObservedTools = new LinkedHashSet<>();
+
+        private StreamAccumulator(ChatExecutionSelection executionSelection) {
+            this.executionSelection = executionSelection;
+            seedSelectedSkillTrace();
+        }
+
+        private void seedSelectedSkillTrace() {
+            if (executionSelection == null || !executionSelection.isSkill() || !executionSelection.hasSelection()) {
+                return;
+            }
+            String skillLabel = executionSelection.getLabel() != null && !executionSelection.getLabel().isBlank()
+                    ? executionSelection.getLabel().trim()
+                    : executionSelection.getKey().trim();
+            Map<String, Object> trace = new LinkedHashMap<>();
+            trace.put("toolCallId", "selected-skill:" + executionSelection.getKey().trim());
+            trace.put("name", SELECTED_SKILL_TRACE_TOOL);
+            trace.put("arguments", "{\"skill\":\"" + jsonEscape(executionSelection.getKey().trim())
+                    + "\",\"label\":\"" + jsonEscape(skillLabel) + "\"}");
+            trace.put("status", "running");
+            trace.put("startTime", System.currentTimeMillis());
+            trace.put("sourceSkillName", skillLabel);
+            trace.put("sourceSkillKey", executionSelection.getKey().trim());
+            toolCalls.add(trace);
+
+            Map<String, Object> seg = newSegment("tool_call");
+            seg.put("toolCallId", trace.get("toolCallId"));
+            seg.put("toolName", SELECTED_SKILL_TRACE_TOOL);
+            seg.put("toolArgs", trace.get("arguments"));
+            seg.put("sourceSkillName", skillLabel);
+            seg.put("sourceSkillKey", executionSelection.getKey().trim());
+            segments.add(seg);
+        }
+
+        private String jsonEscape(String value) {
+            return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
+
+        private void finalizeSelectedSkillTrace() {
+            if (executionSelection == null || !executionSelection.isSkill() || !executionSelection.hasSelection()) {
+                return;
+            }
+            String skillLabel = executionSelection.getLabel() != null && !executionSelection.getLabel().isBlank()
+                    ? executionSelection.getLabel().trim()
+                    : executionSelection.getKey().trim();
+            String summary = selectedSkillObservedTools.isEmpty()
+                    ? "已选择 Skill「" + skillLabel + "」，但本轮未观测到具体工具调用（如 read_skill_file / run_skill_script / extract_document_text）。如果本次回答直接给出内容，则说明没有严格按 Skill 工作流执行。"
+                    : "已按所选 Skill「" + skillLabel + "」处理本轮任务。观测到工具调用："
+                    + String.join("、", selectedSkillObservedTools) + "。";
+
+            for (Map<String, Object> tc : toolCalls) {
+                if (SELECTED_SKILL_TRACE_TOOL.equals(tc.get("name"))) {
+                    tc.put("result", summary);
+                    tc.put("success", true);
+                    tc.put("status", "completed");
+                }
+            }
+            for (Map<String, Object> seg : segments) {
+                if ("tool_call".equals(seg.get("type")) && SELECTED_SKILL_TRACE_TOOL.equals(seg.get("toolName"))) {
+                    seg.put("toolResult", summary);
+                    seg.put("toolSuccess", true);
+                    seg.put("status", "completed");
+                }
+            }
+        }
 
         synchronized void accept(AgentService.StreamDelta delta, String conversationId) {
             if (delta == null) return;
             currentConversationId = conversationId;
 
             if (delta.isEvent()) {
+                Map<String, Object> eventData = enrichToolEventData(delta.eventType(), delta.eventData());
                 if ("_usage_final".equals(delta.eventType())) {
-                    Map<String, Object> data = delta.eventData();
+                    Map<String, Object> data = eventData;
                     promptTokens = ((Number) data.getOrDefault("promptTokens", 0)).intValue();
                     completionTokens = ((Number) data.getOrDefault("completionTokens", 0)).intValue();
                     runtimeModelName = String.valueOf(data.getOrDefault("runtimeModelName", ""));
@@ -1750,7 +1882,7 @@ public class ChatController {
                     return;
                 }
                 if ("phase".equals(delta.eventType())) {
-                    String phase = String.valueOf(delta.eventData().getOrDefault("phase", ""));
+                    String phase = String.valueOf(eventData.getOrDefault("phase", ""));
                     if (!phase.isBlank()) {
                         currentPhase = phase;
                         streamTracker.updatePhase(conversationId, phase);
@@ -1758,9 +1890,9 @@ public class ChatController {
                         finalizeRunningSegments("content", "thinking");
                     }
                 }
-                accumulateToolEvent(delta.eventType(), delta.eventData(), conversationId);
+                accumulateToolEvent(delta.eventType(), eventData, conversationId);
                 try {
-                    broadcastEvent(conversationId, delta.eventType(), delta.eventData());
+                    broadcastEvent(conversationId, delta.eventType(), eventData);
                 } catch (Exception e) {
                     log.warn("Failed to broadcast event {}: {}", delta.eventType(), e.getMessage());
                 }
@@ -1804,6 +1936,19 @@ public class ChatController {
         }
 
         boolean isAwaitingApproval() { return awaitingApproval; }
+
+        private Map<String, Object> enrichToolEventData(String eventType, Map<String, Object> rawData) {
+            Map<String, Object> data = rawData != null ? new LinkedHashMap<>(rawData) : new LinkedHashMap<>();
+            if (("tool_call_started".equals(eventType) || "tool_call_completed".equals(eventType))
+                    && executionSelection != null && executionSelection.isSkill() && executionSelection.hasSelection()) {
+                data.putIfAbsent("sourceSkillName",
+                        executionSelection.getLabel() != null && !executionSelection.getLabel().isBlank()
+                                ? executionSelection.getLabel().trim()
+                                : executionSelection.getKey().trim());
+                data.putIfAbsent("sourceSkillKey", executionSelection.getKey().trim());
+            }
+            return data;
+        }
 
         private void accumulateToolEvent(String eventType, Map<String, Object> data, String conversationId) {
             if ("tool_approval_requested".equals(eventType)) {
@@ -1865,17 +2010,26 @@ public class ChatController {
                     warnings.add(warning);
                 }
             } else if ("tool_call_started".equals(eventType)) {
+                String startedToolName = String.valueOf(data.getOrDefault("toolName", ""));
+                if (!startedToolName.isBlank() && !SELECTED_SKILL_TRACE_TOOL.equals(startedToolName)
+                        && executionSelection != null && executionSelection.isSkill() && executionSelection.hasSelection()) {
+                    selectedSkillObservedTools.add(startedToolName);
+                }
                 // toolCalls（兼容）
                 Map<String, Object> tc = new LinkedHashMap<>();
-                tc.put("name", data.getOrDefault("toolName", ""));
+                tc.put("name", startedToolName);
                 tc.put("arguments", data.getOrDefault("arguments", ""));
+                if (data.get("sourceSkillName") != null) tc.put("sourceSkillName", data.get("sourceSkillName"));
+                if (data.get("sourceSkillKey") != null) tc.put("sourceSkillKey", data.get("sourceSkillKey"));
                 tc.put("status", "running");
                 toolCalls.add(tc);
                 // segments: 关闭 running thinking/content，插入 tool_call
                 finalizeRunningSegments("thinking", "content");
                 var seg = newSegment("tool_call");
-                seg.put("toolName", data.getOrDefault("toolName", ""));
+                seg.put("toolName", startedToolName);
                 seg.put("toolArgs", data.getOrDefault("arguments", ""));
+                if (data.get("sourceSkillName") != null) seg.put("sourceSkillName", data.get("sourceSkillName"));
+                if (data.get("sourceSkillKey") != null) seg.put("sourceSkillKey", data.get("sourceSkillKey"));
                 segments.add(seg);
             } else if ("tool_direct_result".equals(eventType)) {
                 // RFC-052: returnDirect tool — track the tool name so history
@@ -1897,6 +2051,8 @@ public class ChatController {
                     if ("running".equals(tc.get("status")) && toolName.equals(tc.get("name"))) {
                         tc.put("result", data.getOrDefault("result", ""));
                         tc.put("success", data.getOrDefault("success", true));
+                        if (data.get("sourceSkillName") != null) tc.put("sourceSkillName", data.get("sourceSkillName"));
+                        if (data.get("sourceSkillKey") != null) tc.put("sourceSkillKey", data.get("sourceSkillKey"));
                         tc.put("status", "completed");
                         break;
                     }
@@ -1909,6 +2065,8 @@ public class ChatController {
                         seg.put("status", "completed");
                         seg.put("toolResult", data.getOrDefault("result", ""));
                         seg.put("toolSuccess", data.getOrDefault("success", true));
+                        if (data.get("sourceSkillName") != null) seg.put("sourceSkillName", data.get("sourceSkillName"));
+                        if (data.get("sourceSkillKey") != null) seg.put("sourceSkillKey", data.get("sourceSkillKey"));
                         break;
                     }
                 }
@@ -2199,6 +2357,7 @@ public class ChatController {
          * toolCalls 保留兼容旧 UI，segments 是按事件顺序的完整时间线。
          */
         synchronized String toMetadataJson() {
+            finalizeSelectedSkillTrace();
             finalizeToolCalls();
             finalizeRunningSegments("thinking", "content", "tool_call");
             try {
@@ -2230,6 +2389,24 @@ public class ChatController {
                 }
                 if (!warnings.isEmpty()) {
                     metadata.put("warnings", warnings);
+                }
+                if (executionSelection != null && executionSelection.hasSelection()) {
+                    Map<String, Object> selection = new LinkedHashMap<>();
+                    selection.put("type", executionSelection.getType());
+                    selection.put("key", executionSelection.getKey());
+                    if (executionSelection.getLabel() != null && !executionSelection.getLabel().isBlank()) {
+                        selection.put("label", executionSelection.getLabel().trim());
+                    }
+                    if (executionSelection.getSource() != null && !executionSelection.getSource().isBlank()) {
+                        selection.put("source", executionSelection.getSource().trim());
+                    }
+                    if (executionSelection.getFallbackAllowed() != null) {
+                        selection.put("fallbackAllowed", executionSelection.getFallbackAllowed());
+                    }
+                    if (executionSelection.getBoundToAgent() != null) {
+                        selection.put("boundToAgent", executionSelection.getBoundToAgent());
+                    }
+                    metadata.put("executionSelection", selection);
                 }
                 List<Map<String, Object>> projectChangedFiles = resolveProjectChangedFiles();
                 Map<String, Object> checkpointCapability = buildCheckpointCapability();

@@ -138,7 +138,96 @@ git push
 
 ---
 
-## 7. 推荐的最小工作流
+## 7. 拉取远端 `dev` 并推送本地提交到 `dev`
+
+当前仓库里：
+
+- 远端名是 `dev`
+- 云端分支名也是 `dev`
+- 当前云端 `dev` 可能是“快照提交”形式，不一定和本地开发历史有共同祖先
+- 建议在你自己的开发分支上完成修改后，再显式推送到云端 `dev`
+
+### 7.1 先拉取远端 `dev`
+
+先把云端 `dev` 拉到本地远程引用：
+
+```bash
+git fetch dev dev
+```
+
+查看当前云端 `dev`：
+
+```bash
+git rev-parse refs/remotes/dev/dev
+git log --oneline --decorate -n 5 refs/remotes/dev/dev
+```
+
+### 7.2 确认状态后推送到云端 `dev`
+
+如果本地分支和云端 `dev` 有共同祖先，可以直接：
+
+```bash
+git checkout dev-v1
+git rebase refs/remotes/dev/dev
+git status
+git log --oneline --decorate --max-count=10
+git push dev HEAD:dev
+```
+
+### 7.3 如果没有共同祖先，使用“快照推送”
+
+先检查是否存在共同祖先：
+
+```bash
+git merge-base refs/remotes/dev/dev HEAD
+```
+
+如果没有输出，说明不能直接 `rebase` / 普通推送，这时改用 PowerShell 快照推送：
+
+```powershell
+git fetch dev dev
+$remote = git rev-parse refs/remotes/dev/dev
+$tree = git rev-parse 'HEAD^{tree}'
+$snapshot = git commit-tree $tree -m "chore: publish local snapshot to dev"
+git push --force-with-lease=refs/heads/dev:$remote dev "$snapshot`:refs/heads/dev"
+```
+
+这套方式会：
+
+- 先拉取云端 `dev`
+- 用当前工作树生成一个新的快照提交
+- 仅在云端 `dev` 仍然等于刚才拉取到的提交时覆盖推送
+
+### 7.4 如果只是想把本地 `dev` 同步成云端 `dev`
+
+```bash
+git fetch dev dev
+git checkout dev
+git reset --hard FETCH_HEAD
+```
+
+然后再回到你的开发分支继续整合：
+
+```bash
+git checkout dev-v1
+git rebase dev
+```
+
+### 7.5 大文件导致推送失败时
+
+如果出现 GitHub 大文件拒绝，可先确认这些运行时产物没有被跟踪：
+
+```bash
+git rm --cached -- docker/runtime/app/app.jar
+git rm --cached -- docker/runtime/static/downloads/MetaY-Desktop.exe
+git commit -m "chore(git): stop tracking generated runtime binaries"
+```
+
+这两个路径已经加入 [`.gitignore`](.gitignore)。
+
+---
+
+## 8. 推荐的最小工作流
 
 ### 日常开发
 
@@ -163,7 +252,7 @@ git checkout local-snapshot-20260513
 
 ---
 
-## 8. English summary
+## 9. English summary
 
 - Use `dev-local` for daily work.
 - Pull latest upstream changes with:
@@ -172,6 +261,23 @@ git checkout local-snapshot-20260513
 git checkout dev-local
 git fetch upstream
 git merge upstream/main
+```
+
+- Sync remote `dev` and push local branch with:
+
+```bash
+git fetch dev dev
+git merge-base refs/remotes/dev/dev HEAD
+```
+
+- If there is no merge base, publish a snapshot instead:
+
+```powershell
+git fetch dev dev
+$remote = git rev-parse refs/remotes/dev/dev
+$tree = git rev-parse 'HEAD^{tree}'
+$snapshot = git commit-tree $tree -m "chore: publish local snapshot to dev"
+git push --force-with-lease=refs/heads/dev:$remote dev "$snapshot`:refs/heads/dev"
 ```
 
 - Use `local-snapshot-20260513` as the rollback branch.

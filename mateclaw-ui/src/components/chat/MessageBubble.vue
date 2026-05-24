@@ -1614,6 +1614,8 @@ const segments = computed<MessageSegment[]>(() => {
       id: `tc-${i}`, type: 'tool_call', status: 'completed',
       toolName: tc.name, toolArgs: tc.arguments,
       toolResult: tc.result, toolSuccess: tc.success,
+      sourceSkillName: tc.sourceSkillName,
+      sourceSkillKey: tc.sourceSkillKey,
     })
   })
   if (props.message.content) {

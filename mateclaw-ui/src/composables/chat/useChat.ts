@@ -13,7 +13,7 @@ import { ref, computed } from 'vue'
 import { useMessages } from './useMessages'
 import { useStream } from './useStream'
 import { useMessageQueue } from './useMessageQueue'
-import type { ApprovalDecisionScope, FileChangeRecord, Message, MessageContentPart, MessageSegment, ReviewSummary, ReviewValidationRecord, StreamPhase, HeartbeatData, QueuedMessage, PhaseEventData, ConversationRuntimeMode } from '@/types'
+import type { ApprovalDecisionScope, ChatExecutionSelection, FileChangeRecord, Message, MessageContentPart, MessageSegment, ReviewSummary, ReviewValidationRecord, StreamPhase, HeartbeatData, QueuedMessage, PhaseEventData, ConversationRuntimeMode } from '@/types'
 import { classifyBackendError, type ChatErrorInfo } from '@/types/chatError'
 import { http } from '@/api'
 
@@ -103,6 +103,8 @@ export interface SendMessageOptions {
   approvalScope?: ApprovalDecisionScope
   /** Optional template sample task metadata for HarnessRun association */
   mockTaskMetadata?: Record<string, any>
+  /** One-turn preferred skill/tool selection from the @ picker */
+  executionSelection?: ChatExecutionSelection
 }
 
 export function useChat(options: UseChatOptions): UseChatReturn {
@@ -143,6 +145,47 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     currentSegments.value = []
     segIdCounter.value = 0
     activeTurnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  }
+
+  const seedSelectedSkillTrace = (selection?: ChatExecutionSelection) => {
+    if (!selection || selection.type !== 'skill' || !selection.key || !currentAssistantId.value) return
+    const msg = getMessage(currentAssistantId.value)
+    if (!msg) return
+
+    const traceId = `selected-skill:${selection.key}`
+    const skillLabel = selection.label || selection.key
+    const metadata = parseMetadata((msg as any).metadata)
+    const toolCalls = Array.isArray(metadata?.toolCalls) ? [...metadata.toolCalls] : []
+    if (!toolCalls.some((tc: any) => tc?.toolCallId === traceId || (tc?.name === 'selected_skill' && tc?.sourceSkillKey === selection.key))) {
+      toolCalls.push({
+        toolCallId: traceId,
+        name: 'selected_skill',
+        arguments: JSON.stringify({ skill: selection.key, label: skillLabel }),
+        status: 'running',
+        startTime: Date.now(),
+        sourceSkillName: skillLabel,
+        sourceSkillKey: selection.key,
+      })
+      updateMessage(currentAssistantId.value, {
+        ...msg,
+        metadata: { ...metadata, toolCalls }
+      } as any)
+    }
+
+    if (!currentSegments.value.some((seg: MessageSegment) => seg.toolCallId === traceId)) {
+      currentSegments.value.push({
+        id: genSegId(),
+        type: 'tool_call',
+        status: 'running',
+        toolCallId: traceId,
+        toolName: 'selected_skill',
+        toolArgs: JSON.stringify({ skill: selection.key, label: skillLabel }),
+        sourceSkillName: skillLabel,
+        sourceSkillKey: selection.key,
+        timestamp: Date.now(),
+      })
+      flushSegmentsToMessage()
+    }
   }
 
   /** Sync current segments into the assistant message metadata (used for real-time rendering) */
@@ -659,7 +702,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           name: data.toolName,
           arguments: data.arguments,
           status: 'running',
-          startTime: data.timestamp || Date.now()
+          startTime: data.timestamp || Date.now(),
+          sourceSkillName: data.sourceSkillName,
+          sourceSkillKey: data.sourceSkillKey,
         })
         updateMessage(currentAssistantId.value, {
           ...msg,
@@ -677,6 +722,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         id: genSegId(), type: 'tool_call', status: 'running',
         toolCallId: data.toolCallId || '',
         toolName: data.toolName, toolArgs: data.arguments,
+        sourceSkillName: data.sourceSkillName,
+        sourceSkillKey: data.sourceSkillKey,
         timestamp: data.timestamp || Date.now(),
       })
       flushSegmentsToMessage()
@@ -703,7 +750,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             ...toolCalls[target],
             result: data.result,
             success: data.success,
-            status: 'completed'
+            status: 'completed',
+            sourceSkillName: data.sourceSkillName || toolCalls[target]?.sourceSkillName,
+            sourceSkillKey: data.sourceSkillKey || toolCalls[target]?.sourceSkillKey,
           }
         }
         const reviewSummary = mergeReviewSummary(
@@ -731,6 +780,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         toolSeg.status = data.success !== false ? 'completed' : 'error'
         toolSeg.toolResult = data.result
         toolSeg.toolSuccess = data.success
+        toolSeg.sourceSkillName = data.sourceSkillName || toolSeg.sourceSkillName
+        toolSeg.sourceSkillKey = data.sourceSkillKey || toolSeg.sourceSkillKey
       }
       flushSegmentsToMessage()
     }
@@ -1357,6 +1408,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       const assistantMessage = createAssistantMessage('', conversationId)
       ;(assistantMessage as any)._turnId = activeTurnId
       currentAssistantId.value = assistantMessage.id as string
+      seedSelectedSkillTrace(options.executionSelection)
 
       // contentParts already includes file entries from buildOutgoingParts — do not re-merge attachments
       const body: Record<string, any> = {
@@ -1385,6 +1437,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
       if (options.mockTaskMetadata) {
         body.mockTaskMetadata = options.mockTaskMetadata
+      }
+      if (options.executionSelection) {
+        body.executionSelection = options.executionSelection
       }
       await stream.connect(body)
     } catch (e) {
@@ -1420,6 +1475,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           runtimeModelName: options.runtimeModelName,
           approvalScope: options.approvalScope,
           mockTaskMetadata: options.mockTaskMetadata,
+          executionSelection: options.executionSelection,
         }),
       })
       const result = await res.json()
@@ -1439,6 +1495,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const assistantMessage = createAssistantMessage('', conversationId)
         ;(assistantMessage as any)._turnId = activeTurnId
         currentAssistantId.value = assistantMessage.id as string
+        seedSelectedSkillTrace(options.executionSelection)
         streamPhase.value = thinkingLevelRef?.value === 'off' ? 'streaming' : 'thinking'
         phaseInfo.value = null
         await stream.connect({
@@ -1452,6 +1509,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           runtimeModelName: options.runtimeModelName,
           approvalScope: options.approvalScope,
           mockTaskMetadata: options.mockTaskMetadata,
+          executionSelection: options.executionSelection,
         })
       }
     } catch (e) {

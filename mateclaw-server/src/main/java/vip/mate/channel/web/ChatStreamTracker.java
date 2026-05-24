@@ -737,24 +737,32 @@ public class ChatStreamTracker {
      * @return true 如果成功请求了中断
      */
     public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId, boolean persisted) {
-        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, null, null);
+        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, null, null, null, null, null);
     }
 
     public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId,
                                     boolean persisted, List<MessageContentPart> contentParts) {
-        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, contentParts, null, null, null);
+        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, contentParts, null, null, null, null);
     }
 
     public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId,
                                     boolean persisted, List<MessageContentPart> contentParts,
                                     String runtimeMode) {
         return requestInterrupt(conversationId, queuedMessage, agentId, persisted, contentParts,
-                runtimeMode, null, null);
+                runtimeMode, null, null, null);
     }
 
     public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId,
                                     boolean persisted, List<MessageContentPart> contentParts,
                                     String runtimeMode, String runtimeProviderId, String runtimeModelName) {
+        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, contentParts,
+                runtimeMode, runtimeProviderId, runtimeModelName, null);
+    }
+
+    public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId,
+                                    boolean persisted, List<MessageContentPart> contentParts,
+                                    String runtimeMode, String runtimeProviderId, String runtimeModelName,
+                                    ChatExecutionSelection executionSelection) {
         RunState state = runs.get(conversationId);
         if (state == null || state.done) {
             return false;
@@ -767,8 +775,8 @@ public class ChatStreamTracker {
             Disposable d = state.disposable;
             canInterrupt = d != null && !d.isDisposed();
             // 无论是否可中断，都入队（支持多条排队消息）
-                state.messageQueue.offer(new QueuedInput(queuedMessage, agentId, persisted, contentParts,
-                    runtimeMode, runtimeProviderId, runtimeModelName));
+            state.messageQueue.offer(new QueuedInput(queuedMessage, agentId, persisted, contentParts,
+                    runtimeMode, runtimeProviderId, runtimeModelName, executionSelection));
             if (canInterrupt) {
                 state.interruptType = InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
                 state.stopRequested.set(true);
@@ -815,28 +823,29 @@ public class ChatStreamTracker {
      * 将消息加入队列但不中断当前执行（用于不可中断阶段）。
      */
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted) {
-        return enqueueMessage(conversationId, message, agentId, persisted, null, null, null, null);
+        return enqueueMessage(conversationId, message, agentId, persisted, null, null, null, null, null);
     }
 
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted,
                                   List<MessageContentPart> contentParts) {
-        return enqueueMessage(conversationId, message, agentId, persisted, contentParts, null, null, null);
+        return enqueueMessage(conversationId, message, agentId, persisted, contentParts, null, null, null, null);
     }
 
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted,
                                   List<MessageContentPart> contentParts, String runtimeMode) {
-        return enqueueMessage(conversationId, message, agentId, persisted, contentParts, runtimeMode, null, null);
+        return enqueueMessage(conversationId, message, agentId, persisted, contentParts, runtimeMode, null, null, null);
     }
 
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted,
                                   List<MessageContentPart> contentParts, String runtimeMode,
-                                  String runtimeProviderId, String runtimeModelName) {
+                                  String runtimeProviderId, String runtimeModelName,
+                                  ChatExecutionSelection executionSelection) {
         RunState state = runs.get(conversationId);
         if (state == null || state.done) {
             return false;
         }
         state.messageQueue.offer(new QueuedInput(message, agentId, persisted, contentParts,
-                runtimeMode, runtimeProviderId, runtimeModelName));
+                runtimeMode, runtimeProviderId, runtimeModelName, executionSelection));
         // broadcast 在锁外
         try {
             String json = objectMapper.writeValueAsString(Map.of(
@@ -856,9 +865,10 @@ public class ChatStreamTracker {
      */
     public record QueuedInput(String message, Long agentId, boolean persisted,
                               List<MessageContentPart> contentParts, String runtimeMode,
-                              String runtimeProviderId, String runtimeModelName) {
+                              String runtimeProviderId, String runtimeModelName,
+                              ChatExecutionSelection executionSelection) {
         public QueuedInput(String message, Long agentId, boolean persisted) {
-            this(message, agentId, persisted, null, null, null, null);
+            this(message, agentId, persisted, null, null, null, null, null);
         }
     }
 

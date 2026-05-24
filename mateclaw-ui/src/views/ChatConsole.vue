@@ -443,6 +443,7 @@
         :queue-size="queueSize"
         :shortcut-commands="chatShortcutCommands"
         :shortcut-mentions="chatShortcutMentions"
+        :execution-selection="pendingExecutionSelection"
         @submit="handleSendMessage"
         @stop="handleStopStream"
         @cancel-queued="handleCancelQueued"
@@ -453,6 +454,8 @@
         :enable-talk-mode="!!selectedAgentId && !agentProvisioning && !isCurrentConversationAgentDeleted"
         :thinking-enabled="thinkingEnabled"
         :thinking-supported="currentModelSupportsThinking"
+        @shortcut-select="handleShortcutSelect"
+        @clear-execution-selection="pendingExecutionSelection = null"
         @toggle-thinking="thinkingEnabled = !thinkingEnabled"
         @talk="showTalkMode = true"
       >
@@ -646,6 +649,14 @@
           :conversation-id="currentConversationId"
           @close="showTalkMode = false"
         />
+
+        <ImportHubDialog
+          :visible="showShortcutSkillImportDialog"
+          initial-tab="search"
+          :initial-search-query="shortcutSkillImportQuery"
+          @update:visible="showShortcutSkillImportDialog = $event"
+          @installed="handleShortcutSkillInstalled"
+        />
       </div>
     </div>
   </div>
@@ -657,7 +668,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Delete, Document, Plus, Setting, UploadFilled } from '@element-plus/icons-vue'
-import { conversationApi, agentApi, modelApi, chatApi, harnessApi, workspaceTeamApi } from '@/api/index'
+import { conversationApi, agentApi, agentBindingApi, modelApi, chatApi, harnessApi, skillApi, toolApi, workspaceTeamApi } from '@/api/index'
 import { channelIconUrl } from '@/utils/channelSource'
 import { useChat } from '@/composables/chat/useChat'
 import { reconstructErrorInfo } from '@/types/chatError'
@@ -666,7 +677,8 @@ import { desktopApproveCommandRequest, desktopDenyCommandRequest, desktopExecute
 import { isGlobalAdmin } from '@/utils/access'
 import { getAuthToken, isAuthRedirectInProgress } from '@/utils/auth'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import type { ApprovalDecisionPayload, ApprovalDecisionScope, ContextRouterSummary, Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, ChatAttachment, MessageContentPart, Message, ToolCallMeta, StreamPhase, ConversationRuntimeMode, ChatShortcutItem, HarnessRun, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
+import type { ApprovalDecisionPayload, ApprovalDecisionScope, ChatExecutionSelection, ChatShortcutItem, ContextRouterSummary, Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, ChatAttachment, MessageContentPart, Message, Skill, Tool, ToolCallMeta, StreamPhase, ConversationRuntimeMode, HarnessRun, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
+import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
 
 interface WorkspaceDirectoryEntry {
   name: string
@@ -695,6 +707,13 @@ interface DesktopValidationRequestState {
 interface AgentTemplateRuntimeMeta {
   preferredMode?: string | null
   allowedModes?: string[] | null
+}
+
+interface ChatCapabilityPickerState {
+  skills: Skill[]
+  tools: Tool[]
+  skillSource: 'bound' | 'system'
+  toolSource: 'bound' | 'system'
 }
 
 interface AgentTemplateQualityGateMeta {
@@ -1687,6 +1706,16 @@ const workspaceStateReady = ref(false)
 const routeSyncSuspended = ref(false)
 const pendingAttachments = ref<ChatAttachment[]>([])
 const uploadingAttachment = ref(false)
+const shortcutCapabilityState = ref<ChatCapabilityPickerState>({
+  skills: [],
+  tools: [],
+  skillSource: 'system',
+  toolSource: 'system',
+})
+const shortcutCapabilityLoading = ref(false)
+const pendingExecutionSelection = ref<ChatExecutionSelection | null>(null)
+const showShortcutSkillImportDialog = ref(false)
+const shortcutSkillImportQuery = ref('')
 const agentsLoading = ref(false)
 const agentProvisioning = ref(false)
 let harnessPollTimer: ReturnType<typeof setInterval> | null = null
@@ -1696,6 +1725,12 @@ let defaultAgentCreationPromise: Promise<Agent | null> | null = null
 const thinkingEnabled = ref(localStorage.getItem('mateclaw_thinking') === 'on')
 const thinkingLevel = computed(() => thinkingEnabled.value ? 'high' : 'off')
 watch(thinkingEnabled, (v) => localStorage.setItem('mateclaw_thinking', v ? 'on' : 'off'))
+watch([selectedAgentId, () => workspaceStore.currentWorkspaceId], () => {
+  void loadShortcutCapabilities()
+}, { immediate: true })
+watch(selectedAgentId, () => {
+  pendingExecutionSelection.value = null
+})
 
 // Dropdowns & menus
 const agentDropdownOpen = ref(false)
@@ -2231,6 +2266,74 @@ function normalizeReferenceToken(value?: string | number | null, fallback = 'cur
   return normalized || fallback
 }
 
+function buildExecutionSelectionToken(type: 'skill' | 'tool', value?: string | number | null) {
+  return `@${type}:${normalizeReferenceToken(value, type)}`
+}
+
+function getCurrentMentionQueryFromInput() {
+  const match = String(inputText.value || '').match(/(^|\s)@([^\s@]*)$/)
+  return match?.[2]?.trim() || ''
+}
+
+function formatShortcutCapabilityLabel(item: Skill | Tool, type: 'skill' | 'tool') {
+  if (type === 'skill') {
+    const skill = item as Skill
+    return locale.value === 'zh-CN'
+      ? (skill.nameZh || skill.name || '')
+      : (skill.nameEn || skill.name || '')
+  }
+  const tool = item as Tool
+  return tool.displayName || tool.name
+}
+
+async function loadShortcutCapabilities() {
+  const agentId = String(selectedAgentId.value || '').trim()
+  shortcutCapabilityLoading.value = true
+  try {
+    const [enabledSkillsRes, enabledToolsRes, boundSkillsRes, boundToolsRes] = await Promise.all([
+      skillApi.listEnabled(),
+      toolApi.listEnabled(),
+      agentId ? agentBindingApi.listSkills(agentId) : Promise.resolve({ data: [] }),
+      agentId ? agentBindingApi.listTools(agentId) : Promise.resolve({ data: [] }),
+    ])
+
+    const enabledSkills = ((enabledSkillsRes as any)?.data || []) as Skill[]
+    const enabledTools = ((enabledToolsRes as any)?.data || []) as Tool[]
+    const boundSkillRows = ((boundSkillsRes as any)?.data || []) as Array<{ skillId: string | number; enabled?: boolean }>
+    const boundToolRows = ((boundToolsRes as any)?.data || []) as Array<{ toolName: string; enabled?: boolean }>
+
+    const hasSkillBindings = boundSkillRows.length > 0
+    const hasToolBindings = boundToolRows.length > 0
+    const boundSkillIds = new Set(
+      boundSkillRows.filter(item => item.enabled !== false).map(item => String(item.skillId)),
+    )
+    const boundToolNames = new Set(
+      boundToolRows.filter(item => item.enabled !== false).map(item => String(item.toolName)),
+    )
+
+    shortcutCapabilityState.value = {
+      skills: hasSkillBindings
+        ? enabledSkills.filter(skill => boundSkillIds.has(String(skill.id)))
+        : enabledSkills,
+      tools: hasToolBindings
+        ? enabledTools.filter(tool => boundToolNames.has(String(tool.name)))
+        : enabledTools,
+      skillSource: hasSkillBindings ? 'bound' : 'system',
+      toolSource: hasToolBindings ? 'bound' : 'system',
+    }
+  } catch (error) {
+    console.warn('[ChatConsole] Failed to load shortcut capabilities', error)
+    shortcutCapabilityState.value = {
+      skills: [],
+      tools: [],
+      skillSource: 'system',
+      toolSource: 'system',
+    }
+  } finally {
+    shortcutCapabilityLoading.value = false
+  }
+}
+
 const chatShortcutCommands = computed<ChatShortcutItem[]>(() => {
   const items: ChatShortcutItem[] = [
     {
@@ -2328,8 +2431,103 @@ const chatShortcutMentions = computed<ChatShortcutItem[]>(() => {
       suffix: ' ',
     })
   }
+  const skillGroup = shortcutCapabilityState.value.skillSource === 'bound'
+    ? t('chat.shortcuts.groupBoundSkills')
+    : t('chat.shortcuts.groupSystemSkills')
+  for (const skill of shortcutCapabilityState.value.skills) {
+    const label = formatShortcutCapabilityLabel(skill, 'skill')
+    items.push({
+      id: `mention-skill-${skill.id}`,
+      label,
+      description: skill.description || skill.name,
+      value: buildExecutionSelectionToken('skill', skill.name || skill.id),
+      icon: skill.icon || '🧩',
+      aliases: [skill.name, skill.nameZh || '', skill.nameEn || '', ...(skill.tags ? skill.tags.split(',') : [])].filter(Boolean),
+      skipInsert: true,
+      consumeQueryOnSelect: true,
+      group: skillGroup,
+      kind: 'skill',
+      metadata: {
+        selection: {
+          type: 'skill',
+          key: String(skill.name || skill.id),
+          label,
+          source: shortcutCapabilityState.value.skillSource,
+          fallbackAllowed: true,
+          boundToAgent: shortcutCapabilityState.value.skillSource === 'bound',
+        },
+      },
+    })
+  }
+  const toolGroup = shortcutCapabilityState.value.toolSource === 'bound'
+    ? t('chat.shortcuts.groupBoundTools')
+    : t('chat.shortcuts.groupSystemTools')
+  for (const tool of shortcutCapabilityState.value.tools) {
+    const label = formatShortcutCapabilityLabel(tool, 'tool')
+    items.push({
+      id: `mention-tool-${tool.name}`,
+      label,
+      description: tool.description || tool.name,
+      value: buildExecutionSelectionToken('tool', tool.name),
+      icon: tool.icon || '🛠',
+      aliases: [tool.name, tool.displayName || '', tool.toolType || ''].filter(Boolean),
+      skipInsert: true,
+      consumeQueryOnSelect: true,
+      group: toolGroup,
+      kind: 'tool',
+      metadata: {
+        selection: {
+          type: 'tool',
+          key: String(tool.name),
+          label,
+          source: shortcutCapabilityState.value.toolSource,
+          fallbackAllowed: true,
+          boundToAgent: shortcutCapabilityState.value.toolSource === 'bound',
+        },
+      },
+    })
+  }
+  const importQuery = getCurrentMentionQueryFromInput()
+  items.push({
+    id: 'mention-import-skill',
+    label: importQuery
+      ? t('chat.shortcuts.importSkillWithQuery', { query: importQuery })
+      : t('chat.shortcuts.importSkillLabel'),
+    description: t('chat.shortcuts.importSkillDescription'),
+    value: '@skill-search',
+    icon: '📦',
+    aliases: ['install skill', 'search skill', '导入 skill', '搜索 skill'],
+    group: t('chat.shortcuts.groupExternal'),
+    kind: 'skill-import',
+    skipInsert: true,
+    metadata: { query: importQuery },
+  })
   return items
 })
+
+function handleShortcutSkillInstalled() {
+  showShortcutSkillImportDialog.value = false
+  void loadShortcutCapabilities()
+}
+
+function handleShortcutSelect(item: ChatShortcutItem) {
+  if (item.kind === 'skill' || item.kind === 'tool') {
+    const selection = item.metadata?.selection as ChatExecutionSelection | undefined
+    if (selection) {
+      pendingExecutionSelection.value = { ...selection, fallbackAllowed: true }
+      ElMessage.success(
+        item.kind === 'skill'
+          ? t('chat.shortcuts.selectionSkillToast', { label: selection.label })
+          : t('chat.shortcuts.selectionToolToast', { label: selection.label }),
+      )
+    }
+    return
+  }
+  if (item.kind === 'skill-import') {
+    shortcutSkillImportQuery.value = String(item.metadata?.query || '').trim()
+    showShortcutSkillImportDialog.value = true
+  }
+}
 
 function normalizeRuntimeMode(value?: string | null): ConversationRuntimeMode {
   if (value === 'plan') return 'plan'
@@ -4335,6 +4533,7 @@ async function handleSendMessage(content: string, options: { approvalScope?: App
         title: activeTemplateMockTask.value.title,
         expected: activeTemplateMockTask.value.expected,
       } : undefined,
+      executionSelection: pendingExecutionSelection.value || undefined,
       attachments: outgoingAttachments.map(a => ({
         type: 'file' as const,
         fileUrl: a.url,
@@ -4347,6 +4546,7 @@ async function handleSendMessage(content: string, options: { approvalScope?: App
         contextHint: a.contextHint,
       })),
     })
+    pendingExecutionSelection.value = null
     // 发送成功后释放 ObjectURL
     revokeAllPreviewUrls()
   } catch (e) {
@@ -4552,6 +4752,8 @@ function normalizeMessage(raw: Message): Message {
           arguments: parsed.arguments,
           result: parsed.result,
           success: parsed.success,
+          sourceSkillName: parsed.sourceSkillName,
+          sourceSkillKey: parsed.sourceSkillKey,
           // 历史消息中不应有 running 状态的工具调用（流已结束）
           status: 'completed',
         })

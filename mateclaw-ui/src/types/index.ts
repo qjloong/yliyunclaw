@@ -148,6 +148,17 @@ export interface TemplateHealth {
 export type AgentEntity = Agent
 export type AgentState = 'IDLE' | 'RUNNING' | 'PAUSED' | 'ERROR' | 'COMPLETED'
 export type ConversationRuntimeMode = 'default' | 'plan' | 'coding'
+export type ChatExecutionSelectionType = 'skill' | 'tool'
+export type ChatExecutionSelectionSource = 'bound' | 'system' | 'imported'
+
+export interface ChatExecutionSelection {
+  type: ChatExecutionSelectionType
+  key: string
+  label: string
+  source: ChatExecutionSelectionSource
+  fallbackAllowed?: boolean
+  boundToAgent?: boolean
+}
 
 export interface ChatShortcutItem {
   id: string
@@ -157,6 +168,11 @@ export interface ChatShortcutItem {
   icon?: string
   aliases?: string[]
   suffix?: string
+  group?: string
+  kind?: 'reference' | 'skill' | 'tool' | 'skill-import'
+  skipInsert?: boolean
+  consumeQueryOnSelect?: boolean
+  metadata?: Record<string, any>
 }
 
 export interface ProjectInsightSummary {
@@ -286,6 +302,8 @@ export interface ToolCallMeta {
   result?: string
   success?: boolean
   startTime?: number
+  sourceSkillName?: string
+  sourceSkillKey?: string
 }
 
 export type FileChangeType = 'added' | 'modified'
@@ -438,6 +456,8 @@ export interface MessageSegment {
   toolSuccess?: boolean
   /** LLM-provided tool call id, used to pair tool_call_started ↔ tool_call_completed */
   toolCallId?: string
+  sourceSkillName?: string
+  sourceSkillKey?: string
   /** type=content */
   text?: string
   /** type=phase */

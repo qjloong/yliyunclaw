@@ -437,7 +437,7 @@ export default {
     },
     shortcuts: {
       commandHeader: 'Quick Commands',
-      mentionHeader: 'Context References',
+      mentionHeader: 'Context & Capabilities',
       noMatch: 'No matches found',
       attachmentsUnsupported: 'Remove attachments before running a slash command',
       modeUsage: 'Usage: /mode default, /mode plan, or /mode coding',
@@ -459,6 +459,20 @@ export default {
       mentionWorkspaceLabel: 'Current workspace',
       mentionProjectLabel: 'Current project',
       mentionAgentLabel: 'Current agent',
+      groupBoundSkills: 'Bound Skills',
+      groupSystemSkills: 'System Skills',
+      groupBoundTools: 'Bound Tools',
+      groupSystemTools: 'System Tools',
+      groupExternal: 'External Skills',
+      importSkillLabel: 'Search and import external skills',
+      importSkillWithQuery: 'Search and import "{query}" skills',
+      importSkillDescription: 'Open the skill import panel and search external capabilities',
+      selectionSkill: 'Prefer skill for next send',
+      selectionTool: 'Prefer tool for next send',
+      selectionBound: 'bound to current agent',
+      selectionSystem: 'system available',
+      selectionSkillToast: 'Selected skill: {label} (next message only)',
+      selectionToolToast: 'Selected tool: {label} (next message only)',
     },
     composer: {
       addMenu: 'More actions',
@@ -2630,6 +2644,7 @@ export default {
     list_workspace_memory_files: 'List Memory Files',
 
     // Files & shell
+    selected_skill: 'Selected Skill',
     read_file: 'Read File',
     execute_shell_command: 'Execute Command',
     extract_document_text: 'Extract Document',

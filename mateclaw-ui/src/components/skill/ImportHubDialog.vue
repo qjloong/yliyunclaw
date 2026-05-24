@@ -153,7 +153,14 @@ import { ElMessage } from 'element-plus'
 import { skillInstallApi } from '@/api/index'
 import type { InstallTask, HubSkillInfo } from '@/types/index'
 
-const props = defineProps<{ visible: boolean }>()
+const props = withDefaults(defineProps<{
+  visible: boolean
+  initialTab?: 'url' | 'search' | 'zip'
+  initialSearchQuery?: string
+}>(), {
+  initialTab: 'url',
+  initialSearchQuery: '',
+})
 const emit = defineEmits<{
   (e: 'update:visible', val: boolean): void
   (e: 'installed'): void
@@ -180,6 +187,13 @@ watch(() => props.visible, (val) => {
   if (!val) {
     stopPolling()
     currentTask.value = null
+    return
+  }
+  activeTab.value = props.initialTab
+  if (props.initialSearchQuery?.trim()) {
+    searchQuery.value = props.initialSearchQuery.trim()
+    activeTab.value = 'search'
+    void doSearch()
   }
 })
 

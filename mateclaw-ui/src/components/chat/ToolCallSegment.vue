@@ -56,6 +56,7 @@ const isRead = computed(() => {
 const isSuccess = computed(() => props.segment.status === 'completed' && props.segment.toolSuccess !== false)
 const isError = computed(() => props.segment.status === 'error' || props.segment.toolSuccess === false)
 const isRunning = computed(() => props.segment.status === 'running')
+const skillBadge = computed(() => props.segment.sourceSkillName || props.segment.sourceSkillKey || '')
 </script>
 
 <template>
@@ -72,6 +73,7 @@ const isRunning = computed(() => props.segment.status === 'running')
         <el-icon v-else :size="12"><Setting /></el-icon>
       </span>
       <span class="seg-tool__name">{{ displayName }}</span>
+      <span v-if="skillBadge" class="seg-tool__skill">skill · {{ skillBadge }}</span>
       <span v-if="truncatedArgs" class="seg-tool__args">{{ truncatedArgs }}</span>
       <el-icon
         v-if="segment.toolResult"
@@ -162,6 +164,17 @@ const isRunning = computed(() => props.segment.status === 'running')
   background: rgba(217, 109, 70, 0.06);
   padding: 1px 5px;
   border-radius: 3px;
+}
+
+.seg-tool__skill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mc-primary-hover, #C1572B);
+  background: rgba(217, 109, 70, 0.12);
+  border: 1px solid rgba(217, 109, 70, 0.18);
 }
 
 .seg-tool__arrow {
