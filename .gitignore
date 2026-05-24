@@ -107,6 +107,7 @@ CLAUDE.md
 # MateClaw desktop test shell artifacts
 mateclaw-desktop/node_modules/
 mateclaw-desktop/release/
+mateclaw-desktop/renderer-dist/
 mateclaw-desktop/dist/
 
 
