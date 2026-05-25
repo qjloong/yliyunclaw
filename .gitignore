@@ -108,7 +108,7 @@ CLAUDE.md
 mateclaw-desktop/node_modules/
 mateclaw-desktop/release/
 mateclaw-desktop/dist/
-
+mateclaw-desktop/renderer-dist/
 
 tmp/
 
