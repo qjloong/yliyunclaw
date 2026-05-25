@@ -1,0 +1,69 @@
+package vip.mate.tool.controller;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+import vip.mate.common.result.R;
+import vip.mate.tool.model.ToolEntity;
+import vip.mate.tool.service.ToolService;
+
+import java.util.List;
+
+/**
+ * 工具管理接口
+ *
+ * @author MateClaw Team
+ */
+@Tag(name = "工具管理")
+@RestController
+@RequestMapping("/api/v1/tools")
+@RequiredArgsConstructor
+public class ToolController {
+
+    private final ToolService toolService;
+
+    @Operation(summary = "获取工具列表")
+    @GetMapping
+    public R<List<ToolEntity>> list() {
+        return R.ok(toolService.listTools());
+    }
+
+    @Operation(summary = "获取已启用工具列表")
+    @GetMapping("/enabled")
+    public R<List<ToolEntity>> listEnabled() {
+        return R.ok(toolService.listEnabledTools());
+    }
+
+    @Operation(summary = "获取工具详情")
+    @GetMapping("/{id}")
+    public R<ToolEntity> get(@PathVariable Long id) {
+        return R.ok(toolService.getTool(id));
+    }
+
+    @Operation(summary = "创建工具（MCP）")
+    @PostMapping
+    public R<ToolEntity> create(@RequestBody ToolEntity tool) {
+        return R.ok(toolService.createTool(tool));
+    }
+
+    @Operation(summary = "更新工具")
+    @PutMapping("/{id}")
+    public R<ToolEntity> update(@PathVariable Long id, @RequestBody ToolEntity tool) {
+        tool.setId(id);
+        return R.ok(toolService.updateTool(tool));
+    }
+
+    @Operation(summary = "删除工具")
+    @DeleteMapping("/{id}")
+    public R<Void> delete(@PathVariable Long id) {
+        toolService.deleteTool(id);
+        return R.ok();
+    }
+
+    @Operation(summary = "启用/禁用工具")
+    @PutMapping("/{id}/toggle")
+    public R<ToolEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled) {
+        return R.ok(toolService.toggleTool(id, enabled));
+    }
+}
