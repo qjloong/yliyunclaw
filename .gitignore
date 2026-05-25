@@ -116,3 +116,5 @@ tmp/
 docs/channel.md
 /docker/runtime/
 /docker/searxng/
+docs/teacher-agent/
+

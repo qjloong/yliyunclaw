@@ -239,6 +239,23 @@ public class ChatStreamTracker {
     }
 
     /**
+     * 标记首个 token 已到达。
+     * <p>
+     * 某些调用路径会在真正广播首个 `content_delta` 前，先更新运行态快照，
+     * 供运行时面板或前端加载状态尽快切换到“已开始输出”。
+     */
+    public void markFirstTokenReceived(String conversationId) {
+        RunState state = runs.get(conversationId);
+        if (state == null || state.done) {
+            return;
+        }
+        synchronized (state.lock) {
+            state.firstTokenReceived = true;
+            state.lastEventAt = System.currentTimeMillis();
+        }
+    }
+
+    /**
      * Register an emergency-save callback for this run, invoked from {@link #onShutdown()}
      * before the JVM tears down. The callback should snapshot the current accumulator
      * state and persist it as the assistant message (status="interrupted").
