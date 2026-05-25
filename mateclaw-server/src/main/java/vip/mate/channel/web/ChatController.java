@@ -487,6 +487,15 @@ public class ChatController {
         registerEmitterCallbacks(emitter, conversationId);
         streamTracker.attach(conversationId, emitter);
 
+        try {
+            sendEvent(emitter, "stream_started", Map.of(
+                    "conversationId", conversationId,
+                    "timestamp", System.currentTimeMillis()
+            ));
+        } catch (IOException e) {
+            log.debug("Failed to send stream_started event for {}: {}", conversationId, e.getMessage());
+        }
+
         // 标记 emitter 是否已结束，防止 Flux 回调再次写入已关闭的 emitter
         AtomicBoolean emitterDone = new AtomicBoolean(false);
 

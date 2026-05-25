@@ -37,4 +37,13 @@ public class ConversationWindowProperties {
 
     /** 摘要 token 预算下限（字数） */
     private int summaryBudgetFloor = 500;
+
+    /**
+     * 成对安全边界在允许压缩前至少要留下多少条“旧消息”前缀。
+     *
+     * <p>在执行 tool_call / tool_response 成对保护后，压缩边界可能被推回到非常靠后，
+     * 如果前缀只剩极少几条消息，再做一次结构化摘要的收益就很低，反而增加一次 LLM 调用。
+     * 默认值 2 表示：至少要有两条可压缩旧消息，才值得执行压缩。</p>
+     */
+    private int pairSafeMinPrefixToCompact = 2;
 }

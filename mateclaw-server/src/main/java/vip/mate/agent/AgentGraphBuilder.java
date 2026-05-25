@@ -328,7 +328,8 @@ public class AgentGraphBuilder {
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
         CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId, templateMetadataJson);
         return new StateGraphReActAgent(chatClient, conversationService, compiledGraph,
-            chatModel, conversationWindowManager, imageVisionService, harnessRunService);
+            chatModel, conversationWindowManager, imageVisionService, harnessRunService,
+            toolSet != null ? toolSet.callbacks() : List.of());
     }
 
     StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel, int maxIter) {
@@ -347,7 +348,8 @@ public class AgentGraphBuilder {
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
         CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId, templateMetadataJson);
         return new StateGraphPlanExecuteAgent(chatClient, conversationService, graph, planningService,
-            chatModel, conversationWindowManager, imageVisionService, harnessRunService);
+            chatModel, conversationWindowManager, imageVisionService, harnessRunService,
+            toolSet != null ? toolSet.callbacks() : List.of());
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {

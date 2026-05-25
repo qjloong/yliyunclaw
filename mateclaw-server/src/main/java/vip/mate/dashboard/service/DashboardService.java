@@ -63,29 +63,22 @@ public class DashboardService {
         LocalDateTime startTime = startDate.atStartOfDay();
         LocalDateTime endTime = endDate.atTime(LocalTime.MAX);
 
-        // 对话数
-        LambdaQueryWrapper<ConversationEntity> convWrapper = new LambdaQueryWrapper<ConversationEntity>()
-                .ge(ConversationEntity::getCreateTime, startTime)
-                .le(ConversationEntity::getCreateTime, endTime);
-        if (workspaceId != null) {
-            convWrapper.eq(ConversationEntity::getWorkspaceId, workspaceId);
-        }
-        long conversations = conversationMapper.selectCount(convWrapper);
-
         // Workspace 级消息过滤：通过 conversation 关联 workspace
         // MessageEntity 没有 workspaceId 字段，需通过所属 conversation 间接过滤
         List<String> wsConversationIds = null;
         if (workspaceId != null) {
             List<ConversationEntity> wsConvs = conversationMapper.selectList(
                     new LambdaQueryWrapper<ConversationEntity>()
+                            .eq(ConversationEntity::getDeleted, 0)
                             .eq(ConversationEntity::getWorkspaceId, workspaceId)
                             .select(ConversationEntity::getConversationId));
             wsConversationIds = wsConvs.stream()
-                    .map(ConversationEntity::getConversationId).toList();
+                    .map(ConversationEntity::getConversationId)
+                    .toList();
             if (wsConversationIds.isEmpty()) {
                 // 该 workspace 无任何对话，直接返回零值
                 Map<String, Object> empty = new LinkedHashMap<>();
-                empty.put("conversations", conversations);
+                empty.put("conversations", 0L);
                 empty.put("messages", 0L);
                 empty.put("totalTokens", 0L);
                 empty.put("promptTokens", 0L);
@@ -94,6 +87,39 @@ public class DashboardService {
                 return empty;
             }
         }
+
+        // 对话数：统计区间内“活跃过”的会话，而不只是新建会话。
+        // 这样老会话在今日/本周继续有消息时，不会出现消息数>0但会话数=0。
+        Set<String> activeConversationIds = new HashSet<>();
+
+        LambdaQueryWrapper<ConversationEntity> createdConversationWrapper = new LambdaQueryWrapper<ConversationEntity>()
+                .eq(ConversationEntity::getDeleted, 0)
+                .ge(ConversationEntity::getCreateTime, startTime)
+                .le(ConversationEntity::getCreateTime, endTime)
+                .select(ConversationEntity::getConversationId);
+        if (workspaceId != null) {
+            createdConversationWrapper.eq(ConversationEntity::getWorkspaceId, workspaceId);
+        }
+        conversationMapper.selectList(createdConversationWrapper).stream()
+                .map(ConversationEntity::getConversationId)
+                .filter(Objects::nonNull)
+                .forEach(activeConversationIds::add);
+
+        LambdaQueryWrapper<MessageEntity> activeConversationWrapper = new LambdaQueryWrapper<MessageEntity>()
+                .eq(MessageEntity::getDeleted, 0)
+                .ge(MessageEntity::getCreateTime, startTime)
+                .le(MessageEntity::getCreateTime, endTime)
+                .select(MessageEntity::getConversationId)
+                .groupBy(MessageEntity::getConversationId);
+        if (wsConversationIds != null) {
+            activeConversationWrapper.in(MessageEntity::getConversationId, wsConversationIds);
+        }
+        messageMapper.selectList(activeConversationWrapper).stream()
+                .map(MessageEntity::getConversationId)
+                .filter(Objects::nonNull)
+                .forEach(activeConversationIds::add);
+
+        long conversations = activeConversationIds.size();
 
         // 总消息数
         LambdaQueryWrapper<MessageEntity> msgWrapper = new LambdaQueryWrapper<MessageEntity>()

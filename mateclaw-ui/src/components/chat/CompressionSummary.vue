@@ -12,16 +12,97 @@ const props = defineProps<{
 
 const expanded = ref(false)
 
-const compressedCount = computed(() => {
+const metadata = computed(() => {
   try {
-    const metadata = typeof props.message.metadata === 'string'
+    return typeof props.message.metadata === 'string'
       ? JSON.parse(props.message.metadata)
-      : props.message.metadata
-    return metadata?.compressedCount || 0
+      : (props.message.metadata || {})
   } catch {
-    return 0
+    return {}
   }
 })
+
+const compressedCount = computed(() => {
+  return Number(metadata.value?.compressedCount || 0)
+})
+
+const detailItems = computed(() => {
+  const items: Array<{ key: string; label: string; value: string }> = []
+  const meta = metadata.value as Record<string, any>
+
+  if (Number.isFinite(meta.preTokens) && Number.isFinite(meta.postTokens)) {
+    items.push({
+      key: 'tokens',
+      label: t('chat.compressionTokens'),
+      value: `${formatTokens(meta.preTokens)} → ${formatTokens(meta.postTokens)}`,
+    })
+  }
+
+  if (Number.isFinite(meta.messagesSummarized)) {
+    items.push({
+      key: 'messages',
+      label: t('chat.compressionMessages'),
+      value: String(meta.messagesSummarized),
+    })
+  }
+
+  if (Number.isFinite(meta.tailKept)) {
+    items.push({
+      key: 'tail',
+      label: t('chat.compressionTailKept'),
+      value: String(meta.tailKept),
+    })
+  }
+
+  if (Number.isFinite(meta.toolResultsSpilled)) {
+    items.push({
+      key: 'spills',
+      label: t('chat.compressionToolSpills'),
+      value: String(meta.toolResultsSpilled),
+    })
+  }
+
+  if (typeof meta.anchored === 'boolean') {
+    items.push({
+      key: 'anchored',
+      label: t('chat.compressionAnchored'),
+      value: meta.anchored ? t('common.yes') : t('common.no'),
+    })
+  }
+
+  if (meta.trigger) {
+    items.push({
+      key: 'trigger',
+      label: t('chat.compressionTrigger'),
+      value: formatTrigger(meta.trigger),
+    })
+  }
+
+  if (meta.summaryId) {
+    items.push({
+      key: 'summaryId',
+      label: t('chat.compressionSummaryId'),
+      value: String(meta.summaryId),
+    })
+  }
+
+  return items
+})
+
+function formatTokens(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
+  return String(value)
+}
+
+function formatTrigger(trigger: string): string {
+  switch (trigger) {
+    case 'token_threshold':
+      return t('chat.compressionTriggerTokenThreshold')
+    default:
+      return trigger
+  }
+}
 </script>
 
 <template>
@@ -37,6 +118,12 @@ const compressedCount = computed(() => {
       <el-icon class="seg-compression__arrow" :class="{ 'is-open': expanded }" :size="12"><ArrowDown /></el-icon>
     </div>
     <div v-if="expanded" class="seg-compression__body">
+      <div v-if="detailItems.length" class="seg-compression__meta">
+        <div v-for="item in detailItems" :key="item.key" class="seg-compression__meta-item">
+          <span class="seg-compression__meta-label">{{ item.label }}</span>
+          <span class="seg-compression__meta-value">{{ item.value }}</span>
+        </div>
+      </div>
       <div class="markdown-body">{{ message.content }}</div>
     </div>
   </div>
@@ -84,5 +171,30 @@ const compressedCount = computed(() => {
   font-size: 13px;
   color: var(--mc-text-secondary);
   line-height: 1.6;
+}
+.seg-compression__meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 2px 0 10px;
+}
+.seg-compression__meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border);
+}
+.seg-compression__meta-label {
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+}
+.seg-compression__meta-value {
+  font-size: 12px;
+  color: var(--mc-text-primary);
+  font-weight: 500;
+  word-break: break-word;
 }
 </style>

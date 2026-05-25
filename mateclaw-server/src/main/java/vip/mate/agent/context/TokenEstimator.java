@@ -1,7 +1,10 @@
 package vip.mate.agent.context;
 
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -69,6 +72,34 @@ public final class TokenEstimator {
         return messages.stream()
                 .mapToInt(TokenEstimator::estimateTokens)
                 .sum();
+    }
+
+    /**
+     * 估算工具定义带来的额外 token 消耗。
+     *
+     * <p>这里按工具名、描述、输入 schema 的文本体积做保守估算，
+     * 用于在压缩窗口计算时把 tool schema 也纳入预算，避免“历史看起来没超限，
+     * 实际请求因为挂了大量工具定义而超过模型输入上限”的情况。</p>
+     */
+    public static int estimateToolsTokens(Collection<ToolCallback> toolCallbacks) {
+        if (toolCallbacks == null || toolCallbacks.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (ToolCallback callback : toolCallbacks) {
+            if (callback == null) {
+                continue;
+            }
+            ToolDefinition definition = callback.getToolDefinition();
+            if (definition == null) {
+                continue;
+            }
+            total += estimateTokens(definition.name());
+            total += estimateTokens(definition.description());
+            total += estimateTokens(definition.inputSchema());
+            total += PER_MESSAGE_OVERHEAD;
+        }
+        return total;
     }
 
     /**

@@ -14,6 +14,10 @@ export type SSEEventType =
   | 'error'
   | 'session'
   | 'message_start'
+  | 'compact_status'
+  | 'stream_started'
+  | 'context_prepared'
+  | 'llm_request_sent'
   // Agent 事件
   | 'tool_call_started'
   | 'tool_call_completed'

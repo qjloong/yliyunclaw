@@ -28,6 +28,31 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PhaseEventData, StreamPhase } from '@/types'
 
+interface LifecycleStage {
+  stage: 'connecting' | 'started' | 'context_prepared' | 'llm_request_sent' | 'streaming'
+  detail?: any
+  since: number
+}
+
+interface CompactStatus {
+  status: 'start' | 'pair_safe' | 'summarize' | 'done' | 'skipped' | 'failed'
+  preTokens?: number
+  postTokens?: number
+  messagesIn?: number
+  messagesSummarized?: number
+  tailKept?: number
+  toolResultsSpilled?: number
+  reason?: string
+  anchored?: boolean
+  fromCache?: boolean
+  movedFrom?: number
+  movedTo?: number
+  summaryBudget?: number
+  trigger?: string
+  fallbackKept?: number
+  timestamp?: number
+}
+
 interface Props {
   isLoading: boolean
   toolCount?: number
@@ -43,6 +68,10 @@ interface Props {
   runningToolName?: string
   /** 是否有排队消息 */
   hasQueued?: boolean
+  /** 首 token 前的细粒度生命周期状态 */
+  lifecycleStage?: LifecycleStage | null
+  /** 最近一次上下文压缩状态 */
+  compactStatus?: CompactStatus | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -55,9 +84,87 @@ const props = withDefaults(defineProps<Props>(), {
   phaseInfo: null,
   runningToolName: '',
   hasQueued: false,
+  lifecycleStage: null,
+  compactStatus: null,
 })
 
 const { t } = useI18n()
+
+const lifecycleI18nMap: Record<string, string> = {
+  connecting: 'chat.streamConnecting',
+  started: 'chat.streamStarted',
+  context_prepared: 'chat.streamContextPrepared',
+  llm_request_sent: 'chat.streamLlmRequestSent',
+}
+
+const compactStatusText = computed(() => {
+  const compact = props.compactStatus
+  if (!compact) return ''
+  switch (compact.status) {
+    case 'start':
+      return compact.preTokens
+        ? t('chat.compactStartWithTokens', { tokens: formatTokens(compact.preTokens) })
+        : t('chat.compactStart')
+    case 'pair_safe':
+      return t('chat.compactPairSafe')
+    case 'summarize': {
+      const count = compact.messagesSummarized ?? compact.messagesIn ?? 0
+      return count > 0
+        ? t('chat.compactSummarizeWithCount', { count })
+        : t('chat.compactSummarize')
+    }
+    default:
+      return ''
+  }
+})
+
+const isCompactActive = computed(() => {
+  const status = props.compactStatus?.status
+  return status === 'start' || status === 'pair_safe' || status === 'summarize'
+})
+
+const inPreTokenWindow = computed(() => {
+  const stage = props.lifecycleStage
+  return !!stage && stage.stage !== 'streaming'
+})
+
+const nowTs = ref(Date.now())
+const stageTickSec = ref(0)
+
+const recentCompactResultText = computed(() => {
+  const compact = props.compactStatus
+  if (!compact || !compact.timestamp) return ''
+  const age = nowTs.value - compact.timestamp
+  if (age > 2500) return ''
+
+  switch (compact.status) {
+    case 'done':
+      if (compact.preTokens && compact.postTokens) {
+        return t('chat.compactDoneWithTokens', {
+          before: formatTokens(compact.preTokens),
+          after: formatTokens(compact.postTokens),
+        })
+      }
+      return t('chat.compactDone')
+    case 'skipped':
+      if (compact.reason === 'insufficient_messages') {
+        return t('chat.compactSkippedInsufficient')
+      }
+      if (compact.reason === 'pair_boundary_collapsed') {
+        return t('chat.compactSkippedPairBoundary')
+      }
+      return t('chat.compactSkipped')
+    case 'failed':
+      return t('chat.compactFailed')
+    default:
+      return ''
+  }
+})
+
+function formatTokens(value: number): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k tokens`
+  return `${value} tokens`
+}
 
 // 将 14 个内部阶段映射为 3 个面向用户的状态：思考中 / 执行中 / 撰写中
 const userFacingPhase = computed(() => {
@@ -96,6 +203,23 @@ const userPhaseI18nMap: Record<string, string> = {
 }
 
 const statusText = computed(() => {
+  if (isCompactActive.value) {
+    const text = compactStatusText.value
+    if (text) return text
+  }
+  if (inPreTokenWindow.value && props.lifecycleStage) {
+    const key = lifecycleI18nMap[props.lifecycleStage.stage]
+    if (key) {
+      const base = t(key)
+      if (stageTickSec.value >= 5) {
+        return base + t('chat.streamElapsedSuffix', { sec: stageTickSec.value })
+      }
+      return base
+    }
+  }
+  if (recentCompactResultText.value) {
+    return recentCompactResultText.value
+  }
   const key = userPhaseI18nMap[userFacingPhase.value]
   if (!key) return ''
   return t(key)
@@ -145,9 +269,14 @@ watch(() => props.isLoading, (loading) => {
     if (timerInterval) clearInterval(timerInterval)
     elapsedSeconds.value = 0
     elapsedTime.value = '0s'
+    stageTickSec.value = 0
 
     timerInterval = setInterval(() => {
+      nowTs.value = Date.now()
       elapsedSeconds.value += 1
+      if (props.lifecycleStage) {
+        stageTickSec.value = Math.floor((Date.now() - props.lifecycleStage.since) / 1000)
+      }
       const secs = elapsedSeconds.value
       if (secs < 60) {
         elapsedTime.value = `${secs}s`
@@ -162,8 +291,14 @@ watch(() => props.isLoading, (loading) => {
       clearInterval(timerInterval)
       timerInterval = null
     }
+    nowTs.value = Date.now()
+    stageTickSec.value = 0
   }
 }, { immediate: true })
+
+watch(() => props.lifecycleStage?.since, () => {
+  stageTickSec.value = 0
+})
 
 
 onBeforeUnmount(() => {

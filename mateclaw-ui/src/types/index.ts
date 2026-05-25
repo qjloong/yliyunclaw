@@ -471,6 +471,17 @@ export interface MessageSegment {
 }
 
 export interface MessageMetadata {
+  type?: string
+  compressedCount?: number
+  summaryId?: number
+  trigger?: string
+  preTokens?: number
+  postTokens?: number
+  messagesSummarized?: number
+  tailKept?: number
+  toolResultsSpilled?: number
+  anchored?: boolean
+  fromCache?: boolean
   currentPhase?: string
   toolCalls?: ToolCallMeta[]
   plan?: PlanMeta

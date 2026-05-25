@@ -741,6 +741,24 @@ public class NodeStreamingChatHelper {
             }
         };
 
+            if (broadcast && streamTracker != null && conversationId != null && !conversationId.isEmpty()) {
+                int messageCount = prompt.getInstructions() != null ? prompt.getInstructions().size() : 0;
+                int contextChars = approximatePromptChars(prompt);
+                streamTracker.broadcastObject(conversationId, "context_prepared", Map.of(
+                    "messages", messageCount,
+                    "contextChars", contextChars,
+                    "timestamp", System.currentTimeMillis()
+                ));
+                String modelId = identifyModel(chatModel);
+                String providerId = primaryProviderId != null ? primaryProviderId : "";
+                streamTracker.broadcastObject(conversationId, "llm_request_sent", Map.of(
+                    "provider", providerId,
+                    "model", modelId != null ? modelId : "",
+                    "phase", phase != null ? phase : "",
+                    "timestamp", System.currentTimeMillis()
+                ));
+            }
+
         Disposable subscription = chatModel.stream(prompt)
                 .doOnNext(chatResponse -> {
                     if (chatResponse == null || chatResponse.getResults() == null || chatResponse.getResults().isEmpty()) {
@@ -758,6 +776,9 @@ public class NodeStreamingChatHelper {
                     // 1. 提取 content delta（含重复检测）
                     String contentDelta = msg.getText();
                     if (contentDelta != null && !contentDelta.isEmpty()) {
+                        if (broadcast && streamTracker != null) {
+                            streamTracker.markFirstTokenReceived(conversationId);
+                        }
                         if (contentRepDetector.appendAndCheck(contentDelta)) {
                             log.warn("[{}] Content repetition detected, will cancel stream " +
                                     "for conversation {}", phase, conversationId);
@@ -1479,6 +1500,27 @@ public class NodeStreamingChatHelper {
         }
         sb.append("\"}");
         return sb.toString();
+    }
+
+    private static int approximatePromptChars(Prompt prompt) {
+        if (prompt == null || prompt.getInstructions() == null || prompt.getInstructions().isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (Message instruction : prompt.getInstructions()) {
+            if (instruction == null || instruction.getText() == null) {
+                continue;
+            }
+            total += instruction.getText().length();
+        }
+        return total;
+    }
+
+    private static String identifyModel(ChatModel chatModel) {
+        if (chatModel == null) {
+            return "";
+        }
+        return chatModel.getClass().getSimpleName();
     }
 
     /**

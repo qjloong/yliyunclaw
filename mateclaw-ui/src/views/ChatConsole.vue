@@ -295,6 +295,8 @@
         :phase-info="phaseInfo"
         :running-tool-name="currentRunningToolName"
         :has-queued="hasQueued"
+        :lifecycle-stage="lifecycleStage"
+        :compact-status="compactStatus"
       />
 
       <Transition name="fade">
@@ -1979,6 +1981,8 @@ const {
   hasQueued,
   queueSize,
   heartbeat,
+  compactStatus,
+  lifecycleStage,
   sendMessage: sendChatMessage,
   stopGeneration: stopChatGeneration,
   cancelQueued,

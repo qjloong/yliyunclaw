@@ -17,6 +17,26 @@ import type { ApprovalDecisionScope, ChatExecutionSelection, FileChangeRecord, M
 import { classifyBackendError, type ChatErrorInfo } from '@/types/chatError'
 import { http } from '@/api'
 
+export interface CompactStatusEvent {
+  status: 'start' | 'pair_safe' | 'summarize' | 'done' | 'skipped' | 'failed'
+  timestamp?: number
+  preTokens?: number
+  postTokens?: number
+  messagesIn?: number
+  messagesSummarized?: number
+  tailKept?: number
+  toolResultsSpilled?: number
+  anchored?: boolean
+  reason?: string
+  movedFrom?: number
+  movedTo?: number
+  summaryBudget?: number
+  trigger?: string
+  fallbackKept?: number
+  fromCache?: boolean
+  summaryId?: number
+}
+
 export interface UseChatOptions {
   /** Base API URL */
   baseUrl: string
@@ -62,6 +82,14 @@ export interface UseChatReturn {
   queueSize: import('vue').ComputedRef<number>
   /** Latest heartbeat data */
   heartbeat: import('vue').Ref<HeartbeatData | null>
+  /** Latest compact_status event for the active turn. */
+  compactStatus: import('vue').Ref<CompactStatusEvent | null>
+  /** Fine-grained pre-token lifecycle stage. */
+  lifecycleStage: import('vue').Ref<{
+    stage: 'connecting' | 'started' | 'context_prepared' | 'llm_request_sent' | 'streaming'
+    detail?: any
+    since: number
+  } | null>
   /** Send a message (can be called while generating — automatically routes to interrupt/queue) */
   sendMessage: (content: string, options: SendMessageOptions) => Promise<void>
   /** Stop generation (user-initiated stop; does not auto-resume queued messages) */
@@ -131,6 +159,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   let stopFallbackTimer: ReturnType<typeof setTimeout> | null = null
   const streamPhase = ref<StreamPhase>('idle')
   const phaseInfo = ref<PhaseEventData | null>(null)
+  const compactStatus = ref<CompactStatusEvent | null>(null)
+  const lifecycleStage = ref<{
+    stage: 'connecting' | 'started' | 'context_prepared' | 'llm_request_sent' | 'streaming'
+    detail?: any
+    since: number
+  } | null>(null)
 
   /** All segments of the current assistant message (for segmented display) */
   const currentSegments = ref<MessageSegment[]>([])
@@ -452,6 +486,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   stream.on('content_delta', (data) => {
     if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'streaming', since: Date.now() }
     if (currentAssistantId.value) {
       appendMessageContent(currentAssistantId.value, data.delta || '', 'text')
       if (['thinking', 'reasoning', 'drafting_answer', 'preparing_context'].includes(streamPhase.value)) {
@@ -474,6 +509,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   stream.on('thinking_delta', (data) => {
     if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'streaming', since: Date.now() }
     // Suppress thinking display when thinkingLevel=off
     if (options.thinkingLevel?.value === 'off') return
     if (currentAssistantId.value) {
@@ -642,6 +678,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       persisted: data.persisted,
       messageCount: data.messageCount,
     })
+    compactStatus.value = null
+    lifecycleStage.value = null
   })
 
   let errorFired = false
@@ -685,6 +723,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       persisted: data.persisted,
       messageCount: data.messageCount,
     })
+    compactStatus.value = null
+    lifecycleStage.value = null
   })
 
   // ===== Agent event handlers =====
@@ -1090,6 +1130,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     streamPhase.value = 'awaiting_approval'
 
+
+  stream.on('compact_status', (data) => {
+    if (isStaleEvent(data)) return
+    compactStatus.value = { ...data } as CompactStatusEvent
+  })
     let targetId = currentAssistantId.value
     if (!targetId) {
       const assistantMessages = messages.value.filter(m => m.role === 'assistant')
@@ -1212,6 +1257,21 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamPhase.value = data.decision === 'approved' ? 'streaming' : 'completed'
   })
 
+  stream.on('stream_started', (data) => {
+    if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'started', since: Date.now() }
+  })
+
+  stream.on('context_prepared', (data) => {
+    if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'context_prepared', detail: data, since: Date.now() }
+  })
+
+  stream.on('llm_request_sent', (data) => {
+    if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'llm_request_sent', detail: data, since: Date.now() }
+  })
+
   // ===== Heartbeat events =====
 
   stream.on('heartbeat', (data: HeartbeatData) => {
@@ -1282,6 +1342,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const assistantMessage = createAssistantMessage('', convId2)
     ;(assistantMessage as any)._turnId = activeTurnId
     currentAssistantId.value = assistantMessage.id as string
+    compactStatus.value = null
+    lifecycleStage.value = { stage: 'connecting', since: Date.now() }
     streamPhase.value = options.thinkingLevel?.value === 'off' ? 'streaming' : 'thinking'
     phaseInfo.value = null
   })
@@ -1398,6 +1460,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamConversationId = conversationId
     streamPhase.value = thinkingLevelRef?.value === 'off' ? 'streaming' : 'thinking'
     phaseInfo.value = null
+    compactStatus.value = null
+    lifecycleStage.value = { stage: 'connecting', since: Date.now() }
 
     try {
       if (!isApprovalCommand) {
@@ -1554,6 +1618,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // Mark as stopped immediately so the UI gives instant feedback
     streamPhase.value = 'stopped'
     phaseInfo.value = null
+    lifecycleStage.value = null
 
     // Install fallback timer before any await so it is not missed by a concurrent resetForNewConversation
     if (stopFallbackTimer) clearTimeout(stopFallbackTimer)
@@ -1619,6 +1684,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     error.value = null
     errorFired = false
     phaseInfo.value = null
+    compactStatus.value = null
+    lifecycleStage.value = { stage: 'connecting', since: Date.now() }
 
     resetCurrentTurnState()
 
@@ -1697,6 +1764,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     segIdCounter.value = 0
     streamPhase.value = 'idle'
     phaseInfo.value = null
+    compactStatus.value = null
+    lifecycleStage.value = null
     error.value = null
     messageQueue.clear()
     if (stopFallbackTimer) {
@@ -1715,6 +1784,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     hasQueued: messageQueue.hasQueued,
     queueSize: messageQueue.queueSize,
     heartbeat,
+    compactStatus,
+    lifecycleStage,
     sendMessage,
     stopGeneration,
     cancelQueued,

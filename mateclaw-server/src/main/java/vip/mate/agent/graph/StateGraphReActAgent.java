@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.tool.ToolCallback;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
@@ -58,6 +59,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
     private final org.springframework.ai.chat.model.ChatModel chatModel;
     private final ConversationWindowManager conversationWindowManager;
     private final HarnessRunService harnessRunService;
+    private final List<ToolCallback> toolCallbacks;
 
     public StateGraphReActAgent(ChatClient chatClient, ConversationService conversationService,
                                 CompiledGraph compiledGraph,
@@ -65,11 +67,23 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                                 ConversationWindowManager conversationWindowManager,
                                 ImageVisionService imageVisionService,
                                 HarnessRunService harnessRunService) {
+        this(chatClient, conversationService, compiledGraph, chatModel,
+                conversationWindowManager, imageVisionService, harnessRunService, List.of());
+    }
+
+    public StateGraphReActAgent(ChatClient chatClient, ConversationService conversationService,
+                                CompiledGraph compiledGraph,
+                                org.springframework.ai.chat.model.ChatModel chatModel,
+                                ConversationWindowManager conversationWindowManager,
+                                ImageVisionService imageVisionService,
+                                HarnessRunService harnessRunService,
+                                List<ToolCallback> toolCallbacks) {
         super(chatClient, conversationService, imageVisionService);
         this.compiledGraph = compiledGraph;
         this.chatModel = chatModel;
         this.conversationWindowManager = conversationWindowManager;
         this.harnessRunService = harnessRunService;
+        this.toolCallbacks = toolCallbacks != null ? List.copyOf(toolCallbacks) : List.of();
     }
 
     @Override
@@ -401,6 +415,10 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
         if (conversationWindowManager != null) {
             Long parsedAgentId = null;
             try { parsedAgentId = Long.valueOf(agentId); } catch (Exception ignored) {}
+            vip.mate.agent.context.ChatOrigin origin = vip.mate.agent.context.ChatOriginHolder.get();
+            String effectiveWorkspaceBasePath = origin.workspaceBasePath() != null && !origin.workspaceBasePath().isBlank()
+                ? origin.workspaceBasePath()
+                : workspaceBasePath;
             historyMessages = conversationWindowManager.fitToWindow(
                     historyMessages,
                     systemPrompt != null ? systemPrompt : "",
@@ -408,7 +426,9 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                     maxInputTokens,
                     chatModel,
                     conversationId,
-                    parsedAgentId);
+                parsedAgentId,
+                toolCallbacks,
+                effectiveWorkspaceBasePath);
         }
 
         List<Message> messages = new ArrayList<>(historyMessages);

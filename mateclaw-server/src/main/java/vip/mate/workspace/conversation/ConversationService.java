@@ -451,14 +451,62 @@ public class ConversationService {
      * 下次加载历史时识别此消息，跳过它之前的已压缩消息。
      */
     public void saveCompressionSummary(String conversationId, String summary, int compressedCount) {
+        saveCompressionSummary(conversationId, summary, compressedCount, Map.of());
+    }
+
+    public Long saveCompressionSummaryReturningId(String conversationId, String summary,
+                                                  int compressedCount, Map<String, Object> extraMetadata) {
+        return saveCompressionSummaryInternal(conversationId, summary, compressedCount, extraMetadata);
+    }
+
+    public void saveCompressionSummary(String conversationId, String summary, int compressedCount,
+                                       Map<String, Object> extraMetadata) {
+        saveCompressionSummaryInternal(conversationId, summary, compressedCount, extraMetadata);
+    }
+
+    private Long saveCompressionSummaryInternal(String conversationId, String summary, int compressedCount,
+                                                Map<String, Object> extraMetadata) {
         MessageEntity entity = new MessageEntity();
         entity.setConversationId(conversationId);
         entity.setRole("system");
         entity.setContent(summary);
         entity.setStatus("completed");
-        entity.setMetadata("{\"type\":\"compression_summary\",\"compressedCount\":" + compressedCount + "}");
+
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("type", "compression_summary");
+        metadata.put("compressedCount", compressedCount);
+        if (extraMetadata != null) {
+            extraMetadata.forEach((key, value) -> {
+                if (value != null) {
+                    metadata.put(key, value);
+                }
+            });
+        }
+
+        try {
+            entity.setMetadata(objectMapper.writeValueAsString(metadata));
+        } catch (Exception e) {
+            log.warn("[Conversation] Failed to serialize compression metadata, falling back to minimal: {}",
+                    e.getMessage());
+            entity.setMetadata("{\"type\":\"compression_summary\",\"compressedCount\":" + compressedCount + "}");
+        }
+
         messageMapper.insert(entity);
-        log.info("[Conversation] Saved compression summary for conv={}, compressedCount={}", conversationId, compressedCount);
+
+        if (entity.getId() != null) {
+            metadata.put("summaryId", entity.getId());
+            try {
+                entity.setMetadata(objectMapper.writeValueAsString(metadata));
+                messageMapper.updateById(entity);
+            } catch (Exception e) {
+                log.warn("[Conversation] Failed to backfill summaryId on compression boundary: {}",
+                        e.getMessage());
+            }
+        }
+
+        log.info("[Conversation] Saved compression boundary conv={}, compressedCount={}, metadata={}",
+                conversationId, compressedCount, entity.getMetadata());
+        return entity.getId();
     }
 
     public List<MessageVO> listMessageViews(String conversationId) {
