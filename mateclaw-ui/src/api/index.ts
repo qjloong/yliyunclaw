@@ -96,6 +96,35 @@ export const templateApi = {
   syncDefaultFiles: (id: string) => http.post(`/templates/${id}/sync-default-files`),
 }
 
+// ==================== Teacher Rule Packs ====================
+export const teacherRulePackApi = {
+  list: () => http.get('/teacher/rule-packs'),
+  get: (id: string) => http.get(`/teacher/rule-packs/${encodeURIComponent(id)}`),
+  view: (id: string) => http.get(`/teacher/rule-packs/${encodeURIComponent(id)}/view`),
+  update: (id: string, data: any, scope: 'workspace' | 'global' = 'workspace') =>
+    http.put(`/teacher/rule-packs/${encodeURIComponent(id)}`, data, { params: { scope } }),
+  clearOverride: (id: string, scope: 'workspace' | 'global' = 'workspace') =>
+    http.delete(`/teacher/rule-packs/${encodeURIComponent(id)}`, { params: { scope } }),
+}
+
+export const teacherSkillApi = {
+  list: () => http.get('/teacher/skills'),
+  get: (id: string) => http.get(`/teacher/skills/${encodeURIComponent(id)}`),
+  bindings: () => http.get('/teacher/skills/bindings'),
+  updateBindings: (skillIds: string[]) => http.put('/teacher/skills/bindings', { skillIds }),
+  resetBindings: () => http.delete('/teacher/skills/bindings'),
+}
+
+export const teacherImprovementApi = {
+  list: () => http.get('/teacher/improvements'),
+  create: (harnessRunId: string, note = '') =>
+    http.post('/teacher/improvements', { harnessRunId, note }),
+  accept: (id: string, data: { note?: string; publish?: boolean; scope?: 'workspace' | 'global' }) =>
+    http.post(`/teacher/improvements/${encodeURIComponent(id)}/accept`, data),
+  reject: (id: string, note = '') =>
+    http.post(`/teacher/improvements/${encodeURIComponent(id)}/reject`, { note }),
+}
+
 // ==================== Chat ====================
 export const chatApi = {
   uploadFile: async (conversationId: string, file: File) => {
@@ -151,7 +180,7 @@ export const conversationApi = {
     http.delete(`/conversations/${conversationId}/messages`),
   rename: (conversationId: string, title: string) =>
     http.put(`/conversations/${conversationId}/title`, { title }),
-  exportTeacherPaper: (conversationId: string, data: { markdown: string; filename?: string; format?: 'docx'; outputPath?: string; pageSize?: string }) =>
+  exportTeacherPaper: (conversationId: string, data: { markdown: string; filename?: string; format?: 'docx'; outputPath?: string; pageSize?: string; mode?: 'questions' | 'full'; sectionKeys?: string[] }) =>
     http.post(`/conversations/${conversationId}/teacher-export`, data),
   updateWorkingDirectory: (conversationId: string, workingDirectory: string) =>
     http.put(`/conversations/${conversationId}/working-directory`, { workingDirectory }),
@@ -292,6 +321,7 @@ export const datasourceApi = {
 export const toolApi = {
   list: () => http.get('/tools'),
   listEnabled: () => http.get('/tools/enabled'),
+  listBindable: () => http.get('/tools/bindable'),
   get: (id: string | number) => http.get(`/tools/${id}`),
   create: (data: any) => http.post('/tools', data),
   update: (id: string | number, data: any) => http.put(`/tools/${id}`, data),

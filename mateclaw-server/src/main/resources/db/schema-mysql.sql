@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS mate_tool (
     mcp_endpoint  VARCHAR(256),
     params_schema TEXT,
     enabled       TINYINT(1)   NOT NULL DEFAULT 1,
+    bindable      TINYINT(1)   NOT NULL DEFAULT 1,
     builtin       TINYINT(1)   NOT NULL DEFAULT 0,
     workspace_id  BIGINT       NOT NULL DEFAULT 1,
     create_time   DATETIME     NOT NULL,

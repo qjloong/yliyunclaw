@@ -1,0 +1,27 @@
+{
+  "id": "teacher.rulepack.writing.v1",
+  "stage": "junior",
+  "subject": "chinese",
+  "module": "writing",
+  "name": "初中写作训练规则包 v1",
+  "version": "1.0.0",
+  "defaultQuestionMix": {
+    "topicReview": "20%",
+    "outlineDesign": "20%",
+    "materialSelection": "20%",
+    "fragmentWriting": "20%",
+    "revisionEvaluation": "20%"
+  },
+  "sourceRequirements": [
+    {
+      "id": "curriculum_standard",
+      "label": "课程标准",
+      "rule": "写作训练目标、评价维度和学段要求应依据绑定的最新初中语文课标。"
+    },
+    {
+      "id": "rubric",
+      "label": "评分标准",
+      "rule": "如用户要求校内或中考评分风格，应上传并绑定对应评分标准或范例。"
+    }
+  ]
+}

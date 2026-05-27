@@ -393,6 +393,12 @@
                   <li v-for="item in mockTaskCitedSources" :key="`cited-${item}`">{{ item }}</li>
                 </ul>
               </div>
+              <div v-if="mockTaskTeacherRuleSignals.length" class="mock-task-card__signal-group">
+                <div class="mock-task-card__signal-group-title">{{ $t('chat.mockTask.teacherRuleLabel') }}</div>
+                <ul class="mock-task-card__signal-list">
+                  <li v-for="item in mockTaskTeacherRuleSignals" :key="`teacher-rule-${item}`">{{ item }}</li>
+                </ul>
+              </div>
             </div>
             <div v-if="mockTaskFinalAnswerPreview" class="mock-task-card__preview">
               <div class="mock-task-card__preview-label">{{ $t('chat.mockTask.previewLabel') }}</div>
@@ -2132,6 +2138,24 @@ const mockTaskRetrievedSources = computed(() => {
   return Array.from(new Set(merged))
 })
 const mockTaskCitedSources = computed(() => toMockTaskStringArray(mockTaskSignals.value.citedSources))
+const mockTaskTeacherRuleSignals = computed(() => {
+  const signals = mockTaskSignals.value
+  const rows: string[] = []
+  const rulePackName = typeof signals.teacherRulePackName === 'string' ? signals.teacherRulePackName.trim() : ''
+  const rulePackId = typeof signals.teacherRulePackId === 'string' ? signals.teacherRulePackId.trim() : ''
+  if (rulePackName || rulePackId) {
+    rows.push(rulePackName && rulePackId ? `${rulePackName} (${rulePackId})` : rulePackName || rulePackId)
+  }
+  const questionTypes = toMockTaskStringArray(signals.teacherDetectedQuestionTypes)
+  if (questionTypes.length) {
+    rows.push(questionTypes.join('、'))
+  }
+  const ruleBlockers = toMockTaskStringArray(signals.teacherRulePackGateBlockers)
+  if (ruleBlockers.length) {
+    rows.push(...ruleBlockers.slice(0, 3))
+  }
+  return rows
+})
 const mockTaskDiffSummary = computed(() => {
   const signals = mockTaskSignals.value
   const diffFileCount = typeof signals.diffFileCount === 'number' ? signals.diffFileCount : 0
@@ -2153,7 +2177,8 @@ const mockTaskHasStructuredEvidence = computed(() =>
       mockTaskDiffSummary.value ||
       mockTaskDiffFiles.value.length ||
       mockTaskRetrievedSources.value.length ||
-      mockTaskCitedSources.value.length
+      mockTaskCitedSources.value.length ||
+      mockTaskTeacherRuleSignals.value.length
   )
 )
 const mockTaskFinalAnswerPreview = computed(() => {
@@ -2591,6 +2616,7 @@ function getAgentPreferredRuntimeMode(agent?: Agent | null): ConversationRuntime
 function isTeacherExamAssistantAgent(agent?: Agent | null): boolean {
   return agent?.templateId === 'builtin.teacher_exam_assistant'
     || agent?.profileId === 'teacher_exam_assistant_profile'
+    || agent?.capabilityPackId === 'capability.education.junior_chinese_exam'
     || agent?.capabilityPackId === 'capability.education.junior_classics_exam'
 }
 
@@ -4220,6 +4246,8 @@ async function selectConversation(conv: Conversation) {
           findings: pa.findingsJson ? JSON.parse(pa.findingsJson) : undefined,
           maxSeverity: pa.maxSeverity || undefined,
           summary: pa.summary || undefined,
+          projectPath: pa.projectPath || undefined,
+          approvalKey: pa.approvalKey || undefined,
         }
         const target = indexById.get(pa.pendingId)
         if (target) {

@@ -5,11 +5,11 @@
   "version": "1.0.0",
   "status": "published",
   "category": "education",
-  "domain": "junior_chinese_classics_exam",
+  "domain": "junior_chinese_exam",
   "visibility": "builtin",
   "ownerType": "system",
   "description": "An education domain agent for junior Chinese classics reading exams, grounded in selected knowledge bases and temporary session materials.",
-  "descriptionZh": "面向初中语文名著阅读教学与中考备考的出题助手，支持基于指定知识库和会话临时材料生成试题、答案、采分点与质量审核摘要。",
+  "descriptionZh": "面向初中语文教学与中考备考的出题助手，覆盖名著、文言文、现代文、古诗词、基础知识、写作等模块，支持基于指定知识库和会话临时材料生成试题、答案、采分点与来源依据。",
   "icon": "📚",
   "agentType": "plan_execute",
   "tags": "education,exam,teacher,knowledge,classic-reading",
@@ -55,8 +55,8 @@
   },
   "agentProfile": {
     "profileId": "teacher_exam_assistant_profile",
-    "displayName": "名师出题助手",
-    "role": "中考名著阅读命题专家系统",
+    "displayName": "初中语文命题助手",
+    "role": "初中语文命题专家系统",
     "language": "zh-CN",
     "tone": "专业、规范、清晰、贴近中考阅卷表达",
     "userExperience": {
@@ -67,10 +67,17 @@
     }
   },
   "capabilityPack": {
-    "packId": "capability.education.junior_classics_exam",
-    "name": "初中名著阅读出题能力包",
+    "packId": "capability.education.junior_chinese_exam",
+    "name": "初中语文出题能力包",
+    "defaultRulePackId": "teacher.rulepack.classic_reading.v2",
+    "defaultTeacherSkillIds": [
+      "teacher.skill.classic_exam_loop.v1",
+      "teacher.skill.exam_review.v1"
+    ],
     "capabilities": [
       "knowledge_based_question_generation",
+      "multi_module_rulepack_routing",
+      "curriculum_standard_grounding",
       "exam_point_planning",
       "difficulty_laddering",
       "answer_and_scoring_generation",
@@ -120,8 +127,12 @@
         "textEn": "Subjective questions should include reference answers and directly scorable rubrics by default."
       },
       {
-        "text": "结尾必须补充来源、重复、难度梯度和采分可操作性的质量审核。",
-        "textEn": "Always finish with a quality review covering sources, duplication, difficulty gradient, and scoring operability."
+        "text": "默认题型比例为填空10%、选择20%、简答15%、分析30%、探究25%，微写作只作附加。",
+        "textEn": "Default mix: fill blanks 10%, choices 20%, short answers 15%, analysis 30%, inquiry 25%; micro-writing is extra only."
+      },
+      {
+        "text": "材料题必须提供材料或来源；批注题必须限定角度；开放题必须给参考方向和采分点。",
+        "textEn": "Material-based, annotation, and open-ended questions must provide sources, directions, answers, and rubrics."
       }
     ]
   },

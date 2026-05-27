@@ -123,10 +123,132 @@ This is the single execution ledger for the Agent Harness work. `PROJECT_BINDING
 | Task | Status | Scope | Acceptance |
 | --- | --- | --- | --- |
 | 流程门控 | done | 仅在 Teacher Agent + 出题类任务 + plan 模式下强制“先方案、后确认、再出题”；普通问答、材料总结、使用说明、非 plan 一般对话不强制确认。 | `StateGraphPlanExecuteAgent` 已加入 Teacher workflow guard：首轮出题只返回命题方案并等待确认；等待确认期间非确认回复只更新方案；明确确认后才进入正式出题。2026-05-18 复查后补充“阅读题/选择题/填空题/简答题/探究题”等意图词，降低 plan 模式漏判。 |
-| 结构化结果展示 | done | Teacher 正式出题结果按“试题、参考答案、采分点、命题质量审核、来源依据”分块，试题优先，其他块折叠。 | `MessageBubble.vue` 已识别标准分块；试题/方案默认展开，其余折叠；每块可复制/保存；可导出仅试题版和完整版 Markdown/Word。2026-05-18 复查后分块解析扩展到 JSON、一级/多级 Markdown 标题、加粗标题、`试题内容`/`评分标准` 等常见标题，避免模型标题轻微变化时退回整段展示。 |
+| 结构化结果展示 | done | Teacher 正式出题结果按“试题、参考答案、采分点、来源依据”作为客户主交付区块展示；命题说明/出题说明和命题质量审核进入内部折叠区，需要时展开查看。 | `MessageBubble.vue` 已识别标准分块；试题默认展开，答案/采分点/来源折叠，命题说明/质量审核不进入主展示；每块可复制/保存；可导出仅试题版和完整版 Markdown/Word。2026-05-18 复查后分块解析扩展到 JSON、一级/多级 Markdown 标题、加粗标题、`试题内容`/`评分标准` 等常见标题，避免模型标题轻微变化时退回整段展示。2026-05-26 复查后，完整版导出排除命题说明和质量审核。 |
 | 资料目录与知识库路径 | done | Teacher 默认不盲目 shell 读取教学目录；优先复用工作区 ProjectInsight 的压缩资料索引并按需读取，必要时再做轻量筛选，超出工作区或受限时走审批或替代路径。 | Teacher plan 模式下检测到本地目录/教学资料请求时，先以用户指定目录为上下文边界；工作区首次进入时由 `ProjectInsightSummary.materialIndexHints` 生成压缩资料索引，并通过 `ContextRouterService` 注入后续会话上下文；后续同一工作区默认复用缓存索引，不再每轮重复 `list_directory` / `index_directory_materials`。只有用户明确刷新/同步、缓存缺失或需要具体子目录/文件列表时才重新扫描；工具层也为 `list_directory` / `index_directory_materials` 增加 30 分钟同参数缓存与 `refresh` 参数兜底，避免模型误调用时重复 walk 文件系统；受限时发起审批或引导改用知识库/会话材料，不进入 shell 猜文件名试错。 |
 | 导出 v2 | done | Teacher 结果必须支持导出 Word；未指定路径时默认落到当前项目绑定目录下的 `output/` 文件夹，同时保留浏览器/客户端下载能力。 | 当前支持 Markdown 分块保存、仅试题版/完整版 Word(docx) 导出；后端默认把 docx 写入当前会话项目目录下的 `output/`（自动创建），并返回临时下载链接，所以 Web 与桌面客户端都可直接触发下载。 |
 | Harness 验收 | done | 将 teacher 闭环行为纳入 mock acceptance / summary scoring。 | Teacher mock acceptance 现在识别“待确认方案”中间态、正式出题结构化分块、来源 grounding、答案/采分点/质量审核 gate；待确认态不会被正式试题 gate 误判为失败。 |
+
+## Teacher Agent 教学出题闭环专项 v2
+
+Status: `in_progress`
+Owner priority: P1 Built-in Agent application cases / Phase 6 Agent profiles and domain packs
+Ledger sync date: 2026-05-27
+Implementation record: `docs/teacher-agent/teacher-agent-v2-implementation-record.md`
+Sync rule: this ledger remains the single source of direction; the implementation record tracks per-stage execution details, touched files, tests, and acceptance results, and must be updated together with this section after each stage.
+
+### Teacher Agent v2.5 规则包、教材课标与学段边界
+
+Status: `done`
+
+| Stage | Status | Goal | Modules | Files | Acceptance | Test result | Open issues |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| v2.5-1 六类初中语文 RulePack | done | 在名著、文言文、现代文基础上补齐古诗词、基础知识、写作，并为 RulePack 增加学段、学科、资料要求字段。 | teacher, harness, templates, ui | `TeacherRulePack`; `TeacherRulePackService`; `TeacherIntentService`; `TeacherSkillDefinitionService`; `TeacherAcceptanceService`; `StateGraphPlanExecuteAgent`; `Agents.vue`; `types/index.ts`; `teacher-exam-assistant.json`; `teacher-rules/*` | 名著、文言文、现代文、古诗词、基础知识、写作能分别匹配独立规则包；小学、高中和其他学科不混用初中语文规则。 | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；6 个 `teacher-rules/*.json` 与 `teacher-exam-assistant.json` `ConvertFrom-Json` passed；Teacher service targeted `javac -proc:none` passed；`git diff --check` passed。 | 规则包资源 JSON 先作为文档源，后续可扩展为完整导入源。 |
+| v2.5-2 教材课标与知识库接入边界 | done | 明确知识库是教材/课标/稿件依据来源，RulePack 是硬规则来源；缺少最新教材/课标时必须提示补充，不能假称已按最新资料生成。 | teacher, wiki, context-router | `TeacherRulePackService`; `StateGraphPlanExecuteAgent`; `RawMaterialPanel.vue`; `Agents.vue` | 绑定知识库时优先使用资料来源；未绑定但用户要求最新教材/课标时，方案和正式出题都必须提示导入/绑定或补充材料。 | `vue-tsc --noEmit` passed；JSON validation passed。 | 知识库原始材料专用分类字段可在后续迁移中落库；本轮先通过上传标题类型前缀、RulePack sourceRequirements 和 UI 规则配置承接。 |
+| v2.5-3 RulePack 调整体验 | done | 复用“工作区覆盖 > 全局覆盖 > 内置”机制，前端规则详情支持可视化调整学段、学科、模块、题型比例、题型规则、硬性规则、资料要求，并保留 JSON 高级编辑。 | ui, teacher api | `Agents.vue`; `TeacherRulePackController`; `TeacherRulePackService`; `types/index.ts` | 管理员可保存工作区/全局覆盖；普通用户只读；新会话使用有效覆盖规则。 | `vue-tsc --noEmit` passed；Teacher service targeted `javac -proc:none` passed。 | 更细的 workspace owner/admin 权限区分沿用后续权限收口。 |
+| T2.5-4 生成产物预览下载 | done | HTML 报表、分析文件、导出文件可在聊天和 Project 面板打开或下载；会话中不内联渲染 HTML 源码。Web 端聊天点击 HTML 报表时在新页签打开预览，Project 面板点击按下载处理且不引发会话跳转；App 端保留本地打开/定位。 | generated files, chat ui, project panel | `GeneratedFileController`; `MessageBubble.vue`; `ProjectChangesPanel.vue`; `useMarkdownRenderer.ts`; `types/index.ts` | `app/output/report_classification.html` 这类产物可从聊天区文件入口新页预览（HTML）或下载（非 HTML）；右侧 Project 面板支持生成文件下载且不跳会话；会话正文不再把生成 HTML 源码作为正文渲染。 | `Push-Location "d:\project\ai\mateclaw-dev\mateclaw-ui"; .\node_modules\.bin\vue-tsc.cmd --noEmit; Pop-Location` passed。 | Web 端对宿主机本地路径的直接下载仍依赖后续文件代理或桌面能力；当前优先支持生成文件缓存链接下载和 HTML 预览新页打开。 |
+| T2.5-5 组卷编排 | done | 支持“一套卷子”：主 Agent 拆分模块，各模块生成结构化题块，主 Agent 合并卷面、答案、采分点和来源。 | teacher, plan agent, rulepack router | `TeacherIntentService`; `StateGraphPlanExecuteAgent`; `TeacherRulePackService` | “组卷/一套卷/综合卷”进入 `paper_assembly`；主 Agent 注入六类 RulePack；结果必须是一份完整试卷，不是多个模块散答；暂不做复杂 subagent UI。 | 代码路径复核通过：`paper_assembly` 意图识别、六类 RulePack 注入与组卷约束仍生效；本轮前端类型检查 `vue-tsc --noEmit` passed。 | 后续可加专门组卷 UI、分值配置器和 subagent 运行可视化。 |
+| T2.5-6 HTML 报表模板与高级工具曝光 | done | 保持系统 HTML 导出为默认通路，增强默认模板质感；将 3 个 HTML 导出工具产品化为可手动绑定的高级工具，补齐中文名称/描述；不把“纯模型直写 HTML”设为默认路径。 | html export, tool catalog, agent config, docs | `HtmlExportService`; `messages*.properties`; `db/migration/*/V107__register_html_render_tools.sql`; `Tools.vue`; `zh-CN.ts`; `en-US.ts`; `docs/teacher-agent/iusses.md` | 默认生成的 HTML 报表具备更稳定、更现代的系统模板；Agent 配置页可手动绑定 3 个中文化 HTML 工具；后台工具页展示优先显示 `displayName`；默认仍以系统工具导出为主，仅在用户明确要求时才走模型直写 HTML。 | `Push-Location "d:\project\ai\mateclaw-dev\mateclaw-ui"; .\node_modules\.bin\vue-tsc.cmd --noEmit; Pop-Location` passed；`git -C "d:\project\ai\mateclaw-dev" diff --check` passed（仅现有 CRLF 警告）。 | 后续可继续按业务线增加行业模板、企业主题皮肤和固定报表版式，但不影响当前默认稳定通路。 |
+
+### Teacher Agent v2-2 回归优化计划
+
+Status: `pending`
+
+| Stage | Status | Goal | Modules | Planned files | Acceptance | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| T2-2-1 模板与实例同步边界 | pending | 明确“模板更新不自动覆盖已创建实例”，提供 Teacher 实例一键同步/修复入口；新模板默认生效，旧实例可选择同步元数据、首页引导、默认规则和默认 Skill。 | templates, agents, ui | `TemplateService`; `AgentService` / agent config service; `Agents.vue`; `teacher-exam-assistant.json`; docs | 已创建 Teacher 实例无需删除重建即可同步到“初中语文命题助手”；同步前展示影响范围；用户自定义字段不被静默覆盖。 | 先做 Teacher 专用同步，不对所有系统模板做全局覆盖。 |
+| T2-2-2 Skill 与 RulePack 可见性隔离 | pending | 修复“所有系统模板都显示 Teacher Skill/名著闭环”的错误；RulePack/Teacher Skill 只在 Teacher Agent 或具备初中语文能力包的实例中显示。 | skill, rulepack, template ui | `TeacherSkillController`; `TeacherRulePackController`; `Agents.vue`; `types/index.ts` | Code Agent、通用助手和用户普通 Agent 不显示 Teacher Skill 流程；Teacher 实例显示自己的规则包和 Skill；普通用户只读。 | 规则配置入口推荐放在 Agent 实例配置页，模板页仅作为内置基线。 |
+| T2-2-3 Teacher 自优化草案独立化 | pending | 将自优化草案从模板配置中移到 Teacher 运营/诊断入口，明确草案来源、影响范围和发布流程。 | improvement drafts, admin ui | `TeacherImprovementDraftService`; `TeacherImprovementController`; `Agents.vue` or new teacher panel | 草案按 workspace / agent / run 来源生成；未审核不生效；发布时可选择工作区覆盖或全局覆盖；模板页不默认暴露给普通配置流程。 | 自优化不是每轮自动改规则，只生成可审核草案。 |
+| T2-2-4 Agent 列表删除区整理 | pending | 默认列表不再直接展示已删除 Agent；已删除只通过筛选条件查看。 | agents ui | `Agents.vue` | 默认列表只显示正常 Agent；切换“已删除”筛选才显示删除项；恢复/永久删除操作保持可用。 | 纯 UI 交互收口。 |
+| T2-2-5 Teacher 引导式槽位补全与连续会话衔接 | pending | 提升首用流畅性：先基于内置规则给默认方案，再逐步追问缺失关键项；用户回答“需要/确认/按这个来”时能承接上一轮建议，不再重新报材料不足。 | teacher intent, plan agent, chat home | `TeacherIntentService`; `StateGraphPlanExecuteAgent`; `teacher-exam-assistant.json`; `MessageBubble.vue`; `ChatConsole.vue` | “七年级上册”后 Agent 给出推荐默认方案；用户回答“需要”时按上一轮建议进入确认/生成，而不是要求重新补充全部字段；缺知识库时可用内置规则生成基础题，但不得假称引用最新教材/课标。 | 新增槽位：年级册别、模块、书目/文本、使用场景、题量、题型/分值、资料来源。 |
+| T2-2-6 首页引导与默认快捷入口重写 | pending | 根据“初中语文命题助手”定位重写默认首页副标题和 4 个快捷入口，突出快速开始、按教材/名著出题、上传材料命题、组卷。 | chat ui, template seed | `teacher-exam-assistant.json`; `ChatConsole.vue`; agent home config | 新建 Teacher 实例首页能引导用户一步步补足信息；自定义 Agent 未配置时仍用通用默认入口。 | 与 T2-2-1 的实例同步入口配合，旧实例可同步新首页。 |
+| T2-2-7 v2-2 回归验收 | pending | 把模板同步、Skill 隔离、槽位补全、删除列表、首页引导加入专项验收。 | harness, docs | `HarnessRunService` / teacher acceptance service; docs | 至少覆盖：旧实例同步、Code Agent 不显示 Teacher Skill、“需要”承接上一轮、默认列表不展示已删除、无 KB 时按内置规则生成但标注资料边界。 | 完成后 v2-2 状态可转 done。 |
+
+### Requirement Sources
+
+| Source | Scope | Status |
+| --- | --- | --- |
+| `docs/teacher-agent/iusses.md` | Teacher 内测核心问题索引，覆盖名著范围、上下文串扰、答案采分点、材料题、题型比例、UI 展示等问题。 | synced |
+| `docs/teacher-agent/名著题内测.docx` | 名著出题 15 个详细问题与验收风险。 | synced |
+| `docs/teacher-agent/初中名著出题要求.docx` | 名著阅读题型、范围、分值、材料和题干规则。 | synced |
+| `docs/teacher-agent/初中文言文出题要求.docx` | 文言文来源、题型、限制、考点规则。 | synced |
+| `docs/teacher-agent/初中现代文出题要求.docx` | 现代文阅读来源、题型、范围、限制规则。 | synced |
+
+### Current Code Entrypoints
+
+| Area | Current entrypoint | Current state | v2 action |
+| --- | --- | --- | --- |
+| Built-in Teacher template | `mateclaw-server/src/main/resources/templates/teacher-exam-assistant.json` | 已声明 Teacher 模板、默认规则、知识库 seed、工具、mock tasks、Word 输出格式。 | 拆出可配置规则包，补齐名著/文言文/现代文细化规则和 UI 可调字段，避免只靠 system prompt。 |
+| Plan workflow gate | `mateclaw-server/src/main/java/vip/mate/agent/graph/plan/StateGraphPlanExecuteAgent.java` | 已有 Teacher + plan 模式两阶段短路：待确认方案、确认后正式出题。 | 增强任务类型识别、确认态持久化、上下文隔离和“你是谁”等 Agent 身份回答注入。 |
+| Structured result scoring | `mateclaw-server/src/main/java/vip/mate/harness/service/HarnessRunService.java` | 已有 Teacher 分块、来源、答案、采分点、质量审核 heuristic gate。 | 升级为规则包驱动评分，加入名著 15 点通用问题、题型比例、分值、材料题、主观题答案硬门控。 |
+| Export API | `mateclaw-server/src/main/java/vip/mate/workspace/conversation/controller/ConversationController.java` | 已提供 `/teacher-export` Word 导出接口。 | 复核导出内容来自结构化分块，不从长文本临时猜测；保留仅试题版/完整版。 |
+| Frontend result renderer | `mateclaw-ui/src/components/chat/MessageBubble.vue` | 已解析 `questions/answers/scoringRubric/qualityReview/sources`，支持分块复制、Markdown 下载、Word 导出。 | 固化“试题主展示，答案/采分点/来源折叠；命题说明/质量审核默认不作为主结果”的 v2 UI。 |
+| Approval input bar | `mateclaw-ui/src/components/chat/ChatInput.vue` | 已有待审批条、一次/会话/项目范围选择、允许/拒绝。 | 参考 Codex 样式增强审批卡：显示命令/工具、工作区、风险、允许范围菜单和自动批准配置入口。 |
+| Approval restore and command handling | `mateclaw-ui/src/views/ChatConsole.vue` | 已恢复 pending approval，并处理 `/approve` / `/deny`。 | 将审批交互和 Teacher 资料读取替代路径联动，避免每轮盲目遍历目录。 |
+| Teacher chat guide | `mateclaw-ui/src/views/ChatConsole.vue` | 已有 Teacher guide card 和 starter prompts。 | 加入当前 Agent 身份、规则包、绑定知识库/材料状态，让“你是谁”按 Agent 上下文回答。 |
+
+### RulePack / Skill / Self-Improve Boundary
+
+Teacher v2 adopts a controlled self-improvement model inspired by Hermes-style learning loops, but it does not allow the agent to directly mutate production rules.
+
+| Layer | Responsibility | Teacher v2 rule |
+| --- | --- | --- |
+| RulePack | Hard business rules: module scope, question mix, score ranges, material requirements, required answer/rubric fields, forbidden patterns, acceptance checks. | 名著、文言文、现代文等类型规则必须以 RulePack 为主配置，prompt 只引用和解释规则。 |
+| Agent prompt | Role, interaction style, two-phase plan gate, and instructions for selecting/applying RulePacks. | Prompt 不作为唯一规则源，避免规则散落和不可验收。 |
+| Knowledge/Wiki | Teaching materials, source texts, examples, curriculum documents, previous papers. | 只承载出题依据，不承载系统级硬规则。 |
+| Memory | User/workspace preferences such as grade, textbook version, default difficulty, common output style. | 只承载个性化偏好，不覆盖管理员发布的 RulePack。 |
+| Teacher Skill | Executable workflow unit: generate, review, revise, export, or diagnose a paper with selected RulePack and materials. | Skill 负责“怎么执行”，RulePack 负责“按什么规则执行”。 |
+| Self-Improve Loop | Summarize Harness failures, extract reusable lessons, propose RulePack/Skill/acceptance changes. | 只能生成草案和建议，必须由 admin/workspace owner 审核发布后才影响新会话。 |
+
+### Priority Implementation Checklist
+
+| Priority | Task | Status | Concrete landing | Acceptance |
+| --- | --- | --- | --- | --- |
+| P0 | v2 ledger and acceptance matrix | done | 将本专项写入唯一台账，冻结 v1 已完成项，明确 v2 以规则包、状态机和 UI 验收为主。 | 本节成为 Teacher v2 后续推进源；专项实施记录已落到 `docs/teacher-agent/teacher-agent-v2-implementation-record.md`，后续每阶段同步更新总台账和实施记录。 |
+| P0 | Teacher turn context and identity grounding | done | 增加 Teacher 会话上下文对象：agent/template/profile、业务模块、题型、知识库绑定、临时材料、当前 plan 状态。普通问答和“你是谁”优先读取当前 Agent 身份与能力，而不是通用模型身份。 | 新增 `TeacherTurnContext` / `TeacherIntentService`，并接入 `StateGraphPlanExecuteAgent`；Teacher + plan 模式下“你是谁/你能做什么/如何使用”走 direct answer，不再进入命题方案待确认；出题意图、确认意图、本地目录范围识别已统一收口。验证：Teacher intent smoke test passed；相关 Java 文件用本地 JDK + `.m2` classpath 联合编译通过。 |
+| P0 | Plan confirmation state hardening | done | 将“待确认/修改方案/正式生成”从文本 marker 升级为消息 metadata 或 run metadata；继续保留 marker 作为兼容 fallback。 | `teacher_workflow` SSE 事件现在写入持久化 message metadata；待确认判断优先读取最近消息实体 metadata，文本 marker 仅兼容老消息。验证：`StateGraphPlanExecuteAgent`、`ChatController` 和 Teacher context 服务用本地 JDK + `.m2` classpath 联合编译通过。 |
+| P0 | Structured Teacher result v2 contract | done | 定义 `TeacherExamResultV2`：`paper/questions/answers/scoringRubric/sources/internalReview/exportOptions`；命题说明和质量审核默认进入折叠/内部审核区。 | 新增 `TeacherExamResultV2` 后端契约；正式生成 prompt 优先要求 `teacher_exam_result_v2` JSON，Markdown 标题分块作为 fallback；前端 `MessageBubble.vue` 可将结构化对象数组渲染成试题、答案、采分点、来源和质量审核分块。验证：相关 Java 文件 targeted compile passed；`vue-tsc --noEmit` passed；`git diff --check` passed。 |
+| P1 | 名著规则包 v2 | done | 把名著 15 点问题转成规则：教材范围、题型比例、分值、材料题必须给材料、主观题必须有答案采分点、微写作仅作附加、填空/表格控制书写量、辩论题答案不可省略、批注题方向明确、避免超纲术语。 | 新增 `teacher-rules/classic-reading-v2.json`、`TeacherRulePack`、`QuestionTypeRule`、`TeacherRulePackService`；Teacher 模板声明默认规则包；正式出题 prompt 注入名著规则摘要；Harness 增加题型比例、材料题、开放题和规则包信号。验证：规则包 JSON 和模板 JSON 均可解析；相关 Java 文件 targeted compile passed；`vue-tsc --noEmit` passed。 |
+| P1 | RulePack + Teacher Skill foundation | done | 后端增加规则包/题型配置模型；前端在 Agent 配置中支持查看和调整 Teacher 规则；新增 Teacher Skill 边界，命题、审核、导出和复盘以 Skill 形式承载执行流程。当前已新增 Teacher RulePack API、Teacher Skill API、Teacher Improvement Draft API，并在智能体模板选择页展示内置 Teacher 规则包摘要/完整详情，以及模板绑定的命题闭环和质量审核 Skill；管理员可通过可视化表单或 JSON 保存工作区级 RulePack 覆盖，也可保存全局覆盖和调整默认 Teacher Skill 绑定，三者都持久化到系统设置，普通用户只读。正式出题 prompt 会按“工作区覆盖 > 全局覆盖 > 内置规则包”的优先级注入有效 RulePack，并注入当前激活 Skill 流程。自优化草案可从 Harness run 生成，默认 pending，不会自动发布；管理员接受并选择发布后才写入工作区或全局 RulePack 覆盖。 | 管理员可调整题型比例、默认分值、允许题型、范围约束；普通用户只使用管理员发布配置。Teacher Skill 能声明适用 RulePack、输入/输出和验收目标。Teacher 模板能看到规则包名称、版本、题型规则、硬规则、验收项和默认执行 Skill；管理员能保存/清除工作区 RulePack 覆盖、全局 RulePack 覆盖和 Skill 绑定；自优化草案可生成、接受、拒绝，且未发布前不影响新会话。验证：`vue-tsc --noEmit` passed；Teacher RulePack/Skill/Improvement/Plan Agent 相关 Java 目标类用本地 JBR `javac` + `.m2` classpath 编译通过。 |
+| P1 | Teacher context routing without repeated scans | done | Teacher 优先使用已绑定 KB、会话附件摘要、工作区资料索引缓存；只有用户主动刷新/导入/指定新目录时才触发目录扫描。当前已补强 `list_directory` / `index_directory_materials` 的 cache policy、cache hit、next action；Teacher plan/confirmed prompt 明确要求复用 `<context-router>` 的缓存索引，工具返回 `stopRepeatingTraversal` 后停止重扫同一大目录；Harness summary 增加目录遍历、资料索引和缓存命中信号。 | 连续对话不应每轮调用 `List Directory` 遍历本地文件；目录工具命中缓存后模型应读取候选文件或提示知识库/审批替代路径；资料缺失时给出导入知识库/审批/替代路径提示。验证：相关 Java 文件 targeted compile passed；`git diff --check` passed。 |
+| P2 | 文言文规则包 | done | 根据 `初中文言文出题要求.docx` 建立来源、题型、考点、分值、禁用项和材料呈现规则。已新增 `teacher.rulepack.classical_chinese.v1`，覆盖文言字词、句子翻译、断句停顿、内容理解、主旨情感、对比迁移；运行时可按文言文意图选择该规则包，待确认方案会写入模块标记，确认轮可恢复规则包。 | 文言文出题不套用名著规则；题目、答案、采分点和材料来源符合专项规则。验证：新增 JSON 逐个 `ConvertFrom-Json` 通过；Teacher RulePack/Intent/Plan Agent 相关 Java 目标类用本地 JBR `javac` + `.m2` classpath 编译通过。 |
+| P2 | 现代文规则包 | done | 根据 `初中现代文出题要求.docx` 建立文本来源、题型、阅读材料、答案采分、禁用项规则。已新增 `teacher.rulepack.modern_reading.v1`，覆盖信息提取、内容概括、语言赏析、结构作用、主旨情感、拓展任务；规则要求先识别文体并确保答案源于文本，不默认复用课内课文。 | 现代文出题不套用名著规则；能围绕材料出题并给出可判分答案。验证：新增 JSON 逐个 `ConvertFrom-Json` 通过；`vue-tsc --noEmit` 通过。 |
+| P2 | Approval UX upgrade | done | 参考 Codex 审批卡，前端显示工具/命令、工作区、风险原因、Allow 下拉范围、Skip；后端审批 hydration 补充 `projectPath`、`workspaceBasePath`、`approvalKey`，审批 scope 继续复用现有机制。自动审批配置入口保留为后续策略页增强，不阻塞当前 Teacher 资料读取审批闭环。 | 用户清楚知道批准什么、批准到什么范围；拒绝后能看到替代路径。验证：`vue-tsc --noEmit` passed；ApprovalService、ChatController targeted `javac` passed。 |
+| P3 | Harness scoring v2 | done | 将 Teacher v2 规则接入 mock acceptance/scoring：新增 `TeacherAcceptanceService`，从 RulePack 识别业务模块、题型规则、分值标签、材料/来源要求、答案采分、开放题方向、文言翻译采分、现代文来源真实性和目录扫描控制；`HarnessRunService` 合并规则包 scoring signals、score adjustment 和 gate blockers；Chat 样例任务详情展示 Teacher 规则包证据。导出内容差异校验单独保留在 Export regression hardening。 | Teacher mock 任务从 heuristic 变成规则驱动验收；失败时指出具体规则项。验证：`vue-tsc --noEmit` passed；TeacherAcceptanceService / HarnessRunService targeted `javac` passed。 |
+| P3 | Teacher self-improve draft loop | done | 借鉴 Hermes-style learning loop：从 Harness 失败、用户修正、导出失败和人工反馈中总结可复用经验，生成 RulePack patch、Teacher Skill patch 或 acceptance case 草案。当前已支持基于 Harness run 生成自优化草案，自动归因到 `rule_pack`、`teacher_skill`、`knowledge_context` 或 `acceptance_case`，并展示风险、主要原因、建议动作、规则补丁、Skill 步骤草案和验收用例草案；管理员可接受/拒绝，发布后只让 RulePack 覆盖生效，Skill patch 和 acceptance case 保持草案态。 | 系统能生成“建议修改项”和“草案 diff/JSON”，但不会自动发布；管理员或 workspace owner 审核通过后才影响新会话。验证：`vue-tsc --noEmit` passed；TeacherImprovementDraftService / Controller targeted `javac` passed。 |
+| P3 | Export regression hardening | done | 复核 Word 导出从 `TeacherExamResultV2` 结构化分块生成；添加仅试题版/完整版内容差异验证。前端仅试题版只导出 `questions` 区块，不再回退导出命题方案；完整版必须包含试题、参考答案、采分点、来源依据，但不包含命题说明/出题说明和命题质量审核；后端 `/teacher-export` 根据 `mode`、`sectionKeys` 和 Markdown 标题做二次校验，阻断无结构化内容、完整版缺区块、仅试题版混入答案/采分点/来源/审核。 | Word 导出和页面展示一致；仅试题版不包含答案；完整版包含答案、采分点、来源，不包含命题说明和质量审核。验证：`vue-tsc --noEmit` passed；ConversationController / DocxExportService targeted `javac` passed。 |
+| P3 | Teacher v2 regression fixes | done | 修复 Teacher v2 内测发现的回归：工具审批上下文按 requester username 回查账号角色，避免 admin 被误判为普通用户；Teacher 分块展示在流式生成和审批等待期间保持已生成区块，不再被更少区块或审批中间态覆盖，并显示“正在生成参考答案/采分点/来源”等当前阶段提示；2026-05-26 追加修复分块来源选择，避免优先读取 plan stepResults 的半成品导致试题/答案只显示一部分；放宽“命题质量审核”等标题变体解析；过滤流式 chunk 中 promptTokens=0、completionTokens=0 的空 usage debug 日志，usage null 降到 TRACE。 | admin 不再因为 requesterId 非数字而触发“普通用户敏感工具默认需审批”；流式生成中展开/收起答案不会导致已生成试题/答案丢失；最终展示优先选择区块更完整、内容更长的候选结果，质量审核不再因标题变体丢失；空 usage chunk 不再刷 DEBUG 日志。验证：`vue-tsc --noEmit` passed；`git diff --check` passed；ToolExecutionExecutor / ToolPolicyResolver targeted `javac` passed；当前环境无 `mvn`，NodeStreamingChatHelper 单文件 `javac` 受既有 `AssistantMessage.builder()` classpath 解析问题阻断，非本次修改行。 |
+| P3 | Approval denial fallback and admin role propagation | done | 2026-05-26 追加修复 Teacher plan 模式审批回归：Plan `StepExecutionNode` 正常工具执行路径会把 requesterId 传空，导致 ToolExecutionExecutor 虽已支持用户名查 admin，但仍拿不到当前用户；现在执行器入口统一以 `ChatOrigin.requesterId` 兜底，并兼容 `ROLE_ADMIN` / `global_admin` 角色命名。拒绝 `recall_structured` 等可选工具后，不再只写入“用户拒绝执行工具”并结束，而是在“不再调用该工具”的约束下继续生成基于现有上下文的替代回答。 | admin 在 Teacher plan 模式下不应再因为 requesterId 空值被判为普通用户；用户拒绝记忆检索后，Agent 应继续回答文言文/现代文/名著出题请求，并说明未使用该工具或给出替代路径。验证：ToolExecutionExecutor / ToolPolicyResolver / ChatController targeted `javac` passed；`git diff --check` passed；Teacher 手工回归待测试环境复测。 |
+| P3 | Teacher module display parity | done | 2026-05-27 追加加固：文言文、现代文、名著正式出题统一使用 Teacher v2 交付协议，不允许各模块输出不同 UI 格式。后端确认出题 prompt 明确所有业务模块都必须输出 `teacher_exam_result_v2` 或固定 Markdown 分块；文言文/现代文原文材料放入 `questions` 区块，不另起非标准主区块。前端分块解析补充 `文言文试题`、`现代文试题`、`试题与材料` 等标题别名。 | 文言文试题应和名著一样按“试题/参考答案/采分点/来源依据”展示，命题说明/质量审核在内部折叠区；各块可复制、保存和导出 Word。验证：`vue-tsc --noEmit` passed；StateGraphPlanExecuteAgent targeted `javac` passed；Teacher 手工回归待测试环境复测。 |
+| P4 | Later education modules | deferred | 基础知识、古诗词、协作、组卷等模块等待规则输入后按同一 RulePack 结构扩展。 | 后续新增模块不会重复 Teacher v1 的 prompt-only 问题。 |
+
+### 名著 15 点验收矩阵
+
+| # | Risk | v2 rule |
+| --- | --- | --- |
+| 1 | 名著范围/教材版本错误 | 规则包声明版本范围，超范围必须提示确认或要求补充材料。 |
+| 2 | 连续会话上下文串扰 | 每次出题生成独立 `TeacherTurnContext`，仅继承用户明确保留的约束。 |
+| 3 | 主观题缺少参考答案 | 主观题 `answers` 必填，缺失即 gate fail。 |
+| 4 | 材料题缺少原文/材料 | 材料题必须包含材料或来源引用；没有材料时先请求补充。 |
+| 5 | 题型比例失衡 | 默认比例：填空 10%、选择 20%、简答 15%、分析 30%、探究 25%；微写作只作附加。 |
+| 6 | 分值不符合阅卷习惯 | 填空/表格每空 1-2 分，选择 2 分，简答 3-4 分，分析/探究 4-8 分。 |
+| 7 | 选择题形式单一 | 支持排序、匹配、比较、辨析、情节理解等多种选择题设问。 |
+| 8 | 微写作偏作文训练 | 微写作只考名著理解和阅读体验，不扩大成写作能力考查。 |
+| 9 | 填空/表格书写量过大 | 控制空格数和每空字数，必须有示例或明确作答格式。 |
+| 10 | 辩论/开放题缺答案 | 必须给参考方向和采分点；教材有答案点时优先采用。 |
+| 11 | 批注题方向不明确 | 必须指定批注角度，如人物、情节、语言、主题、写法。 |
+| 12 | 超纲术语/学术化 | 禁止默认使用超纲术语；如必须使用需解释并降阶表达。 |
+| 13 | UI 主结果混入命题说明 | 主结果优先展示试题；命题说明/质量审核折叠或内部化。 |
+| 14 | 插图问题 | 本轮不默认生成插图；涉及插图时要求用户上传或确认素材来源。 |
+| 15 | 其他模块缺失 | 文言文、现代文按独立 RulePack 扩展，不混用名著规则。 |
+
+### Confirmation Gate
+
+Before implementing feature code for v2, confirm this staged order:
+
+1. P0 context/state/structured contract first.
+2. P1 名著规则包、上下文扫描优化、RulePack + Teacher Skill foundation second.
+3. P2 文言文/现代文规则包和审批 UX third.
+4. P3 Harness scoring、self-improve draft loop、export regression fourth.
 
 ## P2 Attachment and Large Context Backlog
 

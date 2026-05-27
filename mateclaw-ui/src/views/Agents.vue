@@ -156,6 +156,121 @@
                 <div class="template-tags">
                   <span v-for="tag in templateTags(tpl)" :key="tag" class="tag-chip">{{ tag }}</span>
                 </div>
+                <div v-if="templateRulePack(tpl)" class="template-rule-pack">
+                  <div class="template-rule-pack__head">
+                    <span class="template-rule-pack__label">规则包</span>
+                    <strong>{{ templateRulePack(tpl)?.name }}</strong>
+                    <span>v{{ templateRulePack(tpl)?.version }}</span>
+                    <button class="template-rule-pack__detail" type="button" @click.stop="openRulePackDetail(templateRulePack(tpl))">
+                      查看规则
+                    </button>
+                  </div>
+                  <div class="template-rule-pack__rules">
+                    <span
+                      v-for="rule in templateRulePack(tpl)?.questionTypeRules?.slice(0, 4)"
+                      :key="rule.type"
+                    >
+                      {{ rule.displayName }} · {{ rule.defaultScore }}
+                    </span>
+                  </div>
+                </div>
+                <div v-if="isTeacherTemplate(tpl) && teacherRulePackList.length" class="template-rule-pack">
+                  <div class="template-rule-pack__head">
+                    <span class="template-rule-pack__label">初中语文模块</span>
+                    <strong>{{ teacherRulePackList.length }} 类规则包</strong>
+                  </div>
+                  <div class="template-rule-pack__rules">
+                    <button
+                      v-for="pack in teacherRulePackList"
+                      :key="pack.id"
+                      class="template-skill-chip"
+                      type="button"
+                      @click.stop="openRulePackDetail(pack)"
+                    >
+                      {{ pack.name }}
+                    </button>
+                  </div>
+                </div>
+                <div v-if="templateTeacherSkills(tpl).length" class="template-rule-pack template-teacher-skills">
+                  <div class="template-rule-pack__head">
+                    <span class="template-rule-pack__label">执行 Skill</span>
+                    <strong>{{ templateTeacherSkills(tpl).length }} 个流程</strong>
+                    <span v-if="teacherSkillBindingView?.overridden" class="rule-pack-mini-state">管理员覆盖</span>
+                  </div>
+                  <div class="template-rule-pack__rules">
+                    <button
+                      v-for="skill in templateTeacherSkills(tpl)"
+                      :key="skill.id"
+                      class="template-skill-chip"
+                      type="button"
+                      @click.stop="openTeacherSkillDetail(skill)"
+                    >
+                      {{ skill.name }}
+                    </button>
+                  </div>
+                  <div v-if="isAdmin" class="teacher-skill-binding-editor" @click.stop>
+                    <label v-for="skill in Object.values(teacherSkillMap)" :key="skill.id" class="teacher-skill-binding-option">
+                      <input v-model="selectedTeacherSkillIds" type="checkbox" :value="skill.id" />
+                      <span>{{ skill.name }}</span>
+                    </label>
+                    <div class="teacher-skill-binding-actions">
+                      <button class="template-sync-btn" type="button" :disabled="savingTeacherSkillBindings || selectedTeacherSkillIds.length === 0" @click.stop="saveTeacherSkillBindings">
+                        保存 Skill 绑定
+                      </button>
+                      <button class="template-sync-btn" type="button" :disabled="savingTeacherSkillBindings || !teacherSkillBindingView?.overridden" @click.stop="resetTeacherSkillBindings">
+                        恢复默认
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="isTeacherTemplate(tpl) && isAdmin" class="template-rule-pack teacher-improvement-panel" @click.stop>
+                  <div class="template-rule-pack__head">
+                    <span class="template-rule-pack__label">自优化草案</span>
+                    <strong>{{ pendingTeacherImprovementCount }} 条待审核</strong>
+                    <button class="template-rule-pack__detail" type="button" @click.stop="loadTeacherImprovementDrafts">
+                      刷新
+                    </button>
+                  </div>
+                  <div class="teacher-improvement-actions">
+                    <input
+                      v-model="improvementHarnessRunId"
+                      class="teacher-improvement-input"
+                      placeholder="Harness Run ID"
+                    />
+                    <button
+                      class="template-sync-btn"
+                      type="button"
+                      :disabled="savingTeacherImprovement || !improvementHarnessRunId"
+                      @click.stop="createTeacherImprovementDraft"
+                    >
+                      生成草案
+                    </button>
+                  </div>
+                  <div v-if="teacherImprovementDrafts.length" class="teacher-improvement-list">
+                    <article v-for="draft in teacherImprovementDrafts.slice(0, 3)" :key="draft.id" class="teacher-improvement-item">
+                      <div>
+                        <strong>{{ draft.title }}</strong>
+                        <span>{{ teacherImprovementStatusLabel(draft.status) }} · {{ teacherImprovementDraftMeta(draft) }}</span>
+                      </div>
+                      <p>{{ draft.summary }}</p>
+                      <ul class="teacher-improvement-item__signals">
+                        <li v-for="item in teacherImprovementDraftSignals(draft)" :key="`${draft.id}-${item}`">{{ item }}</li>
+                      </ul>
+                      <div v-if="draft.status === 'pending'" class="teacher-improvement-item__actions">
+                        <button class="template-sync-btn" type="button" :disabled="savingTeacherImprovement" @click.stop="acceptTeacherImprovementDraft(draft.id, true, 'workspace')">
+                          接受并发布到工作区
+                        </button>
+                        <button class="template-sync-btn" type="button" :disabled="savingTeacherImprovement" @click.stop="acceptTeacherImprovementDraft(draft.id, false, 'workspace')">
+                          仅标记接受
+                        </button>
+                        <button class="template-sync-btn" type="button" :disabled="savingTeacherImprovement" @click.stop="rejectTeacherImprovementDraft(draft.id)">
+                          拒绝
+                        </button>
+                      </div>
+                    </article>
+                  </div>
+                  <p class="binding-hint">草案来自 Harness 失败或人工反馈，默认不生效；只有管理员接受并发布后才影响新会话。</p>
+                </div>
                 <div v-if="templateKnowledgeHealthLabel(tpl.id)" class="template-health" :class="{ ready: templateHealth(tpl.id)?.ready }">
                   <span class="template-health-dot"></span>
                   <span>{{ templateKnowledgeHealthLabel(tpl.id) }}</span>
@@ -210,6 +325,242 @@
             </svg>
             {{ t('agents.templates.skip') }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="selectedRulePack" class="modal-overlay" @click.self="closeRulePackDetail">
+      <div class="modal rule-pack-modal">
+        <div class="modal-header">
+          <div>
+            <p class="rule-pack-kicker">Teacher 规则包</p>
+            <h2>{{ selectedRulePack.name }} v{{ selectedRulePack.version }}</h2>
+            <p v-if="selectedRulePackView?.workspaceOverridden" class="rule-pack-override-state">当前工作区使用管理员覆盖版本</p>
+            <p v-else-if="selectedRulePackView?.globalOverridden" class="rule-pack-override-state">当前使用全局管理员覆盖版本</p>
+          </div>
+          <button class="modal-close" @click="closeRulePackDetail">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body rule-pack-body">
+          <section v-if="isAdmin" class="rule-pack-section rule-pack-editor">
+            <div class="rule-pack-editor__head">
+              <h3>管理员覆盖配置</h3>
+              <div class="rule-pack-editor__actions">
+                <button class="template-sync-btn" type="button" @click="syncRulePackJsonFromForm">
+                  从表单生成 JSON
+                </button>
+                <button class="template-sync-btn" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('workspace')">
+                  保存工作区覆盖
+                </button>
+                <button class="template-sync-btn" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('global')">
+                  保存全局覆盖
+                </button>
+                <button class="template-sync-btn" type="button" :disabled="savingRulePack || !selectedRulePackView?.workspaceOverridden" @click="clearRulePackOverride('workspace')">
+                  清除工作区覆盖
+                </button>
+                <button class="template-sync-btn" type="button" :disabled="savingRulePack || !selectedRulePackView?.globalOverridden" @click="clearRulePackOverride('global')">
+                  清除全局覆盖
+                </button>
+              </div>
+            </div>
+            <div class="rule-pack-form-editor">
+              <div class="rule-pack-form-grid">
+                <div class="form-group">
+                  <label class="form-label">学段</label>
+                  <input v-model="rulePackForm.stage" class="form-input" placeholder="junior" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">学科</label>
+                  <input v-model="rulePackForm.subject" class="form-input" placeholder="chinese" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">模块</label>
+                  <input v-model="rulePackForm.module" class="form-input" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">名称</label>
+                  <input v-model="rulePackForm.name" class="form-input" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">版本</label>
+                  <input v-model="rulePackForm.version" class="form-input" />
+                </div>
+              </div>
+              <div class="rule-pack-form-block">
+                <h4>题型比例</h4>
+                <div class="rule-pack-form-grid">
+                  <div v-for="item in rulePackMixFormItems" :key="item.key" class="form-group">
+                    <label class="form-label">{{ item.label }}</label>
+                    <input v-model="rulePackForm.defaultQuestionMix[item.key]" class="form-input" />
+                  </div>
+                </div>
+              </div>
+              <div class="rule-pack-form-block">
+                <h4>题型规则</h4>
+                <div class="rule-pack-question-editor">
+                  <div v-for="rule in rulePackForm.questionTypeRules" :key="rule.type" class="rule-pack-question-edit-item">
+                    <div class="rule-pack-form-grid">
+                      <div class="form-group">
+                        <label class="form-label">题型</label>
+                        <input v-model="rule.displayName" class="form-input" />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">默认分值</label>
+                        <input v-model="rule.defaultScore" class="form-input" />
+                      </div>
+                    </div>
+                    <div class="form-group full-width">
+                      <label class="form-label">生成规则</label>
+                      <textarea v-model="rule.generationRule" class="form-textarea" rows="2"></textarea>
+                    </div>
+                    <div class="rule-pack-checkboxes">
+                      <label><input v-model="rule.requiresAnswer" type="checkbox" /> 必须有答案</label>
+                      <label><input v-model="rule.requiresScoringRubric" type="checkbox" /> 必须有采分点</label>
+                      <label><input v-model="rule.requiresMaterial" type="checkbox" /> 必须有材料/来源</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="rule-pack-form-block">
+                <h4>硬性规则</h4>
+                <div class="rule-pack-hard-edit-list">
+                  <div v-for="(_, idx) in rulePackForm.hardRules" :key="idx" class="rule-pack-hard-edit-item">
+                    <input v-model="rulePackForm.hardRules[idx]" class="form-input" />
+                    <button class="provider-pref-btn danger" type="button" @click="removeHardRule(idx)">×</button>
+                  </div>
+                </div>
+                <button class="template-sync-btn" type="button" @click="addHardRule">新增硬性规则</button>
+              </div>
+              <div class="rule-pack-form-block">
+                <h4>资料与课标要求</h4>
+                <div class="rule-pack-hard-edit-list">
+                  <div v-for="(_, idx) in rulePackForm.sourceRequirements" :key="idx" class="rule-pack-source-edit-item">
+                    <div class="rule-pack-form-grid">
+                      <div class="form-group">
+                        <label class="form-label">类型</label>
+                        <input v-model="rulePackForm.sourceRequirements[idx].label" class="form-input" placeholder="课程标准 / 最新教材 / 题型要求" />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">识别 Key</label>
+                        <input v-model="rulePackForm.sourceRequirements[idx].id" class="form-input" placeholder="curriculum_standard" />
+                      </div>
+                    </div>
+                    <div class="form-group full-width">
+                      <label class="form-label">要求</label>
+                      <textarea v-model="rulePackForm.sourceRequirements[idx].rule" class="form-textarea" rows="2"></textarea>
+                    </div>
+                    <button class="provider-pref-btn danger" type="button" @click="removeSourceRequirement(idx)">×</button>
+                  </div>
+                </div>
+                <button class="template-sync-btn" type="button" @click="addSourceRequirement">新增资料要求</button>
+              </div>
+            </div>
+            <textarea v-model="rulePackJsonDraft" class="rule-pack-json-editor" spellcheck="false"></textarea>
+            <p class="binding-hint">工作区覆盖优先于全局覆盖；覆盖只影响新会话；请保持 id 不变。普通用户只能使用管理员发布后的有效规则。</p>
+          </section>
+          <section class="rule-pack-section">
+            <h3>适用边界</h3>
+            <div class="rule-pack-mix">
+              <span>学段：{{ selectedRulePack.stage || 'junior' }}</span>
+              <span>学科：{{ selectedRulePack.subject || 'chinese' }}</span>
+              <span>模块：{{ selectedRulePack.module }}</span>
+            </div>
+          </section>
+          <section class="rule-pack-section">
+            <h3>默认题型比例</h3>
+            <div class="rule-pack-mix">
+              <span v-for="item in rulePackMixItems(selectedRulePack)" :key="item.key">
+                {{ item.label }}：{{ item.value }}
+              </span>
+            </div>
+          </section>
+          <section class="rule-pack-section">
+            <h3>题型规则</h3>
+            <div class="rule-pack-rule-list">
+              <article v-for="rule in selectedRulePack.questionTypeRules" :key="rule.type" class="rule-pack-rule-item">
+                <div class="rule-pack-rule-item__head">
+                  <strong>{{ rule.displayName }}</strong>
+                  <span>{{ rule.defaultScore }}</span>
+                </div>
+                <p>{{ rule.generationRule }}</p>
+                <div class="rule-pack-flags">
+                  <span v-if="rule.requiresAnswer">必须有答案</span>
+                  <span v-if="rule.requiresScoringRubric">必须有采分点</span>
+                  <span v-if="rule.requiresMaterial">必须有材料/来源</span>
+                </div>
+              </article>
+            </div>
+          </section>
+          <section class="rule-pack-section">
+            <h3>硬性规则</h3>
+            <ul class="rule-pack-hard-rules">
+              <li v-for="rule in selectedRulePack.hardRules" :key="rule">{{ rule }}</li>
+            </ul>
+          </section>
+          <section v-if="selectedRulePack.sourceRequirements?.length" class="rule-pack-section">
+            <h3>资料与课标要求</h3>
+            <div class="rule-pack-acceptance">
+              <div v-for="item in selectedRulePack.sourceRequirements" :key="item.id || item.label" class="rule-pack-acceptance__item">
+                <strong>{{ item.label || item.id }}</strong>
+                <span>{{ item.rule }}</span>
+              </div>
+            </div>
+          </section>
+          <section class="rule-pack-section">
+            <h3>验收项</h3>
+            <div class="rule-pack-acceptance">
+              <div v-for="item in selectedRulePack.acceptanceMatrix" :key="item.id || item.label" class="rule-pack-acceptance__item">
+                <strong>{{ item.label }}</strong>
+                <span>{{ item.rule }}</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="selectedTeacherSkill" class="modal-overlay" @click.self="selectedTeacherSkill = null">
+      <div class="modal rule-pack-modal">
+        <div class="modal-header">
+          <div>
+            <p class="rule-pack-kicker">Teacher Skill</p>
+            <h2>{{ selectedTeacherSkill.name }} v{{ selectedTeacherSkill.version }}</h2>
+          </div>
+          <button class="modal-close" @click="selectedTeacherSkill = null">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body rule-pack-body">
+          <section class="rule-pack-section">
+            <h3>用途</h3>
+            <p class="teacher-skill-purpose">{{ selectedTeacherSkill.purpose }}</p>
+          </section>
+          <section class="rule-pack-section">
+            <h3>执行流程</h3>
+            <ol class="teacher-skill-steps">
+              <li v-for="step in selectedTeacherSkill.workflowSteps" :key="step">{{ step }}</li>
+            </ol>
+          </section>
+          <section class="rule-pack-section">
+            <h3>支持规则包</h3>
+            <div class="rule-pack-mix">
+              <span v-for="id in selectedTeacherSkill.supportedRulePackIds" :key="id">{{ teacherRulePackMap[id]?.name || id }}</span>
+            </div>
+          </section>
+          <section class="rule-pack-section">
+            <h3>验收信号</h3>
+            <div class="rule-pack-acceptance">
+              <div v-for="item in selectedTeacherSkill.acceptanceSignals" :key="item.id || item.label" class="rule-pack-acceptance__item">
+                <strong>{{ item.label }}</strong>
+                <span>{{ item.rule }}</span>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -484,11 +835,11 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, wikiApi } from '@/api/index'
+import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, teacherImprovementApi, teacherRulePackApi, teacherSkillApi, wikiApi } from '@/api/index'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { isGlobalAdmin } from '@/utils/access'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import type { Agent, AgentTemplate, TemplateAppliedAgentHealth, TemplateHealth } from '@/types/index'
+import type { Agent, AgentTemplate, TeacherImprovementDraft, TeacherRulePack, TeacherRulePackView, TeacherSkillBindingView, TeacherSkillDefinition, TemplateAppliedAgentHealth, TemplateHealth } from '@/types/index'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -518,6 +869,38 @@ const selectedProviderIds = ref<string[]>([])
 const showTemplateSelector = ref(false)
 const templates = ref<AgentTemplate[]>([])
 const templateHealthMap = ref<Record<string, TemplateHealth>>({})
+const teacherRulePackMap = ref<Record<string, TeacherRulePack>>({})
+const teacherRulePackList = computed(() => Object.values(teacherRulePackMap.value))
+const teacherSkillMap = ref<Record<string, TeacherSkillDefinition>>({})
+const teacherSkillBindingView = ref<TeacherSkillBindingView | null>(null)
+const selectedTeacherSkillIds = ref<string[]>([])
+const savingTeacherSkillBindings = ref(false)
+const selectedRulePack = ref<TeacherRulePack | null>(null)
+const selectedRulePackView = ref<TeacherRulePackView | null>(null)
+const rulePackJsonDraft = ref('')
+const rulePackForm = ref<TeacherRulePack>(createEmptyRulePackForm())
+const savingRulePack = ref(false)
+const selectedTeacherSkill = ref<TeacherSkillDefinition | null>(null)
+const teacherImprovementDrafts = ref<TeacherImprovementDraft[]>([])
+const improvementHarnessRunId = ref('')
+const savingTeacherImprovement = ref(false)
+const pendingTeacherImprovementCount = computed(() =>
+  teacherImprovementDrafts.value.filter(draft => draft.status === 'pending').length
+)
+
+const rulePackMixLabels: Record<string, string> = {
+  fillBlank: '填空',
+  choice: '选择',
+  shortAnswer: '简答',
+  analysis: '分析',
+  inquiry: '探究',
+  microWriting: '微写作',
+}
+
+const rulePackMixFormItems = computed(() => Object.keys(rulePackForm.value.defaultQuestionMix || {}).map(key => ({
+  key,
+  label: rulePackMixLabels[key] || key,
+})))
 const applyingTemplate = ref(false)
 const syncingTemplateId = ref<string | null>(null)
 
@@ -548,6 +931,30 @@ const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: s
   homeSubtitle: '',
   homeQuickStartsJson: '',
 })
+
+function createEmptyRulePackForm(): TeacherRulePack {
+  return {
+    id: '',
+    stage: 'junior',
+    subject: 'chinese',
+    module: '',
+    name: '',
+    version: '',
+    defaultQuestionMix: {},
+    questionTypeRules: [],
+    hardRules: [],
+    sourceRequirements: [],
+    acceptanceMatrix: [],
+  }
+}
+
+function cloneRulePack(pack: TeacherRulePack): TeacherRulePack {
+  const cloned = JSON.parse(JSON.stringify(pack)) as TeacherRulePack
+  cloned.stage = cloned.stage || 'junior'
+  cloned.subject = cloned.subject || 'chinese'
+  cloned.sourceRequirements = Array.isArray(cloned.sourceRequirements) ? cloned.sourceRequirements : []
+  return cloned
+}
 
 const form = ref(defaultForm())
 const currentDefaultAgentId = computed(() => workspaceStore.getDefaultAgentId())
@@ -736,9 +1143,13 @@ function moveProvider(idx: number, dir: -1 | 1) {
 
 async function loadTemplates() {
   try {
-    const [templateRes, healthRes]: any[] = await Promise.all([
+    const [templateRes, healthRes, rulePackRes, teacherSkillRes, teacherSkillBindingRes, teacherImprovementRes]: any[] = await Promise.all([
       templateApi.list(),
       templateApi.health(),
+      teacherRulePackApi.list().catch(() => ({ data: [] })),
+      teacherSkillApi.list().catch(() => ({ data: [] })),
+      teacherSkillApi.bindings().catch(() => ({ data: null })),
+      teacherImprovementApi.list().catch(() => ({ data: [] })),
     ])
     templates.value = templateRes.data || []
     const healthList = (healthRes.data || []) as TemplateHealth[]
@@ -746,6 +1157,21 @@ async function loadTemplates() {
       acc[item.templateId] = item
       return acc
     }, {})
+    const rulePacks = (rulePackRes.data || []) as TeacherRulePack[]
+    teacherRulePackMap.value = rulePacks.reduce<Record<string, TeacherRulePack>>((acc, item) => {
+      acc[item.id] = item
+      return acc
+    }, {})
+    const teacherSkills = (teacherSkillRes.data || []) as TeacherSkillDefinition[]
+    teacherSkillMap.value = teacherSkills.reduce<Record<string, TeacherSkillDefinition>>((acc, item) => {
+      acc[item.id] = item
+      return acc
+    }, {})
+    teacherSkillBindingView.value = teacherSkillBindingRes.data || null
+    selectedTeacherSkillIds.value = teacherSkillBindingView.value?.activeSkillIds?.length
+      ? [...teacherSkillBindingView.value.activeSkillIds]
+      : teacherSkills.map(skill => skill.id)
+    teacherImprovementDrafts.value = teacherImprovementRes.data || []
   } catch {
     // Fallback: skip templates, open blank form
     openBlankCreateModal()
@@ -765,6 +1191,287 @@ function templateTags(tpl: AgentTemplate): string[] {
     .split(',')
     .map(tag => tag.trim())
     .filter(Boolean)
+}
+
+function isTeacherTemplate(tpl: AgentTemplate): boolean {
+  return tpl.id === 'builtin.teacher_exam_assistant'
+    || tpl.capabilityPack?.defaultRulePackId === 'teacher.rulepack.classic_reading.v2'
+}
+
+function templateRulePack(tpl: AgentTemplate): TeacherRulePack | undefined {
+  const rulePackId = typeof tpl.capabilityPack?.defaultRulePackId === 'string'
+    ? tpl.capabilityPack.defaultRulePackId
+    : ''
+  return rulePackId ? teacherRulePackMap.value[rulePackId] : undefined
+}
+
+async function openRulePackDetail(pack?: TeacherRulePack) {
+  if (!pack) return
+  selectedRulePack.value = pack
+  selectedRulePackView.value = null
+  rulePackJsonDraft.value = JSON.stringify(pack, null, 2)
+  rulePackForm.value = cloneRulePack(pack)
+  try {
+    const res: any = await teacherRulePackApi.view(pack.id)
+    const view = res.data as TeacherRulePackView
+    selectedRulePackView.value = view
+    selectedRulePack.value = view.rulePack
+    rulePackForm.value = cloneRulePack(view.rulePack)
+    rulePackJsonDraft.value = JSON.stringify(view.rulePack, null, 2)
+  } catch {
+    // Keep the already loaded rule pack visible.
+  }
+}
+
+function closeRulePackDetail() {
+  selectedRulePack.value = null
+  selectedRulePackView.value = null
+  rulePackJsonDraft.value = ''
+  rulePackForm.value = createEmptyRulePackForm()
+}
+
+async function saveRulePackOverride(scope: 'workspace' | 'global' = 'workspace') {
+  if (!selectedRulePack.value) return
+  syncRulePackJsonFromForm()
+  let parsed: TeacherRulePack
+  try {
+    parsed = JSON.parse(rulePackJsonDraft.value)
+  } catch {
+    ElMessage.error('规则包 JSON 格式不正确')
+    return
+  }
+  if (parsed.id !== selectedRulePack.value.id) {
+    ElMessage.error('规则包 id 不能修改')
+    return
+  }
+  savingRulePack.value = true
+  try {
+    const res: any = await teacherRulePackApi.update(parsed.id, parsed, scope)
+    const view = res.data as TeacherRulePackView
+    selectedRulePackView.value = view
+    selectedRulePack.value = view.rulePack
+    rulePackForm.value = cloneRulePack(view.rulePack)
+    teacherRulePackMap.value[view.rulePack.id] = view.rulePack
+    rulePackJsonDraft.value = JSON.stringify(view.rulePack, null, 2)
+    ElMessage.success(scope === 'global' ? '全局规则包覆盖已保存' : '工作区规则包覆盖已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '规则包保存失败')
+  } finally {
+    savingRulePack.value = false
+  }
+}
+
+async function clearRulePackOverride(scope: 'workspace' | 'global' = 'workspace') {
+  if (!selectedRulePack.value) return
+  savingRulePack.value = true
+  try {
+    const res: any = await teacherRulePackApi.clearOverride(selectedRulePack.value.id, scope)
+    const view = res.data as TeacherRulePackView
+    selectedRulePackView.value = view
+    selectedRulePack.value = view.rulePack
+    rulePackForm.value = cloneRulePack(view.rulePack)
+    teacherRulePackMap.value[view.rulePack.id] = view.rulePack
+    rulePackJsonDraft.value = JSON.stringify(view.rulePack, null, 2)
+    ElMessage.success(scope === 'global' ? '已清除全局规则包覆盖' : '已清除工作区规则包覆盖')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '恢复内置规则包失败')
+  } finally {
+    savingRulePack.value = false
+  }
+}
+
+function syncRulePackJsonFromForm() {
+  if (!selectedRulePack.value) return
+  const next = cloneRulePack(rulePackForm.value)
+  next.id = selectedRulePack.value.id
+  next.module = next.module || selectedRulePack.value.module
+  next.stage = next.stage || selectedRulePack.value.stage || 'junior'
+  next.subject = next.subject || selectedRulePack.value.subject || 'chinese'
+  next.sourceRequirements = Array.isArray(next.sourceRequirements) ? next.sourceRequirements : []
+  next.acceptanceMatrix = selectedRulePack.value.acceptanceMatrix || []
+  rulePackJsonDraft.value = JSON.stringify(next, null, 2)
+}
+
+function addHardRule() {
+  rulePackForm.value.hardRules.push('')
+}
+
+function removeHardRule(idx: number) {
+  rulePackForm.value.hardRules.splice(idx, 1)
+}
+
+function addSourceRequirement() {
+  if (!Array.isArray(rulePackForm.value.sourceRequirements)) {
+    rulePackForm.value.sourceRequirements = []
+  }
+  rulePackForm.value.sourceRequirements.push({ id: '', label: '', rule: '' })
+}
+
+function removeSourceRequirement(idx: number) {
+  rulePackForm.value.sourceRequirements?.splice(idx, 1)
+}
+
+function templateTeacherSkills(tpl: AgentTemplate): TeacherSkillDefinition[] {
+  const activeIds = teacherSkillBindingView.value?.activeSkillIds
+  const ids = Array.isArray(activeIds) && activeIds.length > 0
+    ? activeIds
+    : Array.isArray(tpl.capabilityPack?.defaultTeacherSkillIds)
+    ? tpl.capabilityPack.defaultTeacherSkillIds
+    : []
+  return ids
+    .map(id => teacherSkillMap.value[String(id)])
+    .filter(Boolean)
+}
+
+function openTeacherSkillDetail(skill?: TeacherSkillDefinition) {
+  if (!skill) return
+  selectedTeacherSkill.value = skill
+}
+
+async function saveTeacherSkillBindings() {
+  if (!selectedTeacherSkillIds.value.length) {
+    ElMessage.error('至少保留一个 Teacher Skill')
+    return
+  }
+  savingTeacherSkillBindings.value = true
+  try {
+    const res: any = await teacherSkillApi.updateBindings(selectedTeacherSkillIds.value)
+    teacherSkillBindingView.value = res.data as TeacherSkillBindingView
+    selectedTeacherSkillIds.value = [...teacherSkillBindingView.value.activeSkillIds]
+    ElMessage.success('Teacher Skill 绑定已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.message || 'Teacher Skill 绑定保存失败')
+  } finally {
+    savingTeacherSkillBindings.value = false
+  }
+}
+
+async function resetTeacherSkillBindings() {
+  savingTeacherSkillBindings.value = true
+  try {
+    const res: any = await teacherSkillApi.resetBindings()
+    teacherSkillBindingView.value = res.data as TeacherSkillBindingView
+    selectedTeacherSkillIds.value = [...teacherSkillBindingView.value.activeSkillIds]
+    ElMessage.success('已恢复默认 Teacher Skill 绑定')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '恢复默认 Teacher Skill 绑定失败')
+  } finally {
+    savingTeacherSkillBindings.value = false
+  }
+}
+
+async function loadTeacherImprovementDrafts() {
+  try {
+    const res: any = await teacherImprovementApi.list()
+    teacherImprovementDrafts.value = res.data || []
+  } catch (e: any) {
+    ElMessage.error(e?.message || '自优化草案加载失败')
+  }
+}
+
+async function createTeacherImprovementDraft() {
+  if (!improvementHarnessRunId.value) {
+    ElMessage.error('请填写 Harness Run ID')
+    return
+  }
+  savingTeacherImprovement.value = true
+  try {
+    const res: any = await teacherImprovementApi.create(improvementHarnessRunId.value, '从 Agent Studio 手动生成自优化草案')
+    teacherImprovementDrafts.value = [res.data as TeacherImprovementDraft, ...teacherImprovementDrafts.value]
+    improvementHarnessRunId.value = ''
+    ElMessage.success('自优化草案已生成，等待审核发布')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '自优化草案生成失败')
+  } finally {
+    savingTeacherImprovement.value = false
+  }
+}
+
+async function acceptTeacherImprovementDraft(id: string, publish: boolean, scope: 'workspace' | 'global') {
+  savingTeacherImprovement.value = true
+  try {
+    const res: any = await teacherImprovementApi.accept(id, {
+      publish,
+      scope,
+      note: publish ? '管理员接受并发布' : '管理员接受，暂不发布',
+    })
+    replaceTeacherImprovementDraft(res.data as TeacherImprovementDraft)
+    if (publish) {
+      await loadTemplates()
+    }
+    ElMessage.success(publish ? '草案已接受并发布' : '草案已接受')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '草案审核失败')
+  } finally {
+    savingTeacherImprovement.value = false
+  }
+}
+
+async function rejectTeacherImprovementDraft(id: string) {
+  savingTeacherImprovement.value = true
+  try {
+    const res: any = await teacherImprovementApi.reject(id, '管理员拒绝草案')
+    replaceTeacherImprovementDraft(res.data as TeacherImprovementDraft)
+    ElMessage.success('草案已拒绝')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '草案拒绝失败')
+  } finally {
+    savingTeacherImprovement.value = false
+  }
+}
+
+function replaceTeacherImprovementDraft(draft: TeacherImprovementDraft) {
+  teacherImprovementDrafts.value = teacherImprovementDrafts.value.map(item =>
+    item.id === draft.id ? draft : item
+  )
+}
+
+function teacherImprovementStatusLabel(status: string) {
+  if (status === 'pending') return '待审核'
+  if (status === 'accepted') return '已接受'
+  if (status === 'rejected') return '已拒绝'
+  return status || '未知'
+}
+
+function teacherImprovementDraftMeta(draft: TeacherImprovementDraft) {
+  const parts = [
+    draft.rulePackId,
+    draft.targetArea ? `归因：${draft.targetArea}` : '',
+    draft.proposalType ? `建议：${draft.proposalType}` : '',
+    draft.riskLevel ? `风险：${draft.riskLevel}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+function teacherImprovementDraftSignals(draft: TeacherImprovementDraft) {
+  const rows: string[] = []
+  const primaryCause = String(draft.diagnosis?.primaryCause || '').trim()
+  const action = String(draft.diagnosis?.recommendedAction || '').trim()
+  const addedRules = draft.proposedPatch?.addedHardRules
+  const skillSteps = Array.isArray(draft.proposedSkillPatch?.steps) ? draft.proposedSkillPatch.steps.length : 0
+  const acceptanceChecks = Array.isArray(draft.proposedAcceptanceCase?.checks) ? draft.proposedAcceptanceCase.checks.length : 0
+  if (primaryCause) rows.push(`原因：${primaryCause}`)
+  if (action) rows.push(`建议：${action}`)
+  if (typeof addedRules === 'number') rows.push(`规则补丁：新增 ${addedRules} 条硬规则`)
+  if (skillSteps) rows.push(`Skill 草案：${skillSteps} 个执行步骤`)
+  if (acceptanceChecks) rows.push(`验收草案：${acceptanceChecks} 个检查点`)
+  return rows.slice(0, 5)
+}
+
+function rulePackMixItems(pack: TeacherRulePack) {
+  const labels: Record<string, string> = {
+    fillBlank: '填空',
+    choice: '选择',
+    shortAnswer: '简答',
+    analysis: '分析',
+    inquiry: '探究',
+    microWriting: '微写作',
+  }
+  return Object.entries(pack.defaultQuestionMix || {}).map(([key, value]) => ({
+    key,
+    label: labels[key] || key,
+    value: String(value),
+  }))
 }
 
 function templateHealth(templateId: string): TemplateHealth | undefined {
@@ -948,7 +1655,7 @@ async function openEditModal(agent: Agent) {
       // RFC-042: /skills is now paginated; binding dropdown only needs enabled skills,
       // so listEnabled() is both semantically correct and shape-stable (returns array).
       skillApi.listEnabled(),
-      toolApi.list(),
+      toolApi.listBindable(),
       modelApi.listProviders(),
       agentBindingApi.listSkills(agent.id),
       agentBindingApi.listTools(agent.id),
@@ -1675,6 +2382,101 @@ async function toggleAgent(agent: Agent) {
 
 .template-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag-chip { font-size: 11px; padding: 2px 8px; background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); border-radius: 999px; white-space: nowrap; }
+.template-rule-pack {
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-secondary);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.template-rule-pack__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--mc-text-secondary);
+}
+.template-rule-pack__head strong {
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+.template-rule-pack__label {
+  color: var(--mc-primary);
+  font-weight: 600;
+}
+.template-rule-pack__detail {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--mc-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.template-rule-pack__detail:hover {
+  text-decoration: underline;
+}
+.template-rule-pack__rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.template-rule-pack__rules span {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--mc-text-secondary);
+  background: var(--mc-bg-primary);
+  border: 1px solid var(--mc-border-light);
+  border-radius: 6px;
+  padding: 3px 7px;
+}
+.template-teacher-skills {
+  background: var(--mc-bg-primary);
+}
+.template-skill-chip {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--mc-primary);
+  background: rgba(217, 119, 87, 0.08);
+  border: 1px solid rgba(217, 119, 87, 0.22);
+  border-radius: 6px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.template-skill-chip:hover {
+  border-color: var(--mc-primary);
+  background: rgba(217, 119, 87, 0.14);
+}
+.teacher-skill-binding-editor {
+  border-top: 1px solid var(--mc-border-light);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.teacher-skill-binding-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.teacher-skill-binding-option input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--mc-primary);
+}
+.teacher-skill-binding-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .template-health {
   display: inline-flex;
   align-items: center;
@@ -1778,6 +2580,293 @@ async function toggleAgent(agent: Agent) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.rule-pack-modal {
+  max-width: 860px;
+}
+.rule-pack-kicker {
+  margin: 0 0 4px;
+  color: var(--mc-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.rule-pack-override-state {
+  margin: 4px 0 0;
+  color: #b7791f;
+  font-size: 12px;
+  font-weight: 600;
+}
+.rule-pack-mini-state {
+  color: #b7791f;
+  font-size: 12px;
+  font-weight: 600;
+}
+.rule-pack-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rule-pack-editor {
+  border: 1px solid rgba(217, 119, 87, 0.22);
+  border-radius: 8px;
+  background: rgba(217, 119, 87, 0.06);
+  padding: 12px;
+}
+.rule-pack-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rule-pack-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rule-pack-json-editor {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: var(--mc-bg-primary);
+  color: var(--mc-text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px;
+}
+.rule-pack-form-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.rule-pack-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.rule-pack-form-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rule-pack-form-block h4 {
+  margin: 0;
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+.rule-pack-question-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rule-pack-question-edit-item {
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-primary);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rule-pack-checkboxes {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+}
+.rule-pack-checkboxes label,
+.rule-pack-hard-edit-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.rule-pack-checkboxes input {
+  accent-color: var(--mc-primary);
+}
+.rule-pack-hard-edit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rule-pack-hard-edit-item .form-input {
+  flex: 1;
+}
+
+.rule-pack-source-edit-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-sunken);
+}
+.rule-pack-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rule-pack-section h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--mc-text-primary);
+}
+.rule-pack-mix,
+.rule-pack-flags,
+.rule-pack-acceptance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rule-pack-mix span,
+.rule-pack-flags span {
+  border: 1px solid var(--mc-border-light);
+  border-radius: 999px;
+  background: var(--mc-bg-secondary);
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  padding: 4px 9px;
+}
+.rule-pack-rule-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.rule-pack-rule-item {
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-secondary);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rule-pack-rule-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.rule-pack-rule-item__head strong {
+  color: var(--mc-text-primary);
+  font-size: 14px;
+}
+.rule-pack-rule-item__head span {
+  color: var(--mc-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.rule-pack-rule-item p {
+  margin: 0;
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.rule-pack-hard-rules {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.teacher-skill-purpose {
+  margin: 0;
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.teacher-skill-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.rule-pack-acceptance__item {
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-secondary);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: calc(50% - 4px);
+  min-width: 220px;
+}
+.rule-pack-acceptance__item strong {
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+.rule-pack-acceptance__item span {
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.teacher-improvement-panel {
+  border-color: rgba(37, 99, 235, 0.24);
+}
+.teacher-improvement-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.teacher-improvement-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-primary);
+  color: var(--mc-text-primary);
+  font-size: 12px;
+  padding: 7px 9px;
+}
+.teacher-improvement-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.teacher-improvement-item {
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-primary);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.teacher-improvement-item > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.teacher-improvement-item strong {
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+.teacher-improvement-item span,
+.teacher-improvement-item p {
+  margin: 0;
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.teacher-improvement-item__signals {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.teacher-improvement-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
 @media (max-width: 640px) {

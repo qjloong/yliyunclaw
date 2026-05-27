@@ -259,13 +259,17 @@ const customRenderer = {
       return innerHtml
     }
     let extra = ''
+    const isGeneratedFileLink = /\/api\/v1\/files\/generated\/(?:disk\/)?[^\/?#]+(?:\/inline)?(?:\?.*)?$/i.test(href)
     try {
       const url = new URL(href, typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
-      if (typeof window !== 'undefined' && url.origin !== window.location.origin) {
+      if (isGeneratedFileLink || (typeof window !== 'undefined' && url.origin !== window.location.origin)) {
         extra = ' target="_blank" rel="noopener noreferrer"'
       }
     } catch {
       // Malformed URL — treat as same-origin (relative link path).
+      if (isGeneratedFileLink) {
+        extra = ' target="_blank" rel="noopener noreferrer"'
+      }
     }
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
     return `<a href="${escapeHtml(href)}"${titleAttr}${extra}>${innerHtml}</a>`

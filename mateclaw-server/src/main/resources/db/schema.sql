@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS mate_tool (
     mcp_endpoint  VARCHAR(256),
     params_schema TEXT,
     enabled       BOOLEAN      NOT NULL DEFAULT TRUE,
+    bindable      BOOLEAN      NOT NULL DEFAULT TRUE,
     builtin       BOOLEAN      NOT NULL DEFAULT FALSE,
     workspace_id  BIGINT       NOT NULL DEFAULT 1,
     create_time   DATETIME     NOT NULL,

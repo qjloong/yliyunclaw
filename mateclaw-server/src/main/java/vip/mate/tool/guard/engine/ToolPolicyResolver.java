@@ -431,7 +431,11 @@ public class ToolPolicyResolver {
         if (accountRole == null || accountRole.isBlank()) {
             return true;
         }
-        return !"admin".equalsIgnoreCase(accountRole) && !"system".equalsIgnoreCase(accountRole);
+        String normalized = accountRole.trim().toLowerCase(Locale.ROOT);
+        return !"admin".equals(normalized)
+                && !"role_admin".equals(normalized)
+                && !"global_admin".equals(normalized)
+                && !"system".equals(normalized);
     }
 
     private GuardSeverity policySeverity(ToolRuntimeMetadata metadata) {

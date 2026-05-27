@@ -43,8 +43,9 @@ public class ListDirectoryTool {
 
     @Tool(description = """
             List files and subdirectories inside a directory within the active workspace boundary. \
-            Supports shallow or recursive listing. Returns structured JSON with relative paths, file types, sizes, and timestamps. \
-            Use this before reading files from a folder; do not guess filenames.""")
+            Supports shallow or recursive listing. Returns structured JSON with relative paths, file types, sizes, timestamps, and cache policy. \
+            Use this only when the context router has no cached directory/material index, the user explicitly asks to refresh/sync, or a specific subfolder must be inspected. \
+            After a cache hit, do not call this again for the same broad directory unless refresh=true is required.""")
     public String list_directory(
             @ToolParam(description = "Absolute or relative directory path") String directoryPath,
             @ToolParam(description = "Whether to recurse into subdirectories. Default false", required = false) Boolean recursive,
@@ -144,6 +145,10 @@ public class ListDirectoryTool {
             if (truncated) {
                 result.set("message", "目录结果已截断。请缩小目录范围，或提高 maxEntries / 调整 maxDepth 后继续。");
             }
+            result.set("cacheHit", false);
+            result.set("cacheTtlMinutes", 30);
+            result.set("cachePolicy", buildCachePolicy(false));
+            result.set("nextAction", "根据 entries 选择少量相关文件读取；不要在同一轮对话继续遍历同一大目录。");
             result.set("entries", items);
 
             log.info("[ListDirectory] Listed {} entries from {} (recursive={}, depth={})",
@@ -189,10 +194,25 @@ public class ListDirectoryTool {
             JSONObject obj = JSONUtil.parseObj(cached);
             obj.set("cacheHit", true);
             obj.set("usageHint", "已复用缓存目录列表；除非用户要求刷新/同步，不要再次遍历同一目录。");
+            obj.set("cacheTtlMinutes", 30);
+            obj.set("cachePolicy", buildCachePolicy(true));
+            obj.set("nextAction", "直接使用缓存 entries 选择候选文件；如果仍缺资料，请说明需要用户导入/绑定知识库或明确要求刷新，不要重复调用 list_directory。");
             return JSONUtil.toJsonPrettyStr(obj);
         } catch (Exception ignored) {
             return cached;
         }
+    }
+
+    private JSONObject buildCachePolicy(boolean cacheHit) {
+        JSONObject policy = new JSONObject();
+        policy.set("scope", "workspace-directory");
+        policy.set("cacheHit", cacheHit);
+        policy.set("reuseForSameDirectory", true);
+        policy.set("refreshOnlyWhenUserRequestsRefresh", true);
+        policy.set("stopRepeatingTraversal", true);
+        policy.set("preferredFollowUp", "read_selected_files_or_use_knowledge_base");
+        policy.set("blockedFollowUp", "repeat_list_directory_for_same_broad_directory");
+        return policy;
     }
 
     private String errorResult(String directoryPath, String message) {

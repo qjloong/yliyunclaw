@@ -1,0 +1,37 @@
+{
+  "id": "teacher.rulepack.modern_reading.v1",
+  "module": "modern_reading",
+  "name": "初中现代文阅读规则包 v1",
+  "version": "1.0.0",
+  "defaultQuestionMix": {
+    "informationExtraction": "15%",
+    "contentSummary": "20%",
+    "languageAppreciation": "20%",
+    "structureAnalysis": "15%",
+    "themeEmotion": "15%",
+    "extensionTask": "15%"
+  },
+  "questionTypeRules": [
+    { "type": "informationExtraction", "displayName": "信息提取题", "defaultScore": "2-4 分", "generationRule": "筛选关键语句、信息整合、图表或材料转化，答案必须源于文本。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "contentSummary", "displayName": "内容概括题", "defaultScore": "3-5 分", "generationRule": "概括事件、人物事迹、情感变化和行文脉络，优先用表格、框架图等形式避免直问直答。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "languageAppreciation", "displayName": "语言赏析题", "defaultScore": "3-5 分", "generationRule": "围绕修辞、表现手法、描写方法、词语表达效果和语言特色，必须结合具体句段。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "structureAnalysis", "displayName": "结构作用题", "defaultScore": "3-5 分", "generationRule": "分析标题、开头、中间段、结尾、过渡、插叙、照应、线索等作用。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "themeEmotion", "displayName": "主旨情感题", "defaultScore": "4-6 分", "generationRule": "概括中心、作者情感、标题含义、深层意蕴和感悟启示，不空泛拔高。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "extensionTask", "displayName": "拓展任务题", "defaultScore": "4-8 分", "generationRule": "可设计活动情境、对话、海报、卡片、微写作、跨学科任务，但必须可评分且不脱离文本。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true }
+  ],
+  "hardRules": [
+    "必须先识别文本类型，再使用对应考点：文学类、新闻、现代诗歌、戏剧、说明文、议论文、非连续性文本不得混用规则。",
+    "文章来源应真实可靠，可来自官媒副刊、文学期刊、现当代名家、官方平台；严禁捏造或篡改文章内容。",
+    "禁止选用语文课本课内课文、课后阅读篇目、网络口水文、自媒体低俗文案、心灵鸡汤碎片短文和版权或来源不清材料。",
+    "禁止涉及敏感政治、消极颓废、三观不正、猎奇怪异主题；语言必须贴合初中生理解层级。",
+    "每道题必须有采分点，答案必须源于文本，不能脱离文本空谈。",
+    "文学类文本适配篇幅 800-1700 字；新闻 200-1500 字；现代诗歌 200-700 字；戏剧 800-1700 字；说明文 900-1300 字；议论文 1000-1400 字。",
+    "避免成人化、学术化、空泛哲理和 AI 套话。"
+  ],
+  "acceptanceMatrix": [
+    { "id": "genre_specific", "label": "文体专属", "rule": "必须先识别文体，再使用对应考点。" },
+    { "id": "source_authenticity", "label": "来源真实", "rule": "文章来源必须真实可靠，严禁编造和篡改。" },
+    { "id": "text_based_answer", "label": "答案源于文本", "rule": "所有答案和采分点必须基于文本。" },
+    { "id": "no_textbook_reuse", "label": "不复用课内课文", "rule": "现代文阅读不得默认选用课内课文或课后篇目。" }
+  ]
+}

@@ -22,8 +22,8 @@ import java.util.List;
  * <p>The previous path forwarded these requests to {@code skills/docx} which
  * runs {@code npm install docx} on first use (3-5 minutes). For "create new
  * document" intents that subprocess is wholly unnecessary; this tool produces
- * the bytes in the JVM, stashes them in {@link GeneratedFileCache}, and
- * returns a Markdown link the user can click to download.
+ * the bytes in the JVM, saves the file to disk, and returns a signed markdown
+ * link the user can click to download/preview via backend stream endpoint.
  *
  * <p>The skill workflow is still authoritative for editing existing .docx,
  * tracked changes, and other XML-level operations.
@@ -47,7 +47,7 @@ public class DocxRenderTool {
         disk) — passing huge markdown as a tool argument burns LLM tokens needlessly.
 
         If outputPath is omitted, the tool will save the generated file to
-        ./output/<filename>.docx under the current project/workspace when a working
+        ./output/<workspace-name>/<filename>.docx under the current project/workspace when a working
         directory is available, and also return a temporary download link.
 
         Do NOT use for:
@@ -65,7 +65,7 @@ public class DocxRenderTool {
             String filename,
             @ToolParam(description = "Page size: A4 or LETTER (default: A4)", required = false)
             String pageSize,
-            @ToolParam(description = "Optional output path. If omitted, defaults to ./output/<filename>.docx under the current project/workspace when available.", required = false)
+            @ToolParam(description = "Optional output path. If omitted, defaults to ./output/<workspace-name>/<filename>.docx under the current project/workspace when available.", required = false)
             String outputPath,
             @Nullable ToolContext ctx) {
 
@@ -76,7 +76,7 @@ public class DocxRenderTool {
         try {
             long t0 = System.currentTimeMillis();
             Path persistTarget = resolvePersistTarget(filename, outputPath, ctx);
-            DocxExportService.ExportedDocx exported = exportService.exportMarkdown(markdown, filename, pageSize, persistTarget);
+            DocxExportService.ExportedDocx exported = exportService.exportMarkdown(markdown, filename, pageSize, persistTarget, ctx);
             long elapsed = System.currentTimeMillis() - t0;
             log.info("[DocxRender] generated {} ({}ms, savedPath={})",
                     exported.fileName(), elapsed, exported.savedPath());
@@ -114,7 +114,7 @@ public class DocxRenderTool {
         boundary (same rules as read_file / write_file).
 
         If outputPath is omitted, the generated file is also saved to
-        ./output/<filename>.docx under the current project/workspace when available.
+        ./output/<workspace-name>/<filename>.docx under the current project/workspace when available.
 
         Same supported markdown subset as renderDocx (headings, bold, lists, tables,
         images). Image references ![alt](path) are rendered when path resolves to a
@@ -128,7 +128,7 @@ public class DocxRenderTool {
             String filename,
             @ToolParam(description = "Page size: A4 or LETTER (default: A4)", required = false)
             String pageSize,
-            @ToolParam(description = "Optional output path. If omitted, defaults to ./output/<filename>.docx under the current project/workspace when available.", required = false)
+            @ToolParam(description = "Optional output path. If omitted, defaults to ./output/<workspace-name>/<filename>.docx under the current project/workspace when available.", required = false)
             String outputPath,
             @Nullable ToolContext ctx) {
 
@@ -165,7 +165,7 @@ public class DocxRenderTool {
         try {
             long t0 = System.currentTimeMillis();
             Path persistTarget = resolvePersistTarget(filename, outputPath, ctx);
-            DocxExportService.ExportedDocx exported = exportService.exportMarkdown(markdown, filename, pageSize, persistTarget);
+            DocxExportService.ExportedDocx exported = exportService.exportMarkdown(markdown, filename, pageSize, persistTarget, ctx);
             long elapsed = System.currentTimeMillis() - t0;
             log.info("[DocxRender] generated {} ({} bytes md, {}ms, savedPath={})",
                 exported.fileName(), mdBytes, elapsed, exported.savedPath());
@@ -208,7 +208,7 @@ public class DocxRenderTool {
         lists, tables). All paths must pass the workspace boundary check.
 
         If outputPath is omitted, the generated file is also saved to
-        ./output/<filename>.docx under the current project/workspace when available.
+        ./output/<workspace-name>/<filename>.docx under the current project/workspace when available.
         """)
     public String renderDocxFromFiles(
             @ToolParam(description = "List of markdown file paths in render order")
@@ -217,7 +217,7 @@ public class DocxRenderTool {
             String filename,
             @ToolParam(description = "Page size: A4 or LETTER (default: A4)", required = false)
             String pageSize,
-            @ToolParam(description = "Optional output path. If omitted, defaults to ./output/<filename>.docx under the current project/workspace when available.", required = false)
+            @ToolParam(description = "Optional output path. If omitted, defaults to ./output/<workspace-name>/<filename>.docx under the current project/workspace when available.", required = false)
             String outputPath,
             @Nullable ToolContext ctx) {
 
@@ -264,7 +264,7 @@ public class DocxRenderTool {
         try {
             long t0 = System.currentTimeMillis();
             Path persistTarget = resolvePersistTarget(filename, outputPath, ctx);
-            DocxExportService.ExportedDocx exported = exportService.exportMarkdown(combined.toString(), filename, pageSize, persistTarget);
+            DocxExportService.ExportedDocx exported = exportService.exportMarkdown(combined.toString(), filename, pageSize, persistTarget, ctx);
             long elapsed = System.currentTimeMillis() - t0;
             log.info("[DocxRender] generated {} ({} files / {} bytes md, {}ms, savedPath={})",
                     exported.fileName(), resolvedPaths.size(), totalBytes, elapsed, exported.savedPath());

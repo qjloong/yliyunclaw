@@ -327,6 +327,14 @@ public class SystemSettingService {
         return Boolean.parseBoolean(getValue(STATEGRAPH_ENABLED_KEY, "false"));
     }
 
+    public String getRawValue(String key, String defaultValue) {
+        return getValue(key, defaultValue);
+    }
+
+    public void saveRawValue(String key, String value, String description) {
+        saveValue(key, value, description);
+    }
+
     private String getValue(String key, String defaultValue) {
         SystemSettingEntity entity = systemSettingMapper.selectOne(new LambdaQueryWrapper<SystemSettingEntity>()
                 .eq(SystemSettingEntity::getSettingKey, key)

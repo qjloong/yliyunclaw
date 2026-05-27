@@ -1,0 +1,27 @@
+{
+  "id": "teacher.rulepack.ancient_poetry.v1",
+  "stage": "junior",
+  "subject": "chinese",
+  "module": "ancient_poetry",
+  "name": "初中古诗词鉴赏规则包 v1",
+  "version": "1.0.0",
+  "defaultQuestionMix": {
+    "recitationUnderstanding": "20%",
+    "imageEmotion": "25%",
+    "languageAppreciation": "20%",
+    "techniqueAnalysis": "15%",
+    "comparisonReading": "20%"
+  },
+  "sourceRequirements": [
+    {
+      "id": "curriculum_standard",
+      "label": "课程标准",
+      "rule": "优先使用已绑定知识库中标记为最新版本的初中语文课程标准；缺失时必须提示补充。"
+    },
+    {
+      "id": "textbook",
+      "label": "最新教材",
+      "rule": "涉及篇目、册别和背诵范围时，优先使用已绑定知识库中的最新教材。"
+    }
+  ]
+}

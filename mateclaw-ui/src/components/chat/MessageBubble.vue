@@ -166,12 +166,12 @@
           <template v-else>
             <div v-if="teacherResultSections.length" class="teacher-result">
               <section
-                v-for="section in teacherResultSections"
+                v-for="section in visibleTeacherResultSections"
                 :key="section.key"
                 class="teacher-result__section"
                 :class="{ 'is-primary': section.key === 'questions' }"
               >
-                <details :open="section.key === 'questions' || section.key === 'plan'" class="teacher-result__details">
+                <details :open="section.key === 'questions' || (section.key === 'plan' && !hasTeacherQuestions)" class="teacher-result__details">
                   <summary class="teacher-result__summary">
                     <span class="teacher-result__title">{{ section.title }}</span>
                     <span class="teacher-result__actions">
@@ -186,14 +186,59 @@
                   <div class="teacher-result__body markdown-body" v-html="renderMarkdown(section.content)"></div>
                 </details>
               </section>
+              <details v-if="internalTeacherResultSections.length" class="teacher-result__internal">
+                <summary>内部命题说明与质量审核</summary>
+                <section
+                  v-for="section in internalTeacherResultSections"
+                  :key="`internal-${section.key}`"
+                  class="teacher-result__section"
+                >
+                  <div class="teacher-result__summary">
+                    <span class="teacher-result__title">{{ section.title }}</span>
+                    <span class="teacher-result__actions">
+                      <button class="teacher-result__action" type="button" @click.stop.prevent="copyTeacherSection(section)">
+                        复制
+                      </button>
+                    </span>
+                  </div>
+                  <div class="teacher-result__body markdown-body" v-html="renderMarkdown(section.content)"></div>
+                </section>
+              </details>
+              <div v-if="teacherGenerationStatus" class="teacher-result__status">
+                {{ teacherGenerationStatus }}
+              </div>
               <div v-if="showTeacherExportActions" class="teacher-result__export">
-                <button type="button" @click="downloadTeacherPaper('questions')">导出仅试题版</button>
-                <button type="button" @click="downloadTeacherPaper('full')">导出完整版</button>
-                <button type="button" :disabled="teacherExportingMode === 'questions'" @click="exportTeacherWord('questions')">导出 Word（仅试题）</button>
-                <button type="button" :disabled="teacherExportingMode === 'full'" @click="exportTeacherWord('full')">导出 Word（完整版）</button>
+                <button type="button" :disabled="!canExportTeacherQuestions" @click="downloadTeacherPaper('questions')">导出仅试题版</button>
+                <button type="button" :disabled="!canExportTeacherFull" @click="downloadTeacherPaper('full')">导出完整版</button>
+                <button type="button" :disabled="teacherExportingMode === 'questions' || !canExportTeacherQuestions" @click="exportTeacherWord('questions')">导出 Word（仅试题）</button>
+                <button type="button" :disabled="teacherExportingMode === 'full' || !canExportTeacherFull" @click="exportTeacherWord('full')">导出 Word（完整版）</button>
               </div>
             </div>
             <div v-else class="markdown-body" v-html="renderedContent"></div>
+            <div v-if="generatedFileLinks.length" class="generated-file-links">
+              <div
+                v-for="file in generatedFileLinks"
+                :key="file.url"
+                class="generated-file-link"
+              >
+                <el-icon class="generated-file-link__icon"><Document /></el-icon>
+                <span class="generated-file-link__name">{{ file.name }}</span>
+                <a
+                  v-if="file.previewUrl"
+                  class="generated-file-link__action"
+                  :href="file.previewUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >预览</a>
+                <a
+                  class="generated-file-link__action"
+                  :href="file.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :download="file.name"
+                >下载</a>
+              </div>
+            </div>
             <TypingCursor v-if="showCursor" :typing="isGenerating" />
           </template>
         </div>
@@ -269,6 +314,29 @@
                       <div v-if="file.summary" class="review-file-item__summary">{{ file.summary }}</div>
                     </div>
                   </details>
+                </div>
+              </div>
+
+              <div v-if="generatedFileLinks.length" class="review-block">
+                <div class="review-block__title">本次生成文件</div>
+                <div class="review-file-list review-file-list--generated">
+                  <div v-for="file in generatedFileLinks" :key="`generated-${file.url}`" class="review-generated-row">
+                    <span class="review-generated-row__name">{{ file.name }}</span>
+                    <a
+                      v-if="file.previewUrl"
+                      class="review-generated-row__action"
+                      :href="file.previewUrl"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >预览</a>
+                    <a
+                      class="review-generated-row__action"
+                      :href="file.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      :download="file.name"
+                    >下载</a>
+                  </div>
                 </div>
               </div>
 
@@ -905,11 +973,11 @@ function normalizeTeacherHeading(value: string) {
 
 function teacherSectionKey(title: string): TeacherResultSection['key'] | null {
   const normalized = normalizeTeacherHeading(title)
+  if (/命题质量审核|质量审核|审核/.test(normalized)) return 'qualityReview'
   if (/命题方案|出题方案|出题说明|命题说明/.test(normalized)) return 'plan'
-  if (/^试题$|试题内容|题目|练习题|试卷|正式试题/.test(normalized)) return 'questions'
+  if (/^试题$|试题内容|试题与材料|文言文试题|现代文试题|名著.*试题|题目|练习题|试卷|正式试题/.test(normalized)) return 'questions'
   if (/参考答案|答案解析|答案/.test(normalized)) return 'answers'
   if (/采分点|评分标准|评分细则|rubric/i.test(normalized)) return 'scoringRubric'
-  if (/命题质量审核|质量审核|审核/.test(normalized)) return 'qualityReview'
   if (/来源依据|来源|依据|grounding/i.test(normalized)) return 'sources'
   return null
 }
@@ -966,10 +1034,98 @@ function splitTeacherAnswerRubricContent(content: string) {
 
 function normalizeTeacherSectionContent(value: unknown) {
   if (Array.isArray(value)) {
-    return value.map(item => typeof item === 'string' ? item : JSON.stringify(item, null, 2)).join('\n\n')
+    return value.map((item, index) => formatTeacherStructuredItem(item, index)).filter(Boolean).join('\n\n')
   }
-  if (value && typeof value === 'object') return JSON.stringify(value, null, 2)
+  if (value && typeof value === 'object') return formatTeacherStructuredObject(value as Record<string, unknown>)
   return String(value || '').trim()
+}
+
+function teacherFieldValue(item: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = item[key]
+    if (value === null || value === undefined || value === '') continue
+    if (Array.isArray(value)) return value.map(v => typeof v === 'string' ? v : JSON.stringify(v)).join('；')
+    if (typeof value === 'object') return JSON.stringify(value)
+    return String(value)
+  }
+  return ''
+}
+
+function formatTeacherStructuredObject(value: Record<string, unknown>) {
+  const lines: string[] = []
+  const known = new Set(['title', 'grade', 'scenario', 'totalScore', 'module'])
+  const title = teacherFieldValue(value, ['title', 'name'])
+  if (title) lines.push(`**${title}**`)
+  const grade = teacherFieldValue(value, ['grade'])
+  const scenario = teacherFieldValue(value, ['scenario'])
+  const totalScore = teacherFieldValue(value, ['totalScore', 'score'])
+  const meta = [
+    grade ? `年级：${grade}` : '',
+    scenario ? `场景：${scenario}` : '',
+    totalScore ? `总分：${totalScore}` : '',
+  ].filter(Boolean)
+  if (meta.length) lines.push(meta.join('；'))
+
+  for (const [key, raw] of Object.entries(value)) {
+    if (known.has(key) || raw === null || raw === undefined || raw === '') continue
+    const rendered = Array.isArray(raw)
+      ? raw.map((item, index) => formatTeacherStructuredItem(item, index)).filter(Boolean).join('\n')
+      : typeof raw === 'object'
+        ? JSON.stringify(raw, null, 2)
+        : String(raw)
+    if (rendered) lines.push(`- ${key}：${rendered}`)
+  }
+  return lines.join('\n').trim() || JSON.stringify(value, null, 2)
+}
+
+function formatTeacherStructuredItem(value: unknown, index: number) {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object') return String(value || '').trim()
+  const item = value as Record<string, unknown>
+  const no = teacherFieldValue(item, ['questionNo', 'number', 'index', 'id']) || String(index + 1)
+  const title = teacherFieldValue(item, ['title'])
+  const stem = teacherFieldValue(item, ['stem', 'question', 'content', 'text', 'prompt'])
+  const answer = teacherFieldValue(item, ['answer', 'referenceAnswer'])
+  const rubric = teacherFieldValue(item, ['rubric', 'scoringPoints', 'points', 'criteria'])
+  const source = teacherFieldValue(item, ['source', 'sources', 'basis'])
+  const material = teacherFieldValue(item, ['material', 'passage'])
+  const options = teacherFieldValue(item, ['options', 'choices'])
+  const type = teacherFieldValue(item, ['type', 'questionType'])
+  const examPoint = teacherFieldValue(item, ['examPoint', 'examPoints', 'knowledgePoint'])
+  const difficulty = teacherFieldValue(item, ['difficulty'])
+  const score = teacherFieldValue(item, ['score', 'pointsValue', 'pointValue'])
+
+  const lines: string[] = [`### 第 ${no} 题${title ? `：${title}` : ''}`]
+  const meta = [
+    type ? `题型：${type}` : '',
+    examPoint ? `考点：${examPoint}` : '',
+    difficulty ? `难度：${difficulty}` : '',
+    score ? `分值：${score}` : '',
+  ].filter(Boolean)
+  if (meta.length) lines.push(meta.join('；'))
+  if (material) lines.push(`**材料**：${material}`)
+  if (stem) lines.push(stem)
+  if (options) lines.push(`**选项**：${options}`)
+  if (answer) lines.push(`**参考答案**：${answer}`)
+  if (rubric) lines.push(`**采分点**：${rubric}`)
+  if (source) lines.push(`**来源依据**：${source}`)
+
+  const consumed = new Set([
+    'questionNo', 'number', 'index', 'id', 'title', 'stem', 'question', 'content', 'text', 'prompt',
+    'answer', 'referenceAnswer', 'rubric', 'scoringPoints', 'points', 'criteria', 'source', 'sources',
+    'basis', 'material', 'passage', 'options', 'choices', 'type', 'questionType', 'examPoint',
+    'examPoints', 'knowledgePoint', 'difficulty', 'score', 'pointsValue', 'pointValue',
+  ])
+  for (const [key, raw] of Object.entries(item)) {
+    if (consumed.has(key) || raw === null || raw === undefined || raw === '') continue
+    const rendered = Array.isArray(raw)
+      ? raw.map(v => typeof v === 'string' ? v : JSON.stringify(v)).join('；')
+      : typeof raw === 'object'
+        ? JSON.stringify(raw)
+        : String(raw)
+    if (rendered) lines.push(`- ${key}：${rendered}`)
+  }
+  return lines.join('\n').trim()
 }
 
 function parseTeacherJsonSections(text: string): TeacherResultSection[] {
@@ -982,6 +1138,26 @@ function parseTeacherJsonSections(text: string): TeacherResultSection[] {
   try {
     const parsed = JSON.parse(candidate.slice(start, end + 1))
     const sections: TeacherResultSection[] = []
+    if (parsed?.type === 'teacher_exam_result_v2') {
+      const paper = normalizeTeacherSectionContent(parsed.paper)
+      const questions = normalizeTeacherSectionContent(parsed.questions)
+      if (questions) {
+        sections.push({
+          key: 'questions',
+          title: teacherSectionTitles.questions,
+          content: [paper, questions].filter(Boolean).join('\n\n'),
+        })
+      }
+      const answers = normalizeTeacherSectionContent(parsed.answers)
+      if (answers) sections.push({ key: 'answers', title: teacherSectionTitles.answers, content: answers })
+      const scoringRubric = normalizeTeacherSectionContent(parsed.scoringRubric)
+      if (scoringRubric) sections.push({ key: 'scoringRubric', title: teacherSectionTitles.scoringRubric, content: scoringRubric })
+      const sources = normalizeTeacherSectionContent(parsed.sources)
+      if (sources) sections.push({ key: 'sources', title: teacherSectionTitles.sources, content: sources })
+      const qualityReview = normalizeTeacherSectionContent(parsed.internalReview || parsed.qualityReview)
+      if (qualityReview) sections.push({ key: 'qualityReview', title: teacherSectionTitles.qualityReview, content: qualityReview })
+      return sections
+    }
     for (const key of teacherSectionOrder) {
       const content = normalizeTeacherSectionContent(parsed[key])
       if (!content) continue
@@ -1053,16 +1229,34 @@ function parseTeacherSections(text: string): TeacherResultSection[] {
   if (!source) return []
   const jsonSections = parseTeacherJsonSections(source)
   if (jsonSections.length) return normalizeTeacherSections(jsonSections)
-  const headingPattern = /^(?:#{1,4}\s*|\*\*)\s*((?:第[\d一二三四五六七八九十百零]+[章节部分篇]\s*)?(?:[\d一二三四五六七八九十百零]+[、.．）)]\s*)?(?:命题方案(?:（待确认）|\(待确认\))?|出题方案|出题说明|命题说明|试题内容|正式试题|试题|题目|练习题|试卷|参考答案(?:与采分点)?|答案解析|答案|采分点|评分标准|评分细则|命题质量审核|质量审核|来源依据|来源|依据))\s*(?:\*\*)?\s*[:：]?\s*$/gm
+  const headingPattern = /^(?:#{1,4}\s*|\*\*)\s*((?:第[\d一二三四五六七八九十百零]+[章节部分篇]\s*)?(?:[\d一二三四五六七八九十百零]+[、.．）)]\s*)?(?:(?:文言文|现代文|名著阅读|名著)\s*)?(?:命题方案|出题方案|出题说明|命题说明|试题内容|试题与材料|正式试题|试题|题目|练习题|试卷|参考答案|答案解析|答案|采分点|评分标准|评分细则|命题质量审核|质量审核|来源依据|来源|依据)(?:\s*(?:（[^）\n]{1,20}）|\([^)\n]{1,20}\)|[、及与和/\-\s]*(?:待确认|内部|复核|建议|清单|结果|说明|材料|原文|采分点|评分标准|依据|追溯|grounding))){0,3})\s*(?:\*\*)?\s*[:：]?\s*$/gmi
   const matches = [...source.matchAll(headingPattern)]
   if (!matches.length) return []
   return buildTeacherSectionsFromMatches(source, matches)
+}
+
+function scoreTeacherSourceSections(sections: TeacherResultSection[]) {
+  if (!sections.length) return 0
+  const keys = new Set(sections.map(section => section.key))
+  const customerKeys = ['questions', 'answers', 'scoringRubric', 'sources']
+  const internalKeys = ['plan', 'qualityReview']
+  const customerCount = customerKeys.filter(key => keys.has(key as TeacherResultSection['key'])).length
+  const internalCount = internalKeys.filter(key => keys.has(key as TeacherResultSection['key'])).length
+  const contentLength = sections.reduce((total, section) => total + (section.content?.length || 0), 0)
+  return customerCount * 100000 + internalCount * 10000 + sections.length * 1000 + contentLength
 }
 
 const teacherResultSource = computed(() => {
   if (role.value !== 'assistant') return ''
 
   const candidates: string[] = []
+  const seen = new Set<string>()
+  const addCandidate = (value: unknown) => {
+    const candidate = String(value || '').trim()
+    if (!candidate || seen.has(candidate)) return
+    seen.add(candidate)
+    candidates.push(candidate)
+  }
   const metadata = parseMessageMetadataValue(props.message.metadata)
 
   const stepResults = Array.isArray(metadata?.plan?.stepResults)
@@ -1070,28 +1264,25 @@ const teacherResultSource = computed(() => {
     : []
   for (const item of stepResults) {
     if (item?.result) {
-      candidates.push(item.result)
+      addCandidate(item.result)
     }
   }
 
   if (displayContent.value) {
-    candidates.push(displayContent.value)
+    addCandidate(displayContent.value)
   }
 
+  let bestCandidate = ''
+  let bestScore = 0
   for (const candidate of candidates) {
     const sections = parseTeacherSections(candidate)
-    if (sections.some(section => section.key === 'questions')) {
-      return candidate
+    const score = scoreTeacherSourceSections(sections)
+    if (score > bestScore) {
+      bestScore = score
+      bestCandidate = candidate
     }
   }
-
-  for (const candidate of candidates) {
-    if (parseTeacherSections(candidate).length > 0) {
-      return candidate
-    }
-  }
-
-  return ''
+  return bestCandidate
 })
 
 function scoreTeacherSections(sections: TeacherResultSection[]) {
@@ -1105,6 +1296,21 @@ const teacherResultSectionsRaw = computed(() => {
 })
 
 const teacherResultSectionsCache = ref<TeacherResultSection[]>([])
+
+function customerTeacherSectionCount(sections: TeacherResultSection[]) {
+  return sections.filter(section => ['questions', 'answers', 'scoringRubric', 'sources'].includes(section.key)).length
+}
+
+function shouldReplaceTeacherSections(next: TeacherResultSection[], cached: TeacherResultSection[]) {
+  if (!cached.length) return next.length > 0
+  if (!next.length) return false
+  const nextCustomerCount = customerTeacherSectionCount(next)
+  const cachedCustomerCount = customerTeacherSectionCount(cached)
+  if (cachedCustomerCount > 0 && nextCustomerCount < cachedCustomerCount) {
+    return false
+  }
+  return scoreTeacherSections(next) >= scoreTeacherSections(cached)
+}
 
 watch(
   [
@@ -1122,15 +1328,7 @@ watch(
       return
     }
 
-    const nextScore = scoreTeacherSections(sections)
-    const cachedScore = scoreTeacherSections(teacherResultSectionsCache.value)
-    const shouldReplace = messageStatus === 'completed'
-      || messageStatus === 'failed'
-      || messageStatus === 'stopped'
-      || messageStatus === 'interrupted'
-      || nextScore >= cachedScore
-
-    if (shouldReplace) {
+    if (shouldReplaceTeacherSections(sections, teacherResultSectionsCache.value)) {
       teacherResultSectionsCache.value = [...sections]
     }
   },
@@ -1141,8 +1339,46 @@ const teacherResultSections = computed(() => {
   return teacherResultSectionsCache.value
 })
 
+const hasTeacherQuestions = computed(() => teacherResultSections.value.some(section => section.key === 'questions'))
+
+const internalTeacherResultSections = computed(() => {
+  if (!hasTeacherQuestions.value) {
+    return teacherResultSections.value.filter(section => section.key === 'qualityReview')
+  }
+  return teacherResultSections.value.filter(section => section.key === 'plan' || section.key === 'qualityReview')
+})
+
+const visibleTeacherResultSections = computed(() => {
+  const hidden = new Set(internalTeacherResultSections.value.map(section => section.key))
+  return teacherResultSections.value.filter(section => !hidden.has(section.key))
+})
+
+const teacherGenerationStatus = computed(() => {
+  if (!isGenerating.value || !teacherResultSections.value.length) return ''
+  const keys = new Set(teacherResultSections.value.map(section => section.key))
+  if (!keys.has('questions')) return '正在生成试题...'
+  if (!keys.has('answers')) return '试题已生成，正在生成参考答案...'
+  if (!keys.has('scoringRubric')) return '参考答案已生成，正在生成采分点...'
+  if (!keys.has('sources')) return '采分点已生成，正在整理来源依据...'
+  if (pendingApproval.value?.status === 'pending_approval') return '内容已保留，等待审批后继续...'
+  return '正在整理结果...'
+})
+
+const exportableTeacherResultSections = computed(() => {
+  return teacherResultSections.value.filter(section =>
+    ['questions', 'answers', 'scoringRubric', 'sources'].includes(section.key)
+  )
+})
+
 const showTeacherExportActions = computed(() => {
-  return teacherResultSections.value.length > 0 && status.value === 'completed' && !isGenerating.value
+  return exportableTeacherResultSections.value.length > 0 && status.value === 'completed' && !isGenerating.value
+})
+
+const canExportTeacherQuestions = computed(() => hasTeacherQuestions.value)
+
+const canExportTeacherFull = computed(() => {
+  const keys = new Set(exportableTeacherResultSections.value.map(section => section.key))
+  return ['questions', 'answers', 'scoringRubric', 'sources'].every(key => keys.has(key as TeacherResultSection['key']))
 })
 
 const teacherExportingMode = ref<'questions' | 'full' | null>(null)
@@ -1169,14 +1405,21 @@ function downloadTeacherSection(section: TeacherResultSection) {
 
 function buildTeacherPaperContent(mode: 'questions' | 'full') {
   const hasQuestions = teacherResultSections.value.some(section => section.key === 'questions')
+  if (mode === 'questions' && !hasQuestions) {
+    return ''
+  }
   const sections = mode === 'questions'
-    ? teacherResultSections.value.filter(section => section.key === 'questions' || (!hasQuestions && section.key === 'plan'))
-    : teacherResultSections.value
+    ? teacherResultSections.value.filter(section => section.key === 'questions')
+    : exportableTeacherResultSections.value
   return sections.map(section => `## ${section.title}\n\n${section.content}`).join('\n\n')
 }
 
 function downloadTeacherPaper(mode: 'questions' | 'full') {
   const content = buildTeacherPaperContent(mode)
+  if (!content.trim()) {
+    ElMessage.warning('暂无结构化试题内容，无法导出')
+    return
+  }
   downloadTextFile(mode === 'questions' ? '试题版.md' : '完整版.md', `${content}\n`)
 }
 
@@ -1194,9 +1437,12 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 async function exportTeacherWord(mode: 'questions' | 'full') {
   const content = buildTeacherPaperContent(mode)
   if (!content.trim()) {
-    ElMessage.warning('暂无可导出的试题内容')
+    ElMessage.warning('暂无结构化试题内容，无法导出 Word')
     return
   }
+  const sectionKeys = mode === 'questions'
+    ? ['questions']
+    : exportableTeacherResultSections.value.map(section => section.key)
   teacherExportingMode.value = mode
   try {
     const response: any = await conversationApi.exportTeacherPaper(props.message.conversationId, {
@@ -1204,6 +1450,8 @@ async function exportTeacherWord(mode: 'questions' | 'full') {
       filename: mode === 'questions' ? '试题版' : '完整版',
       format: 'docx',
       pageSize: 'A4',
+      mode,
+      sectionKeys,
     })
     const data = response?.data || response
     if (!data?.downloadUrl) {
@@ -1229,9 +1477,137 @@ const parseErrorText = computed(() => {
   return errorPart?.text || ''
 })
 
+/**
+ * Remove duplicate "文件路径" summary blocks from AI text, keeping only the first occurrence.
+ * The AI sometimes echoes the write_file tool result twice (once as a detailed summary,
+ * once as a compact overview at the end of the message).
+ */
+function deduplicateFilePathSections(content: string): string {
+  if (!content) return content
+  // Split on headings or bold "文件路径" markers
+  const markerRe = /(?=(?:\*{1,2}文件路径[\*：:：]|^文件路径[\s：:：]))/m
+  const idx = content.search(markerRe)
+  if (idx < 0) return content
+  // Find second occurrence
+  const secondIdx = content.indexOf(content.slice(idx, idx + 8), idx + 5)
+  if (secondIdx > idx) {
+    // Remove everything from the second occurrence onwards if it looks like a duplicate block
+    const tail = content.slice(secondIdx)
+    // Only trim if the tail is clearly a short duplicate summary (< 40% of remaining)
+    if (tail.length < (content.length - idx) * 0.7) {
+      return content.slice(0, secondIdx).replace(/[\s\n]+$/, '')
+    }
+  }
+  return content
+}
+
 const renderedContent = computed(() => {
   if (!displayContent.value) return ''
-  return renderMarkdown(displayContent.value)
+  let text = displayContent.value
+  // Strip markdown links pointing to local absolute paths (Windows/Unix) — these are write_file echoes
+  text = text.replace(/\[([^\]]*)\]\(((?:[A-Za-z]:[\\/]|file:\/\/\/)[^)]*)\)/g, '$1')
+  // Strip bare Windows absolute paths that appear as inline text or in parentheses
+  text = text.replace(/\(?[A-Za-z]:\\[^\s)>"'\n]{3,}\)?/g, '')
+  // Strip generated-file API links from inline markdown (they render in the file entry area below)
+  text = text.replace(
+    /\[([^\]]+)]\(((?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?)\)/g,
+    '$1'
+  )
+  // Deduplicate 文件路径 summary sections: keep only first occurrence
+  text = deduplicateFilePathSections(text)
+  // If this assistant message is mainly a generated-file acknowledgement, the file card below
+  // is the canonical representation; hide the verbose text to avoid duplicate output.
+  if (generatedFileLinks.value.length > 0 && shouldHideGeneratedFileNarrative(text)) {
+    return ''
+  }
+  // If write_file for the generated file failed (for example due to truncated JSON / max_tokens),
+  // do not render a success-looking narrative that only repeats a guessed path.
+  if (generatedFileLinks.value.length === 0 && hasFailedGeneratedFileWrite.value && shouldHideGeneratedFileNarrative(text)) {
+    return ''
+  }
+  return renderMarkdown(text)
+})
+
+function shouldHideGeneratedFileNarrative(text: string) {
+  const normalized = normalizeMultilineText(String(text || ''))
+  if (!normalized) return false
+  const looksLikeExportAck = /(?:已生成|已导出|生成(?:了|完成)|导出为|试题报表|报表内容|文件路径|支持浏览器直接打开|支持打印)/.test(normalized)
+  const hasPathEcho = /(?:[A-Za-z]:\\|\/output\/|\/api\/v1\/files\/generated\/)/.test(normalized)
+  const hasVeryLittleExtra = normalized.length < 260 || normalized.split('\n').length <= 8
+  return looksLikeExportAck && hasPathEcho && hasVeryLittleExtra
+}
+
+const hasFailedGeneratedFileWrite = computed(() => {
+  const toolCalls: ToolCallMeta[] = Array.isArray(parsedMetadata.value?.toolCalls) ? parsedMetadata.value.toolCalls : []
+  return toolCalls.some(tc => {
+    if (tc?.name !== 'write_file') return false
+    const resultText = String(tc.result || '')
+    return tc.success === false
+      && /truncated mid-stream|max_tokens|same tool now/i.test(resultText)
+  })
+})
+
+const generatedFileLinks = computed(() => {
+  const seen = new Set<string>()
+  const result: Array<{ name: string; url: string; previewUrl: string | null }> = []
+
+  function addEntry(name: string, url: string) {
+    const baseUrl = url.replace(/\/inline$/, '')
+    if (!baseUrl || seen.has(baseUrl)) return
+    seen.add(baseUrl)
+    const isPreviewable = /\.(html?|xhtml|txt|md|json|csv|log)$/i.test(name)
+    result.push({
+      name: name || '生成文件',
+      url: baseUrl,
+      previewUrl: isPreviewable ? `${baseUrl}/inline` : null,
+    })
+  }
+
+  function tryAddFromToolResult(rawResult: unknown) {
+    if (!rawResult) return
+    if (typeof rawResult === 'string') {
+      try {
+        const parsed = JSON.parse(rawResult)
+        if (parsed?.apiUrl && parsed?.filename && !parsed?.error) {
+          addEntry(parsed.filename, parsed.previewUrl || parsed.apiUrl)
+          return
+        }
+      } catch {
+        // fall through to markdown-link parsing
+      }
+      const matches = Array.from(rawResult.matchAll(/\[([^\]]+)]\(((?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?)\)/g))
+      for (const match of matches) {
+        const name = (match[1] || '生成文件').trim()
+        const url = match[2]
+        addEntry(name, url)
+      }
+      return
+    }
+    if (typeof rawResult === 'object') {
+      const parsed: any = rawResult
+      if (parsed?.apiUrl && parsed?.filename && !parsed?.error) {
+        addEntry(parsed.filename, parsed.previewUrl || parsed.apiUrl)
+      }
+    }
+  }
+
+  // 1. Parse from toolCalls metadata (any tool result with apiUrl — most reliable)
+  const metadata = parseMessageMetadataValue(props.message.metadata)
+  const toolCalls: ToolCallMeta[] = Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []
+  for (const tc of toolCalls) {
+    tryAddFromToolResult(tc.result)
+  }
+
+  // 2. Also scan AI message text for generated-file markdown links (legacy / fallback)
+  const content = displayContent.value || ''
+  const matches = Array.from(content.matchAll(/\[([^\]]+)]\(((?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?)\)/g))
+  for (const match of matches) {
+    const name = (match[1] || '生成文件').trim()
+    const url = match[2]
+    addEntry(name, url)
+  }
+
+  return result
 })
 
 const showLoadingIndicator = computed(() => {
@@ -1452,6 +1828,9 @@ const reviewDisplayCount = computed(() => {
   if (reviewValidationItems.value.length > 0) {
     return reviewValidationItems.value.length
   }
+  if (generatedFileLinks.value.length > 0) {
+    return generatedFileLinks.value.length
+  }
   return projectReviewFiles.value.length
 })
 
@@ -1463,28 +1842,7 @@ const projectReviewFiles = computed<Array<ProjectChangeRecord | FileChangeRecord
     return [...serverSnapshot].sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
   }
 
-  const latestByPath = new Map<string, FileChangeRecord>()
-  for (const msg of props.conversationMessages || []) {
-    if (msg.role !== 'assistant') continue
-    const metadata = typeof msg.metadata === 'string'
-      ? (() => {
-          try {
-            let parsed = JSON.parse(msg.metadata)
-            if (typeof parsed === 'string') parsed = JSON.parse(parsed)
-            return parsed
-          } catch {
-            return {}
-          }
-        })()
-      : (msg.metadata || {})
-    const files = Array.isArray(metadata?.reviewSummary?.files) ? metadata.reviewSummary.files : []
-    for (const file of files) {
-      if (!file?.path) continue
-      latestByPath.set(file.path, file)
-    }
-  }
-  return Array.from(latestByPath.values())
-    .sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
+  return []
 })
 
 const projectChangeStats = computed<Array<{ type: string; count: number }>>(() => {
@@ -1553,6 +1911,7 @@ const showReviewPanel = computed(() => {
       !!reviewSummary.value?.files?.length
       || reviewValidationItems.value.length > 0
       || !!checkpointCapability.value
+      || generatedFileLinks.value.length > 0
       || (props.isLast && projectReviewFiles.value.length > 0)
     )
 })
@@ -2840,11 +3199,119 @@ watch(isGenerating, (generating) => {
   background: var(--mc-bg-elevated, #f8fafc);
 }
 
+.teacher-result__internal {
+  border: 1px dashed var(--mc-border-light, #dbe3ef);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-bg-elevated, #f8fafc) 84%, transparent);
+  color: var(--mc-text-secondary, #64748b);
+  padding: 8px;
+}
+
+.teacher-result__internal > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--mc-text-secondary, #64748b);
+  list-style-position: inside;
+}
+
+.teacher-result__internal .teacher-result__section {
+  margin-top: 8px;
+  background: var(--mc-bg-elevated, #f8fafc);
+}
+
+.teacher-result__status {
+  align-self: flex-start;
+  border: 1px solid rgba(217, 119, 87, 0.2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mc-primary, #D97757) 9%, var(--mc-bg-elevated, #f8fafc));
+  color: var(--mc-primary, #D97757);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .teacher-result__export {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.generated-file-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.generated-file-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 10px;
+  gap: 6px;
+  border: 1px solid var(--mc-border-light, #dbe3ef);
+  border-radius: 6px;
+  background: var(--mc-bg-elevated, #f8fafc);
+  font-size: 12px;
+}
+
+.generated-file-link__icon {
+  color: var(--mc-text-secondary, #8a9ab0);
+  flex-shrink: 0;
+}
+
+.generated-file-link__name {
+  flex: 1;
+  color: var(--mc-text-primary, #1a2332);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.generated-file-link__action {
+  flex-shrink: 0;
+  color: var(--mc-primary, #D97757);
+  font-weight: 600;
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.generated-file-link__action:hover {
+  background: var(--mc-primary-light, rgba(217, 119, 87, 0.08));
+}
+
+.review-file-list--generated {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review-generated-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 0;
+}
+
+.review-generated-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mc-text-primary, #1a2332);
+}
+
+.review-generated-row__action {
+  color: var(--mc-primary, #D97757);
+  font-size: 12px;
+  text-decoration: none;
 }
 
 .msg-actions {

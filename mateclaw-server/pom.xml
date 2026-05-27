@@ -335,6 +335,18 @@
             <version>1.18.3</version>
         </dependency>
 
+        <!-- ===== CommonMark (server-side Markdown -> HTML export) ===== -->
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark</artifactId>
+            <version>0.22.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-gfm-tables</artifactId>
+            <version>0.22.0</version>
+        </dependency>
+
         <!-- ===== Apache Tika (RFC-051 PR-?: Java-side last-resort extractor) ===== -->
         <!--
             Wired as the FINAL fallback in DocumentExtractTool's PDF/DOCX/XLSX/PPTX

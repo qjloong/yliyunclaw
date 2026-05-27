@@ -35,6 +35,12 @@ public class ToolController {
         return R.ok(toolService.listEnabledTools());
     }
 
+    @Operation(summary = "获取可手动绑定到 Agent 的工具列表")
+    @GetMapping("/bindable")
+    public R<List<ToolEntity>> listBindable() {
+        return R.ok(toolService.listBindableTools());
+    }
+
     @Operation(summary = "获取工具详情")
     @GetMapping("/{id}")
     public R<ToolEntity> get(@PathVariable Long id) {

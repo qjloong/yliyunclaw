@@ -38,7 +38,8 @@
                   </svg>
                 </div>
                 <div>
-                  <div class="tool-name">{{ tool.name }}</div>
+                  <div class="tool-name">{{ tool.displayName || tool.name }}</div>
+                  <div v-if="tool.displayName && tool.displayName !== tool.name" class="tool-raw-name">{{ tool.name }}</div>
                   <div class="tool-desc">{{ tool.description }}</div>
                 </div>
               </div>
@@ -219,6 +220,7 @@ async function toggleTool(tool: Tool) {
 .tool-info { display: flex; align-items: center; gap: 10px; }
 .tool-icon-wrap { width: 36px; height: 36px; background: linear-gradient(135deg, rgba(217,109,87,0.12), rgba(24,74,69,0.08)); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--mc-text-secondary); }
 .tool-name { font-weight: 500; color: var(--mc-text-primary); }
+.tool-raw-name { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 2px; }
 .tool-desc { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 1px; }
 .bean-name { background: var(--mc-bg-sunken); padding: 2px 8px; border-radius: 4px; font-size: 12px; color: var(--mc-text-primary); }
 .type-badge { padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; }

@@ -1,0 +1,58 @@
+{
+  "id": "teacher.rulepack.classic_reading.v2",
+  "module": "classic_reading",
+  "name": "初中名著阅读规则包 v2",
+  "version": "2.0.0",
+  "status": "builtin",
+  "scope": {
+    "subject": "初中语文",
+    "business": "名著阅读出题",
+    "defaultMaterialPolicy": "必须基于当前知识库、会话材料或用户明确提供的教材范围；缺少材料时先提示补充，不得编造原文、人物关系和情节细节。",
+    "illustrationPolicy": "默认不生成插图；涉及插图时要求用户上传或确认素材来源。"
+  },
+  "defaultQuestionMix": {
+    "fillBlank": 0.1,
+    "choice": 0.2,
+    "shortAnswer": 0.15,
+    "analysis": 0.3,
+    "inquiry": 0.25,
+    "microWriting": "extra_only"
+  },
+  "scoreRules": {
+    "fillBlank": "每空 1-2 分，控制空格数量和每空字数。",
+    "table": "每空 1-2 分，必须给示例或明确作答格式。",
+    "choice": "默认 2 分，选项长度接近，错误项有迷惑性但不能偷换概念。",
+    "shortAnswer": "默认 3-4 分，必须给参考答案和分点采分点。",
+    "analysis": "默认 4-8 分，必须结合材料或具体情节分层赋分。",
+    "inquiry": "默认 4-8 分，开放题必须给参考方向和采分标准。"
+  },
+  "hardRules": [
+    "主观题必须提供参考答案和可直接判分的采分点。",
+    "材料题必须提供原文、节选材料、情节材料或明确来源依据；材料不足时先请求补充。",
+    "辩论题、开放题、探究题不得省略答案方向和采分点。",
+    "批注题必须指定批注角度，例如人物、情节、语言、主题或写法。",
+    "微写作只能作为附加题型，必须考查名著理解和阅读体验，不扩大成作文训练。",
+    "填空题和表格题必须控制书写量，不得让学生大段抄写。",
+    "选择题形式应包含排序、匹配、比较、辨析、情节理解等变化，避免题型单一。",
+    "禁止默认使用超纲或学术化术语；必须使用时先解释并降阶表达。",
+    "每次正式出题都应形成独立任务上下文，不把上一轮题量、题型、材料范围自动污染到新任务。",
+    "命题说明和质量审核不作为主结果首屏内容；主结果优先展示试题。"
+  ],
+  "acceptanceMatrix": [
+    { "id": "classic_scope", "label": "名著范围/教材版本", "rule": "超出已知范围或材料不足时先确认，不直接生成事实细节。" },
+    { "id": "context_isolation", "label": "上下文隔离", "rule": "新任务只继承用户明确保留的限制。" },
+    { "id": "subjective_answers", "label": "主观题答案", "rule": "主观题必须有参考答案。" },
+    { "id": "material_questions", "label": "材料题材料", "rule": "材料题必须有材料或来源。" },
+    { "id": "question_mix", "label": "题型比例", "rule": "默认比例为填空 10%、选择 20%、简答 15%、分析 30%、探究 25%，微写作仅附加。" },
+    { "id": "score_rules", "label": "分值规则", "rule": "分值符合阅卷习惯并能分点评分。" },
+    { "id": "choice_variety", "label": "选择题变化", "rule": "选择题不只考单一事实识记。" },
+    { "id": "micro_writing", "label": "微写作", "rule": "微写作不扩大为作文能力训练。" },
+    { "id": "blank_workload", "label": "填空/表格书写量", "rule": "控制空格和字数，有示例或格式要求。" },
+    { "id": "debate_answer", "label": "辩论/开放题答案", "rule": "必须给参考方向和采分点。" },
+    { "id": "annotation_direction", "label": "批注方向", "rule": "批注题必须限定角度。" },
+    { "id": "no_overacademic", "label": "避免超纲术语", "rule": "避免碎锦结构等超纲学术化表达。" },
+    { "id": "primary_ui", "label": "UI 主结果", "rule": "试题优先展示，审核折叠或内部化。" },
+    { "id": "illustration", "label": "插图", "rule": "不默认生成插图，需用户提供或确认来源。" },
+    { "id": "module_boundary", "label": "模块边界", "rule": "文言文、现代文不得套用名著规则。" }
+  ]
+}

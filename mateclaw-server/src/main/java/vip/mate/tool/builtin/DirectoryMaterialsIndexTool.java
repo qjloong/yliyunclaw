@@ -63,8 +63,9 @@ public class DirectoryMaterialsIndexTool {
 
     @Tool(description = """
             Build a compact index for a materials directory inside the active workspace boundary. \
-            Returns a budget-friendly summary: file counts, extension groups, candidate files, and small previews for selected text files. \
-            Use this before reading a large folder so only the relevant files are pulled into context.""")
+            Returns a budget-friendly summary: file counts, extension groups, candidate files, small previews for selected text files, and cache policy. \
+            Use this only when the context router has no cached material index, the user explicitly asks to refresh/sync, or a specific new folder must be indexed. \
+            After a cache hit, reuse the index and read only selected files instead of indexing the same broad folder again.""")
     public String index_directory_materials(
             @ToolParam(description = "Absolute or relative directory path") String directoryPath,
             @ToolParam(description = "Maximum number of files to scan, default 80, hard cap 200", required = false) Integer maxFiles,
@@ -175,6 +176,10 @@ public class DirectoryMaterialsIndexTool {
             result.set("files", filesJson);
             result.set("textPreviews", previewsJson);
             result.set("usageHint", "先依据 extensionSummary 和 textPreviews 确定候选文件，再按需调用 read_file / extract_document_text 读取少量相关文件。");
+            result.set("cacheHit", false);
+            result.set("cacheTtlMinutes", 30);
+            result.set("cachePolicy", buildCachePolicy(false));
+            result.set("nextAction", "按当前任务从 files/textPreviews 中选择少量候选材料读取；不要在同一轮对话继续重建同一大目录索引。");
             if (truncated) {
                 result.set("message", "目录索引已截断。请缩小目录范围、降低 maxDepth，或分子目录继续索引。");
             }
@@ -268,10 +273,25 @@ public class DirectoryMaterialsIndexTool {
             JSONObject obj = JSONUtil.parseObj(cached);
             obj.set("cacheHit", true);
             obj.set("usageHint", "已复用缓存资料索引；除非用户要求刷新/同步，不要再次遍历同一目录。");
+            obj.set("cacheTtlMinutes", 30);
+            obj.set("cachePolicy", buildCachePolicy(true));
+            obj.set("nextAction", "直接使用缓存 files/textPreviews 选择候选材料；如果资料不足，请提示用户导入/绑定知识库或明确要求刷新，不要重复调用 index_directory_materials。");
             return JSONUtil.toJsonPrettyStr(obj);
         } catch (Exception ignored) {
             return cached;
         }
+    }
+
+    private JSONObject buildCachePolicy(boolean cacheHit) {
+        JSONObject policy = new JSONObject();
+        policy.set("scope", "workspace-materials-directory");
+        policy.set("cacheHit", cacheHit);
+        policy.set("reuseForSameDirectory", true);
+        policy.set("refreshOnlyWhenUserRequestsRefresh", true);
+        policy.set("stopRepeatingTraversal", true);
+        policy.set("preferredFollowUp", "read_selected_files_or_use_knowledge_base");
+        policy.set("blockedFollowUp", "repeat_material_index_for_same_broad_directory");
+        return policy;
     }
 
     private String errorResult(String directoryPath, String message) {

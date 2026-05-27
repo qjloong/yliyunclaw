@@ -360,12 +360,14 @@ export default {
     projectChangesSummary: '变更摘要',
     projectChangesFiles: '当前 Project 变更文件',
     projectChangesLatestReply: '最近一次回复改动',
+    projectChangesGeneratedFiles: '最近一次回复生成文件',
     projectChangesHistory: '最近 Review 记录',
     projectChangesEmpty: '当前还没有可展示的 Project 变更。',
     projectChangesRecentUnknown: '最近一次',
     projectChangesOpenProject: '打开目录',
     projectChangesRevealProject: '定位目录',
     projectChangesOpenFile: '打开文件',
+    projectChangesDownloadFile: '下载文件',
     projectChangesRevealFile: '定位文件',
     projectChangesOpenFailed: '打开本地路径失败',
     executionOverviewTitle: '执行概览',
@@ -429,6 +431,7 @@ export default {
       sourcesLabel: '来源轨迹',
       retrievedSourcesLabel: '检索来源',
       citedSourcesLabel: '回答引用来源',
+      teacherRuleLabel: 'Teacher 规则包证据',
       templateFallback: '内置模板',
       titleFallback: '样例任务',
       status: {
@@ -2716,5 +2719,10 @@ export default {
     listSkillFiles: '列出技能文件',
     listAvailableSkills: '列出可用技能',
     readSkillFile: '读取技能文件',
+
+    // HTML export
+    renderHtml: '生成 HTML 报表',
+    renderHtmlFromFile: '从文件生成 HTML 报表',
+    renderHtmlFromFiles: '汇总文件生成 HTML 报表',
   },
 } as const

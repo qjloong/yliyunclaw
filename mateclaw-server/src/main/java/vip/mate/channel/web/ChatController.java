@@ -265,21 +265,108 @@ public class ChatController {
                     ));
 
                     if ("denied".equals(decision)) {
-                        String denyMsg = "用户拒绝执行工具 " + pending.getToolName();
-                        MessageEntity savedAssistant = conversationService.saveMessage(conversationId, "assistant", denyMsg);
                         broadcastEvent(conversationId, "message_start", Map.of("role", "assistant"));
-                        broadcastEvent(conversationId, "content_delta", Map.of("delta", denyMsg));
-                        broadcastEvent(conversationId, "message_complete", Map.of("status", "completed"));
-                        broadcastEvent(conversationId, "done", buildDonePayload(
-                                conversationId, "completed", savedAssistant, 0, 0, true,
-                                conversationService.getMessageCount(conversationId)));
-                        // deny 是正常 turn 终结，用户可能在 awaiting_approval 阶段排了消息
-                        ChatStreamTracker.CompletionResult denyCr = streamTracker.completeAndConsumeIfLast(conversationId);
-                        if (denyCr.allDone() && denyCr.queuedInput() != null) {
-                            startQueuedMessage(conversationId, emitter, approvalEmitterDone, denyCr.queuedInput(), username);
-                        } else {
-                            completeEmitterQuietly(emitter, approvalEmitterDone);
+                        ConversationEntity denyConversation = conversationService.getConversation(conversationId);
+                        String denyRuntimeMode = conversationService.resolveEffectiveRuntimeMode(denyConversation, null);
+                        ConversationService.RuntimeModelSelection denyRuntimeModelSelection =
+                                conversationService.resolveEffectiveRuntimeModelSelection(
+                                        denyConversation,
+                                        request.getRuntimeProviderId(),
+                                        request.getRuntimeModelName());
+                        vip.mate.agent.context.ChatOrigin denyOrigin =
+                                approvalService.restoreChatOrigin(pending.getChatOrigin());
+                        if (denyOrigin == vip.mate.agent.context.ChatOrigin.EMPTY) {
+                            String denyWorkingDirectory = conversationService.resolveEffectiveWorkingDirectory(
+                                    denyConversation, workspaceId, null);
+                            denyOrigin = vip.mate.agent.context.ChatOrigin.web(
+                                    conversationId,
+                                    username,
+                                    denyConversation != null ? denyConversation.getWorkspaceId() : workspaceId,
+                                    denyWorkingDirectory);
                         }
+                        String fallbackPrompt = "用户拒绝执行工具 `" + pending.getToolName() + "`。"
+                                + "不要再次调用该工具，也不要把拒绝本身当作最终答案。"
+                                + "请基于当前对话、已绑定知识库、规则包、会话材料和已有上下文继续回答原问题；"
+                                + "如果缺少该工具结果，请明确说明本次未使用该工具，并给出无需该工具也能完成的最小可用答复或替代路径。";
+
+                        streamTracker.incrementFlux(conversationId);
+                        Disposable disposable = agentService.chatStructuredStream(
+                                agentId,
+                                fallbackPrompt,
+                                conversationId,
+                                username,
+                                request.getThinkingLevel(),
+                                denyRuntimeMode,
+                                denyRuntimeModelSelection.runtimeProviderId(),
+                                denyRuntimeModelSelection.runtimeModelName(),
+                                denyOrigin)
+                                .doOnNext(delta -> {
+                                    if (approvalEmitterDone.get()) return;
+                                    try {
+                                        accumulator.accept(delta, conversationId);
+                                    } catch (Exception e) {
+                                        log.warn("SSE deny fallback broadcast error: {}", e.getMessage());
+                                    }
+                                })
+                                .doOnComplete(() -> {
+                                    if (!finalized.compareAndSet(false, true)) return;
+                                    boolean wasStopped = streamTracker.isStopRequested(conversationId);
+                                    ChatStreamTracker.InterruptType interruptType = streamTracker.getInterruptType(conversationId);
+                                    boolean isError = accumulator.getContent() != null
+                                            && accumulator.getContent().startsWith("[错误] ");
+                                    String persistStatus = derivePersistStatus(
+                                            accumulator.isAwaitingApproval(), isError, wasStopped, interruptType);
+                                    try {
+                                        MessageEntity savedAssistant = null;
+                                        List<MessageContentPart> assistantParts = accumulator.toAssistantParts();
+                                        String assistantText = accumulator.getContent();
+                                        if (!assistantText.isBlank() || !assistantParts.isEmpty()) {
+                                            String savedText = assistantText.isBlank()
+                                                    ? "用户拒绝执行工具 " + pending.getToolName() + "，本次未产生可保存的替代回答。"
+                                                    : assistantText;
+                                            savedAssistant = conversationService.saveMessage(
+                                                    conversationId, "assistant", savedText, assistantParts, persistStatus);
+                                        }
+                                        broadcastEvent(conversationId, "message_complete", Map.of("status", persistStatus));
+                                        broadcastEvent(conversationId, "done", buildDonePayload(
+                                                conversationId,
+                                                persistStatus,
+                                                savedAssistant,
+                                                accumulator.getPromptTokens(),
+                                                accumulator.getCompletionTokens(),
+                                                true,
+                                                conversationService.getMessageCount(conversationId)));
+                                        ChatStreamTracker.CompletionResult denyCr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                        if (denyCr.allDone() && denyCr.queuedInput() != null) {
+                                            startQueuedMessage(conversationId, emitter, approvalEmitterDone, denyCr.queuedInput(), username);
+                                        } else {
+                                            completeEmitterQuietly(emitter, approvalEmitterDone);
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("SSE deny fallback finalize error: {}", e.getMessage(), e);
+                                        completeEmitterQuietly(emitter, approvalEmitterDone);
+                                    }
+                                })
+                                .doOnError(err -> {
+                                    if (!finalized.compareAndSet(false, true)) return;
+                                    log.error("SSE deny fallback stream error: {}", err.getMessage(), err);
+                                    try {
+                                        String fallbackMsg = "用户拒绝执行工具 " + pending.getToolName()
+                                                + "。该工具已取消，本次无法获取对应上下文；请补充材料或允许使用其他可用资料后继续。";
+                                        MessageEntity savedAssistant = conversationService.saveMessage(conversationId, "assistant", fallbackMsg);
+                                        broadcastEvent(conversationId, "content_delta", Map.of("delta", fallbackMsg));
+                                        broadcastEvent(conversationId, "message_complete", Map.of("status", "completed"));
+                                        broadcastEvent(conversationId, "done", buildDonePayload(
+                                                conversationId, "completed", savedAssistant, 0, 0, true,
+                                                conversationService.getMessageCount(conversationId)));
+                                    } catch (Exception ignored) {
+                                        // best effort
+                                    }
+                                    streamTracker.completeAndConsumeIfLast(conversationId);
+                                    completeEmitterQuietly(emitter, approvalEmitterDone);
+                                })
+                                .subscribe();
+                        streamTracker.setDisposable(conversationId, disposable);
                         return;
                     }
 
@@ -1807,6 +1894,7 @@ public class ChatController {
         private List<String> planSteps = List.of();
         private Integer currentPlanStep = null;
         private Map<String, Object> pendingApproval = null;
+        private Map<String, Object> teacherWorkflow = null;
         private final Set<String> selectedSkillObservedTools = new LinkedHashSet<>();
 
         private StreamAccumulator(ChatExecutionSelection executionSelection) {
@@ -1972,6 +2060,9 @@ public class ChatController {
                 if (data.containsKey("findings")) pendingApproval.put("findings", data.get("findings"));
                 if (data.containsKey("maxSeverity")) pendingApproval.put("maxSeverity", data.get("maxSeverity"));
                 if (data.containsKey("summary")) pendingApproval.put("summary", data.get("summary"));
+                if (data.containsKey("workspaceBasePath")) pendingApproval.put("workspaceBasePath", data.get("workspaceBasePath"));
+                if (data.containsKey("projectPath")) pendingApproval.put("projectPath", data.get("projectPath"));
+                if (data.containsKey("approvalKey")) pendingApproval.put("approvalKey", data.get("approvalKey"));
                 streamTracker.updatePhase(conversationId, "awaiting_approval");
             } else if ("tool_approval_resolved".equals(eventType)) {
                 if (pendingApproval != null) {
@@ -2017,6 +2108,12 @@ public class ChatController {
                         data.getOrDefault("delta", "")));
                 if (!warning.isBlank()) {
                     warnings.add(warning);
+                }
+            } else if ("teacher_workflow".equals(eventType)) {
+                teacherWorkflow = new LinkedHashMap<>(data);
+                Object state = data.get("state");
+                if (state != null && !String.valueOf(state).isBlank()) {
+                    currentPhase = "teacher_" + String.valueOf(state);
                 }
             } else if ("tool_call_started".equals(eventType)) {
                 String startedToolName = String.valueOf(data.getOrDefault("toolName", ""));
@@ -2392,6 +2489,9 @@ public class ChatController {
                 }
                 if (pendingApproval != null && !pendingApproval.isEmpty()) {
                     metadata.put("pendingApproval", pendingApproval);
+                }
+                if (teacherWorkflow != null && !teacherWorkflow.isEmpty()) {
+                    metadata.put("teacherWorkflow", teacherWorkflow);
                 }
                 if (!browserActions.isEmpty()) {
                     metadata.put("browserActions", browserActions);

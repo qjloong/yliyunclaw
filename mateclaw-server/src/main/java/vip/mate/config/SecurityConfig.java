@@ -81,6 +81,12 @@ public class SecurityConfig {
                 ).hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/settings").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/v1/settings").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/teacher/rule-packs/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/teacher/rule-packs/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/teacher/skills/bindings").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/teacher/skills/bindings").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/v1/teacher/improvements/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/teacher/improvements/**").hasRole("ADMIN")
 
                 // Model/provider administration. Read-only model summaries remain available
                 // to normal users because chat and agent pages need the active/default model.

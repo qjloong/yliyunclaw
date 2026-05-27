@@ -46,6 +46,9 @@ public class ToolEntity {
     /** 是否启用 */
     private Boolean enabled;
 
+    /** 是否允许在 Agent 配置中手动绑定 */
+    private Boolean bindable;
+
     /** 是否系统内置 */
     private Boolean builtin;
 

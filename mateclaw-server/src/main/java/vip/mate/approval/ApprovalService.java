@@ -161,6 +161,15 @@ public class ApprovalService {
                 if (pending.getSummary() != null) {
                     entry.put("summary", pending.getSummary());
                 }
+                if (pending.getWorkspaceId() != null) {
+                    entry.put("workspaceId", pending.getWorkspaceId());
+                }
+                if (pending.getProjectPath() != null) {
+                    entry.put("projectPath", pending.getProjectPath());
+                }
+                if (pending.getApprovalKey() != null) {
+                    entry.put("approvalKey", pending.getApprovalKey());
+                }
                 result.add(entry);
             }
         }

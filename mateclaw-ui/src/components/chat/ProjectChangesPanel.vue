@@ -194,8 +194,21 @@
                 <button class="project-changes-action" type="button" @click.stop="handleOpenFile(file.path)">
                   {{ t('chat.projectChangesOpenFile') }}
                 </button>
+                <button
+                  v-if="isPreviewableProjectFile(file.path)"
+                  class="project-changes-action"
+                  type="button"
+                  @click.stop="handleOpenFile(file.path)"
+                >
+                  预览
+                </button>
                 <button class="project-changes-action project-changes-action--ghost" type="button" @click.stop="handleRevealFile(file.path)">
                   {{ t('chat.projectChangesRevealFile') }}
+                </button>
+              </div>
+              <div v-else-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
+                <button class="project-changes-action" type="button" @click.stop="handleDownloadGeneratedArtifactByPath(file.path)">
+                  {{ t('chat.projectChangesDownloadFile') }}
                 </button>
               </div>
             </div>
@@ -218,8 +231,21 @@
                 <button class="project-changes-action" type="button" @click.stop="handleOpenFile(file.path)">
                   {{ t('chat.projectChangesOpenFile') }}
                 </button>
+                <button
+                  v-if="isPreviewableProjectFile(file.path)"
+                  class="project-changes-action"
+                  type="button"
+                  @click.stop="handleOpenFile(file.path)"
+                >
+                  预览
+                </button>
                 <button class="project-changes-action project-changes-action--ghost" type="button" @click.stop="handleRevealFile(file.path)">
                   {{ t('chat.projectChangesRevealFile') }}
+                </button>
+              </div>
+              <div v-else-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
+                <button class="project-changes-action" type="button" @click.stop="handleDownloadGeneratedArtifactByPath(file.path)">
+                  {{ t('chat.projectChangesDownloadFile') }}
                 </button>
               </div>
               <div class="project-file-row__detail-meta">
@@ -248,6 +274,30 @@
                 <span v-if="typeof item.exitCode === 'number'">exit {{ item.exitCode }}</span>
               </div>
               <div v-if="item.result" class="project-file-row__summary-text">{{ item.result }}</div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section v-if="latestGeneratedArtifacts.length" class="project-changes-section">
+        <div class="project-changes-section__title">{{ t('chat.projectChangesGeneratedFiles') }}</div>
+        <div class="project-changes-list">
+          <details v-for="artifact in latestGeneratedArtifacts" :key="`artifact-${artifact.url || artifact.path || artifact.name}`" class="project-file-row project-file-row--latest">
+            <summary class="project-file-row__summary">
+              <span class="project-changes-item__badge is-added">AI</span>
+              <span class="project-file-row__path" :title="artifactDisplayPath(artifact)">{{ artifactDisplayName(artifact) }}</span>
+            </summary>
+            <div class="project-file-row__body">
+              <div class="project-changes-item__actions">
+                <button class="project-changes-action" type="button" :disabled="!artifact.url" @click.stop="handleDownloadGeneratedArtifact(artifact)">
+                  {{ t('chat.projectChangesDownloadFile') }}
+                </button>
+              </div>
+              <div class="project-file-row__detail-meta">
+                <span v-if="artifact.path">{{ normalizeFilePath(artifact.path) }}</span>
+                <span v-if="artifact.mimeType">{{ artifact.mimeType }}</span>
+                <span v-if="artifact.source">{{ artifact.source }}</span>
+              </div>
             </div>
           </details>
         </div>
@@ -380,7 +430,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { isDesktopRuntime, openDesktopPath, revealDesktopPath } from '@/utils/desktop'
-import type { CheckpointCapability, ContextRouterSessionSummary, ContextRouterSummary, FileChangeRecord, HarnessApproval, HarnessRun, HarnessStep, HarnessToolInvocation, Message, ProjectChangeRecord, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
+import type { CheckpointCapability, ContextRouterSessionSummary, ContextRouterSummary, FileChangeRecord, GeneratedArtifactRecord, HarnessApproval, HarnessRun, HarnessStep, HarnessToolInvocation, Message, ProjectChangeRecord, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
 
 interface Props {
   messages: Message[]
@@ -492,6 +542,121 @@ function handleOpenFile(filePath: string) {
 
 function handleRevealFile(filePath: string) {
   void executeDesktopAction(resolveTargetPath(filePath), 'reveal')
+}
+
+function isPreviewableProjectFile(filePath?: string) {
+  return /\.(html?|md|txt|json|csv|log)$/i.test(filePath || '')
+}
+
+function resolveArtifactUrl(url: string) {
+  const trimmed = String(url || '').trim()
+  if (!trimmed) return ''
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  if (trimmed.startsWith('/')) return `${window.location.origin}${trimmed}`
+  return trimmed
+}
+
+function artifactDisplayName(artifact: GeneratedArtifactRecord) {
+  const explicit = String(artifact.name || '').trim()
+  if (explicit) return explicit
+  if (artifact.path) return normalizeFilePath(artifact.path)
+  return normalizeFilePath(String(artifact.url || 'generated-file'))
+}
+
+function artifactDisplayPath(artifact: GeneratedArtifactRecord) {
+  return normalizeFilePath(String(artifact.path || artifact.url || artifact.name || ''))
+}
+
+function handleDownloadGeneratedArtifact(artifact: GeneratedArtifactRecord) {
+  const rawUrl = resolveArtifactUrl(String(artifact.url || ''))
+  if (!rawUrl) {
+    ElMessage.error(t('chat.downloadFailed'))
+    return
+  }
+  const filename = artifactDisplayName(artifact)
+  const isPreviewable = /\.(html?|xhtml|txt|md|json|csv|log)$/i.test(filename)
+  const baseUrl = rawUrl.replace(/\/inline$/, '')
+  const link = document.createElement('a')
+  if (isPreviewable) {
+    link.href = `${baseUrl}/inline`
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+  } else {
+    link.href = baseUrl
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    link.download = filename
+  }
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+const generatedArtifactDownloadByPath = computed(() => {
+  const map = new Map<string, string>()
+
+  function tryCollect(rawResult: unknown) {
+    if (!rawResult) return
+    try {
+      const parsed = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult
+      if (parsed && typeof parsed === 'object' && (parsed as any).apiUrl && (parsed as any).filePath && !(parsed as any).error) {
+        const key = normalizeFilePath(String((parsed as any).filePath)).toLowerCase()
+        if (key) map.set(key, String((parsed as any).apiUrl))
+      }
+    } catch {
+      // ignore non-JSON tool results
+    }
+  }
+
+  // 1. From ReviewSummary.generatedArtifacts (harness-based artifacts)
+  const artifacts = latestReviewSummary.value?.generatedArtifacts
+  if (Array.isArray(artifacts)) {
+    for (const artifact of artifacts) {
+      if (!artifact?.url || !artifact.path) continue
+      const key = normalizeFilePath(String(artifact.path)).toLowerCase()
+      if (!key) continue
+      map.set(key, String(artifact.url))
+    }
+  }
+
+  // 2. From tool call results in messages (apiUrl returned by export/write tools)
+  for (const msg of props.messages) {
+    const rawMeta = msg?.metadata
+    let meta: any = null
+    try { meta = typeof rawMeta === 'string' ? JSON.parse(rawMeta) : rawMeta } catch { /* ignore */ }
+    const toolCalls: any[] = Array.isArray(meta?.toolCalls) ? meta.toolCalls : []
+    for (const tc of toolCalls) {
+      tryCollect(tc?.result)
+    }
+  }
+
+  return map
+})
+
+function resolveGeneratedArtifactDownloadUrl(filePath?: string) {
+  const normalizedPath = normalizeFilePath(String(filePath || '')).toLowerCase()
+  if (!normalizedPath) return ''
+  const direct = generatedArtifactDownloadByPath.value.get(normalizedPath)
+  if (direct) return direct
+  for (const [key, url] of generatedArtifactDownloadByPath.value.entries()) {
+    if (key.endsWith(normalizedPath) || normalizedPath.endsWith(key)) {
+      return url
+    }
+  }
+  return ''
+}
+
+function handleDownloadGeneratedArtifactByPath(filePath?: string) {
+  const url = resolveGeneratedArtifactDownloadUrl(filePath)
+  if (!url) {
+    ElMessage.error(t('chat.downloadFailed'))
+    return
+  }
+  handleDownloadGeneratedArtifact({
+    name: normalizeFilePath(String(filePath || 'generated-file')),
+    path: filePath,
+    url,
+  })
 }
 
 const getChangeTypeLabel = (changeType?: string) => {
@@ -963,6 +1128,52 @@ const latestReplyValidations = computed<ReviewValidationRecord[]>(() => {
   return Array.from(latestByKey.values())
     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
     .slice(0, 6)
+})
+
+const latestGeneratedArtifacts = computed<GeneratedArtifactRecord[]>(() => {
+  const dedup = new Map<string, GeneratedArtifactRecord>()
+
+  function tryCollect(rawResult: unknown) {
+    if (!rawResult) return
+    try {
+      const parsed = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult
+      if (parsed && typeof parsed === 'object' && (parsed as any).apiUrl && (parsed as any).filename && !(parsed as any).error) {
+        const key = String((parsed as any).apiUrl)
+        dedup.set(key, {
+          name: String((parsed as any).filename),
+          path: (parsed as any).filePath,
+          url: String((parsed as any).apiUrl),
+        })
+      }
+    } catch {
+      // ignore non-JSON tool results
+    }
+  }
+
+  // 1. From ReviewSummary.generatedArtifacts
+  const artifacts = latestReviewSummary.value?.generatedArtifacts
+  if (Array.isArray(artifacts)) {
+    for (const artifact of artifacts) {
+      if (!artifact) continue
+      const key = String(artifact.url || artifact.path || artifact.name || '').trim()
+      if (!key) continue
+      dedup.set(key, artifact)
+    }
+  }
+
+  // 2. From export/write tool results in the latest few assistant messages
+  const recentMessages = [...props.messages].reverse().slice(0, 10)
+  for (const msg of recentMessages) {
+    const rawMeta = msg?.metadata
+    let meta: any = null
+    try { meta = typeof rawMeta === 'string' ? JSON.parse(rawMeta) : rawMeta } catch { /* ignore */ }
+    const toolCalls: any[] = Array.isArray(meta?.toolCalls) ? meta.toolCalls : []
+    for (const tc of toolCalls) {
+      tryCollect(tc?.result)
+    }
+  }
+
+  return Array.from(dedup.values())
 })
 
 const projectFiles = computed<Array<ProjectChangeRecord | FileChangeRecord>>(() => {

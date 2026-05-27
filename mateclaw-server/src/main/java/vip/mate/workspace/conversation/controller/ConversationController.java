@@ -209,7 +209,7 @@ public class ConversationController {
     @Operation(summary = "导出 Teacher 试题结果为 Word")
     @PostMapping("/{conversationId}/teacher-export")
     public R<Map<String, String>> exportTeacherPaper(@PathVariable String conversationId,
-                                                     @RequestBody Map<String, String> body,
+                                                     @RequestBody Map<String, Object> body,
                                                      Authentication auth,
                                                      @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
@@ -221,11 +221,23 @@ public class ConversationController {
             return R.fail(404, "会话不存在");
         }
 
-        String markdown = blankToNull(body.get("markdown"));
+        String markdown = blankToNull(asString(body.get("markdown")));
         if (!StringUtils.hasText(markdown)) {
             return R.fail("导出内容不能为空");
         }
-        String format = body.getOrDefault("format", "docx").trim().toLowerCase(Locale.ROOT);
+        String mode = asString(body.getOrDefault("mode", "full")).trim().toLowerCase(Locale.ROOT);
+        if (!"questions".equals(mode) && !"full".equals(mode)) {
+            return R.fail("导出模式不合法");
+        }
+        String sectionKeys = String.valueOf(body.getOrDefault("sectionKeys", ""));
+        if ("questions".equals(mode)) {
+            if (!sectionKeys.contains("questions") || containsTeacherAnswerSections(markdown)) {
+                return R.fail("仅试题版 Word 不能包含答案、采分点、来源或审核内容");
+            }
+        } else if (!containsTeacherFullSections(markdown)) {
+            return R.fail("完整版 Word 必须包含试题、参考答案、采分点和来源区块");
+        }
+        String format = asString(body.getOrDefault("format", "docx")).trim().toLowerCase(Locale.ROOT);
         if (!"docx".equals(format)) {
             return R.fail("当前仅支持导出为 Word(docx)");
         }
@@ -236,15 +248,15 @@ public class ConversationController {
             Path projectDir = StringUtils.hasText(effectiveWorkingDirectory)
                     ? Paths.get(effectiveWorkingDirectory).toAbsolutePath().normalize()
                     : null;
-            Path target = docxExportService.resolveOutputPath(projectDir, body.get("outputPath"), body.get("filename"));
+            Path target = docxExportService.resolveOutputPath(projectDir, asString(body.get("outputPath")), asString(body.get("filename")));
             if (projectDir != null && target != null && !target.toAbsolutePath().normalize().startsWith(projectDir)) {
                 return R.fail("导出路径必须位于当前项目绑定目录内");
             }
 
             DocxExportService.ExportedDocx exported = docxExportService.exportMarkdown(
                     markdown,
-                    body.get("filename"),
-                    body.get("pageSize"),
+                    asString(body.get("filename")),
+                    asString(body.get("pageSize")),
                     target);
             return R.ok(Map.of(
                     "format", format,
@@ -277,6 +289,39 @@ public class ConversationController {
 
     private String blankToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String asString(Object value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
+    private boolean containsTeacherQuestionSection(String markdown) {
+        return markdown != null
+                && markdown.matches("(?s).*#{1,6}\\s*(试题|试题内容|正式试题|题目|试卷)(?:\\s|[:：#]|$).*");
+    }
+
+    private boolean containsTeacherAnswerSections(String markdown) {
+        return markdown != null
+                && markdown.matches("(?s).*#{1,6}\\s*(参考答案|答案|采分点|评分标准|评分细则|来源依据|来源|命题质量审核|质量审核)(?:\\s|[:：#]|$).*");
+    }
+
+    private boolean containsTeacherFullSections(String markdown) {
+        return containsTeacherQuestionSection(markdown)
+                && containsTeacherHeading(markdown, "参考答案", "答案")
+                && containsTeacherHeading(markdown, "采分点", "评分标准", "评分细则")
+                && containsTeacherHeading(markdown, "来源依据", "来源");
+    }
+
+    private boolean containsTeacherHeading(String markdown, String... headings) {
+        if (markdown == null || headings == null) {
+            return false;
+        }
+        for (String heading : headings) {
+            if (heading != null && markdown.matches("(?s).*#{1,6}\\s*" + java.util.regex.Pattern.quote(heading) + "(?:\\s|[:：#]|$).*")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

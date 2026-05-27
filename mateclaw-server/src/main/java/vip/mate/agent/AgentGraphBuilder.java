@@ -349,7 +349,7 @@ public class AgentGraphBuilder {
         CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId, templateMetadataJson);
         return new StateGraphPlanExecuteAgent(chatClient, conversationService, graph, planningService,
             chatModel, conversationWindowManager, imageVisionService, harnessRunService,
-            toolSet != null ? toolSet.callbacks() : List.of());
+            toolSet != null ? toolSet.callbacks() : List.of(), systemSettingService);
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
@@ -1178,8 +1178,9 @@ public class AgentGraphBuilder {
                     - For reusable materials, prefer Wiki/Knowledge Base scan -> process -> bind to Agent -> use in chat.
                     - If directory materials are outside the current workspace boundary or permissions block direct reads, stop retrying shell/path probes and clearly ask the user to approve the required action or import/bind the knowledge base.
                     - If the preferred path is blocked or materials are insufficient, stay goal-oriented: offer the closest feasible continuation path (approve access, use bound knowledge bases, use session materials, narrow to a subfolder, or ask for one minimal clarification) instead of ending with a blunt failure.
-                        - For export, first use whatever export-capable tool/skill is actually exposed by the current runtime. Prefer built-in `renderDocxFromFile` / `renderDocxFromFiles` / `renderDocx` or an equivalent bound document skill when available.
-                        - If the user does not specify an export path, default to the current project/workspace `output/` directory and create it when needed.
+                        - For export, first use whatever export-capable tool/skill is actually exposed by the current runtime. Prefer built-in `renderHtmlFromFile` / `renderHtmlFromFiles` / `renderHtml` for HTML output, and `renderDocxFromFile` / `renderDocxFromFiles` / `renderDocx` for Word output, or an equivalent bound document skill when available.
+                        - Do NOT emit large final HTML documents through raw `write_file` tool arguments when an HTML render tool is available; instead write markdown to disk and call the HTML render tool from file(s).
+                        - If the user does not specify an export path, default to the current project/workspace `output/<workspace-name>/` directory and create it when needed.
                         - Only fall back to Markdown/JSON delivery when no export-capable tool or skill is currently available.
                     """);
             }

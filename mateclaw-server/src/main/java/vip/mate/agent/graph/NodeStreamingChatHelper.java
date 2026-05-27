@@ -819,20 +819,24 @@ public class NodeStreamingChatHelper {
                         var usage = chatResponse.getMetadata().getUsage();
                         Integer pt = usage.getPromptTokens();
                         Integer ct = usage.getCompletionTokens();
+                        boolean hasPromptTokens = pt != null && pt > 0;
+                        boolean hasCompletionTokens = ct != null && ct > 0;
                         if (pt != null && pt > 0) {
                             promptTokens.set(pt.intValue());
                         }
                         if (ct != null && ct > 0) {
                             completionTokens.set(ct.intValue());
                         }
-                        log.debug("[{}] Chunk usage: promptTokens={}, completionTokens={}: conversationId={}",
-                                phase, pt, ct, conversationId);
+                        if (hasPromptTokens || hasCompletionTokens) {
+                            log.debug("[{}] Chunk usage: promptTokens={}, completionTokens={}: conversationId={}",
+                                    phase, pt, ct, conversationId);
+                        }
                         // RFC-014: 反射抽取 Anthropic prompt cache 字段（DashScope/OpenAI 自然返回 0）
                         var cache = vip.mate.llm.cache.CacheUsageExtractor.extract(usage);
                         if (cache.cacheReadTokens() > 0)  cacheReadTokens.set(cache.cacheReadTokens());
                         if (cache.cacheWriteTokens() > 0) cacheWriteTokens.set(cache.cacheWriteTokens());
-                    } else if (chatResponse.getMetadata() != null) {
-                        log.debug("[{}] Chunk metadata present but usage is null: conversationId={}", phase, conversationId);
+                    } else if (chatResponse.getMetadata() != null && log.isTraceEnabled()) {
+                        log.trace("[{}] Chunk metadata present but usage is null: conversationId={}", phase, conversationId);
                     }
                 })
                 .doOnComplete(estimateTokensIfMissing)

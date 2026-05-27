@@ -4,8 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import vip.mate.tool.model.ToolEntity;
 import vip.mate.tool.repository.ToolMapper;
 
@@ -251,6 +255,80 @@ public class ToolRegistry {
         return names;
     }
 
+    @EventListener(ApplicationReadyEvent.class)
+    public void syncBuiltinToolEntities() {
+        try {
+            LinkedHashMap<String, Object> beansByName = getEnabledToolBeansByName();
+            int inserted = 0;
+            int updated = 0;
+            for (Map.Entry<String, Object> entry : beansByName.entrySet()) {
+                String beanName = entry.getKey();
+                Object bean = entry.getValue();
+                for (ToolCallback cb : ToolCallbacks.from(bean)) {
+                    ToolDefinition definition = cb.getToolDefinition();
+                    if (definition == null || !StringUtils.hasText(definition.name())) {
+                        continue;
+                    }
+                    ToolEntity existing = toolMapper.selectOne(new LambdaQueryWrapper<ToolEntity>()
+                            .eq(ToolEntity::getName, definition.name())
+                            .last("LIMIT 1"));
+                    if (existing == null) {
+                        ToolEntity entity = new ToolEntity();
+                        entity.setName(definition.name());
+                        entity.setDisplayName(definition.name());
+                        entity.setDescription(definition.description());
+                        entity.setToolType("builtin");
+                        entity.setBeanName(beanName);
+                        entity.setBuiltin(true);
+                        entity.setEnabled(true);
+                        entity.setBindable(false);
+                        toolMapper.insert(entity);
+                        inserted++;
+                        continue;
+                    }
+
+                    boolean changed = false;
+                    if (!Boolean.TRUE.equals(existing.getBuiltin())) {
+                        existing.setBuiltin(true);
+                        changed = true;
+                    }
+                    if (!"builtin".equalsIgnoreCase(String.valueOf(existing.getToolType()))) {
+                        existing.setToolType("builtin");
+                        changed = true;
+                    }
+                    if (!StringUtils.hasText(existing.getBeanName()) || !beanName.equals(existing.getBeanName())) {
+                        existing.setBeanName(beanName);
+                        changed = true;
+                    }
+                    if (!StringUtils.hasText(existing.getDisplayName())) {
+                        existing.setDisplayName(definition.name());
+                        changed = true;
+                    }
+                    if (!StringUtils.hasText(existing.getDescription()) && StringUtils.hasText(definition.description())) {
+                        existing.setDescription(definition.description());
+                        changed = true;
+                    }
+                    if (existing.getEnabled() == null) {
+                        existing.setEnabled(true);
+                        changed = true;
+                    }
+                    Boolean desiredBindable = resolveBindableForExisting(existing, definition);
+                    if (desiredBindable != null && !desiredBindable.equals(existing.getBindable())) {
+                        existing.setBindable(desiredBindable);
+                        changed = true;
+                    }
+                    if (changed) {
+                        toolMapper.updateById(existing);
+                        updated++;
+                    }
+                }
+            }
+            log.info("[ToolRegistry] Synced builtin tools into mate_tool: inserted={}, updated={}", inserted, updated);
+        } catch (Exception e) {
+            log.warn("[ToolRegistry] Failed to sync builtin tools into mate_tool: {}", e.getMessage(), e);
+        }
+    }
+
     /**
      * 获取数据库中的工具配置列表（全部）
      */
@@ -267,5 +345,44 @@ public class ToolRegistry {
         return toolMapper.selectList(new LambdaQueryWrapper<ToolEntity>()
                 .eq(ToolEntity::getEnabled, true)
                 .orderByAsc(ToolEntity::getName));
+    }
+
+    /**
+     * 获取允许在 Agent 配置页中手动绑定的工具列表。
+     */
+    public List<ToolEntity> listBindableToolEntities() {
+        return toolMapper.selectList(new LambdaQueryWrapper<ToolEntity>()
+                .eq(ToolEntity::getEnabled, true)
+                .eq(ToolEntity::getBindable, true)
+                .orderByDesc(ToolEntity::getBuiltin)
+                .orderByAsc(ToolEntity::getName));
+    }
+
+    private Boolean resolveBindableForExisting(ToolEntity existing, ToolDefinition definition) {
+        if (existing.getBindable() == null) {
+            return isAutoSyncedRuntimeEntry(existing, definition) ? Boolean.FALSE : Boolean.TRUE;
+        }
+        if (isAutoSyncedRuntimeEntry(existing, definition) && Boolean.TRUE.equals(existing.getBuiltin())) {
+            return Boolean.FALSE;
+        }
+        return existing.getBindable();
+    }
+
+    private boolean isAutoSyncedRuntimeEntry(ToolEntity existing, ToolDefinition definition) {
+        if (existing == null || definition == null) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(existing.getBuiltin())) {
+            return false;
+        }
+        if (!StringUtils.hasText(existing.getName()) || !existing.getName().equals(definition.name())) {
+            return false;
+        }
+        boolean rawDisplayName = !StringUtils.hasText(existing.getDisplayName())
+                || existing.getDisplayName().equals(definition.name());
+        boolean rawDescription = !StringUtils.hasText(existing.getDescription())
+                || existing.getDescription().equals(definition.description());
+        boolean noIcon = !StringUtils.hasText(existing.getIcon());
+        return rawDisplayName && rawDescription && noIcon;
     }
 }

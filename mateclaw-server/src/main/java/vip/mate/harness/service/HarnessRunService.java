@@ -16,6 +16,7 @@ import vip.mate.harness.model.HarnessRun;
 import vip.mate.harness.model.HarnessRunStatus;
 import vip.mate.harness.model.HarnessStep;
 import vip.mate.harness.model.HarnessToolInvocation;
+import vip.mate.teacher.service.TeacherAcceptanceService;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -43,6 +44,7 @@ public class HarnessRunService {
 
     private final ToolApprovalMapper toolApprovalMapper;
     private final ObjectMapper objectMapper;
+    private final TeacherAcceptanceService teacherAcceptanceService;
     private final Map<String, HarnessRun> runs = new ConcurrentHashMap<>();
 
     public HarnessRun startRun(String mode, String conversationId, String agentId, String agentName) {
@@ -567,6 +569,9 @@ public class HarnessRunService {
         int writeToolCount = 0;
         int validationToolCount = 0;
         int knowledgeToolCount = 0;
+        int directoryTraversalToolCount = 0;
+        int materialIndexToolCount = 0;
+        int directoryCacheHitCount = 0;
         PatchEvidence patchEvidence = new PatchEvidence();
         SourceCitationEvidence citationEvidence = new SourceCitationEvidence();
         Set<String> touchedFiles = new HashSet<>();
@@ -590,8 +595,18 @@ public class HarnessRunService {
             if (isKnowledgeTool(normalizedToolName)) {
                 knowledgeToolCount++;
             }
+            if (containsAny(normalizedToolName, "list_directory", "list_dir")) {
+                directoryTraversalToolCount++;
+            }
+            if (containsAny(normalizedToolName, "index_directory_materials", "directory_materials")) {
+                materialIndexToolCount++;
+            }
+            Object result = invocation.getMetadata().get("result");
+            if (result != null && containsAny(normalizeText(String.valueOf(result)), "\"cachehit\" true", "cachehit true")) {
+                directoryCacheHitCount++;
+            }
             collectFileEvidence(touchedFiles, invocation.getMetadata().get("arguments"));
-            collectFileEvidence(touchedFiles, invocation.getMetadata().get("result"));
+            collectFileEvidence(touchedFiles, result);
             collectPatchEvidence(invocation, patchEvidence);
             collectKnowledgeCitationEvidence(invocation, citationEvidence);
             collectValidationEvidence(invocation, validationCommands, validationResults);
@@ -633,6 +648,18 @@ public class HarnessRunService {
         boolean mentionsPatternAnalysis = containsAny(normalizedPreview, "\u89c4\u5f8b", "\u5206\u6790", "\u8303\u9898");
         boolean mentionsRewrite = containsAny(normalizedPreview, "\u4eff\u5199", "\u6539\u5199", "\u540c\u98ce\u683c");
         boolean mentionsBookMultiplicity = countOccurrences(preview, "\u300a") >= 2;
+        boolean teacherMentionsClassicRulePack = teacherTemplate
+                && containsAny(normalizedPreview, "\u586b\u7a7a", "\u9009\u62e9", "\u7b80\u7b54", "\u5206\u6790", "\u63a2\u7a76");
+        boolean teacherMentionsQuestionMix = teacherTemplate
+                && containsAny(normalizedPreview, "10%", "20%", "15%", "30%", "25%",
+                "\u9898\u578b\u6bd4\u4f8b", "\u5fae\u5199\u4f5c", "\u9644\u52a0");
+        boolean teacherMentionsMaterialRequirement = teacherTemplate
+                && containsAny(normalizedPreview, "\u6750\u6599\u9898", "\u539f\u6587", "\u8282\u9009", "\u6765\u6e90\u4f9d\u636e");
+        boolean teacherMentionsOpenAnswerRequirement = teacherTemplate
+                && containsAny(normalizedPreview, "\u5f00\u653e\u9898", "\u8fa9\u8bba", "\u6279\u6ce8", "\u53c2\u8003\u65b9\u5411");
+        boolean teacherAvoidedRepeatedDirectoryScan = teacherTemplate
+                && directoryTraversalToolCount + materialIndexToolCount <= 1;
+        boolean teacherUsedDirectoryCache = teacherTemplate && directoryCacheHitCount > 0;
         boolean teacherAwaitingConfirmation = teacherTemplate
                 && ("awaiting_teacher_confirmation".equalsIgnoreCase(finishReason)
                 || preview.contains("teacher_exam_plan_state:awaiting_confirmation")
@@ -656,6 +683,18 @@ public class HarnessRunService {
                 && teacherHasRubricSection
                 && teacherHasQualityReviewSection
                 && teacherHasSourceSection;
+        TeacherAcceptanceService.TeacherAcceptanceResult teacherRuleAssessment = teacherTemplate
+                ? teacherAcceptanceService.assess(
+                preview,
+                teacherAwaitingConfirmation,
+                teacherStructuredSections,
+                teacherHasAnswerSection,
+                teacherHasRubricSection,
+                teacherHasSourceSection,
+                directoryTraversalToolCount,
+                materialIndexToolCount,
+                directoryCacheHitCount)
+                : TeacherAcceptanceService.TeacherAcceptanceResult.empty();
         int changedFileCount = !patchEvidence.changedFiles().isEmpty() ? patchEvidence.changedFiles().size() : touchedFiles.size();
         boolean focusedEdit = changedFileCount > 0 && changedFileCount <= 4;
         boolean broadEdit = changedFileCount > 6;
@@ -747,6 +786,9 @@ public class HarnessRunService {
         if (teacherStructuredGateFailed) {
             gateBlockers.add("missing teacher result sections");
         }
+        if (teacherTemplate) {
+            gateBlockers.addAll(teacherRuleAssessment.gateBlockers());
+        }
         if (teacherAwaitingConfirmation) {
             gateBlockers.add("awaiting teacher confirmation");
         }
@@ -816,6 +858,21 @@ public class HarnessRunService {
         }
         if (teacherStructuredSections) {
             evidence.add("teacher structured sections complete");
+        }
+        if (teacherMentionsClassicRulePack) {
+            evidence.add("teacher classic rule pack signals");
+        }
+        if (teacherMentionsQuestionMix) {
+            evidence.add("teacher question mix rule mentioned");
+        }
+        if (teacherMentionsMaterialRequirement) {
+            evidence.add("teacher material requirement mentioned");
+        }
+        if (teacherMentionsOpenAnswerRequirement) {
+            evidence.add("teacher open-answer requirement mentioned");
+        }
+        if (teacherTemplate && !teacherRuleAssessment.evidence().isEmpty()) {
+            evidence.addAll(teacherRuleAssessment.evidence());
         }
         if (!gateBlockers.isEmpty()) {
             evidence.add("gate blockers=" + String.join(" | ", gateBlockers));
@@ -943,6 +1000,7 @@ public class HarnessRunService {
             if (qualityReviewGateFailed) {
                 score -= 10;
             }
+            score += teacherRuleAssessment.scoreAdjustment();
         } else {
             if (mentionsFiles) {
                 score += 5;
@@ -1017,6 +1075,16 @@ public class HarnessRunService {
         signals.put("teacherHasSourceSection", teacherHasSourceSection);
         signals.put("teacherStructuredSections", teacherStructuredSections);
         signals.put("teacherStructuredGateFailed", teacherStructuredGateFailed);
+        signals.put("teacherMentionsClassicRulePack", teacherMentionsClassicRulePack);
+        signals.put("teacherMentionsQuestionMix", teacherMentionsQuestionMix);
+        signals.put("teacherMentionsMaterialRequirement", teacherMentionsMaterialRequirement);
+        signals.put("teacherMentionsOpenAnswerRequirement", teacherMentionsOpenAnswerRequirement);
+        signals.put("teacherDirectoryTraversalToolCount", directoryTraversalToolCount);
+        signals.put("teacherMaterialIndexToolCount", materialIndexToolCount);
+        signals.put("teacherDirectoryCacheHitCount", directoryCacheHitCount);
+        signals.put("teacherAvoidedRepeatedDirectoryScan", teacherAvoidedRepeatedDirectoryScan);
+        signals.put("teacherUsedDirectoryCache", teacherUsedDirectoryCache);
+        signals.putAll(teacherRuleAssessment.signals());
         signals.put("gateBlockers", List.copyOf(gateBlockers));
         signals.put("mentionsDiff", mentionsDiff);
         signals.put("mentionsRisk", mentionsRisk);

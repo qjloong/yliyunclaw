@@ -2,6 +2,11 @@
   <div class="raw-panel">
     <!-- Upload + Add text row -->
     <div class="upload-row">
+      <select v-model="teacherMaterialType" class="teacher-material-type-select" :title="'Teacher 资料类型'">
+        <option v-for="item in teacherMaterialTypes" :key="item.value" :value="item.value">
+          {{ item.label }}
+        </option>
+      </select>
       <div
         class="upload-zone"
         :class="{ 'is-dragging': isDragging, 'is-uploading': uploadingFiles.length > 0 }"
@@ -243,6 +248,14 @@
           <input v-model="textTitle" type="text" class="form-input" />
         </div>
         <div class="form-group">
+          <label>Teacher 资料类型</label>
+          <select v-model="teacherMaterialType" class="form-input">
+            <option v-for="item in teacherMaterialTypes" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </option>
+          </select>
+        </div>
+        <div class="form-group">
           <label>{{ t('wiki.materialContent') }}</label>
           <textarea v-model="textContent" class="form-input" rows="12" :placeholder="t('wiki.pasteContent')"></textarea>
         </div>
@@ -390,6 +403,29 @@ const rawJobs = reactive<Record<number, WikiProcessingJob>>({})
 let jobPoller: ReturnType<typeof setTimeout> | null = null
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'partial', 'cancelled'])
+const teacherMaterialTypes = [
+  { value: 'general', label: '通用资料' },
+  { value: 'curriculum_standard', label: '课程标准' },
+  { value: 'textbook_latest', label: '最新教材' },
+  { value: 'classic_manuscript', label: '名著稿件' },
+  { value: 'question_rule', label: '题型要求' },
+  { value: 'sample_question', label: '样题' },
+  { value: 'answer_rubric', label: '答案与评分标准' },
+]
+const teacherMaterialType = ref('general')
+
+function teacherMaterialLabel(value = teacherMaterialType.value) {
+  return teacherMaterialTypes.find(item => item.value === value)?.label || '通用资料'
+}
+
+function prefixTeacherMaterialTitle(title: string) {
+  const normalized = title.trim()
+  const label = teacherMaterialLabel()
+  if (!normalized || teacherMaterialType.value === 'general' || normalized.startsWith('【')) {
+    return normalized
+  }
+  return `【${label}】${normalized}`
+}
 
 async function pollJobs() {
   if (!store.currentKB) return
@@ -490,9 +526,13 @@ function removeUploadingFile(tempId: string) {
 
 // ─── Upload helpers ───────────────────────────────────────────────────────────
 async function uploadFile(kbId: number, file: File) {
-  const item = addUploadingFile(file.name)
+  const uploadName = prefixTeacherMaterialTitle(file.name)
+  const uploadFile = uploadName === file.name
+    ? file
+    : new File([file], uploadName, { type: file.type, lastModified: file.lastModified })
+  const item = addUploadingFile(uploadName)
   try {
-    await store.uploadRawFile(kbId, file, (pct) => {
+    await store.uploadRawFile(kbId, uploadFile, (pct) => {
       item.httpPct = pct
     })
     // Success: real item was added to store.rawMaterials, remove the optimistic placeholder
@@ -528,7 +568,7 @@ async function handleDrop(event: DragEvent) {
 
 async function handleAddText() {
   if (!store.currentKB) return
-  await store.addRawText(store.currentKB.id, textTitle.value, textContent.value)
+  await store.addRawText(store.currentKB.id, prefixTeacherMaterialTitle(textTitle.value), textContent.value)
   showAddText.value = false
   textTitle.value = ''
   textContent.value = ''
@@ -661,6 +701,15 @@ function extractionPipelineHint(raw: { sourceType?: string; processingStatus?: s
 
 /* Upload row: zone + add text side by side */
 .upload-row { display: flex; gap: 12px; align-items: stretch; }
+.teacher-material-type-select {
+  width: 132px;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: var(--mc-bg-elevated);
+  color: var(--mc-text-primary);
+  padding: 0 10px;
+  font-size: 13px;
+}
 .upload-zone {
   flex: 1;
   border: 1px dashed var(--mc-border);

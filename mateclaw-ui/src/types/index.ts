@@ -99,6 +99,83 @@ export interface AgentTemplateDefaultKnowledgeBase {
   pages?: Record<string, any>[] | null
 }
 
+export interface QuestionTypeRule {
+  type: string
+  displayName: string
+  defaultScore: string
+  generationRule: string
+  requiresAnswer: boolean
+  requiresScoringRubric: boolean
+  requiresMaterial: boolean
+}
+
+export interface TeacherRulePack {
+  id: string
+  stage?: string
+  subject?: string
+  module: string
+  name: string
+  version: string
+  defaultQuestionMix: Record<string, any>
+  questionTypeRules: QuestionTypeRule[]
+  hardRules: string[]
+  sourceRequirements: Array<Record<string, string>>
+  acceptanceMatrix: Array<Record<string, string>>
+}
+
+export interface TeacherRulePackView {
+  rulePack: TeacherRulePack
+  overridden: boolean
+  workspaceOverridden: boolean
+  globalOverridden: boolean
+  workspaceId?: string | number | null
+  builtIn: TeacherRulePack
+}
+
+export interface TeacherSkillDefinition {
+  id: string
+  name: string
+  version: string
+  module: string
+  purpose: string
+  supportedRulePackIds: string[]
+  workflowSteps: string[]
+  inputContract: Record<string, any>
+  outputContract: Record<string, any>
+  acceptanceSignals: Array<Record<string, string>>
+}
+
+export interface TeacherSkillBindingView {
+  activeSkillIds: string[]
+  defaultSkillIds: string[]
+  activeSkills: TeacherSkillDefinition[]
+  overridden: boolean
+}
+
+export interface TeacherImprovementDraft {
+  id: string
+  status: 'pending' | 'accepted' | 'rejected' | string
+  targetType: string
+  targetArea?: string | null
+  proposalType?: string | null
+  riskLevel?: string | null
+  title: string
+  summary: string
+  sourceRunId?: string | null
+  sourceConversationId?: string | null
+  rulePackId?: string | null
+  workspaceId?: string | number | null
+  createdAt?: string | null
+  reviewedAt?: string | null
+  reviewNote?: string | null
+  diagnosis?: Record<string, any>
+  evidence?: Record<string, any>
+  proposedPatch?: Record<string, any>
+  proposedSkillPatch?: Record<string, any>
+  proposedAcceptanceCase?: Record<string, any>
+  proposedRulePack?: TeacherRulePack | null
+}
+
 export interface TemplateKnowledgeBindingHealth {
   externalKey?: string | null
   name?: string | null
@@ -338,6 +415,15 @@ export interface ReviewValidationRecord {
   timestamp?: number
 }
 
+export interface GeneratedArtifactRecord {
+  name: string
+  url?: string
+  previewUrl?: string
+  path?: string
+  mimeType?: string
+  source?: string
+}
+
 export interface ReviewSummary {
   totalFiles: number
   addedCount: number
@@ -345,6 +431,7 @@ export interface ReviewSummary {
   files: FileChangeRecord[]
   validations?: ReviewValidationRecord[]
   projectChangedFiles?: ProjectChangeRecord[]
+  generatedArtifacts?: GeneratedArtifactRecord[]
   checkpointCapability?: CheckpointCapability
 }
 
@@ -440,6 +527,10 @@ export interface PendingApprovalMeta {
   findings?: GuardFinding[]
   maxSeverity?: GuardSeverity
   summary?: string
+  workspaceBasePath?: string
+  projectPath?: string
+  approvalKey?: string
+  alternativePath?: string
 }
 
 /** 单个展示分段（Claude Code 风格分段式渲染） */
@@ -644,6 +735,7 @@ export interface Tool {
   mcpEndpoint?: string
   paramsSchema?: string
   enabled: boolean
+  bindable?: boolean
   builtin?: boolean
   createTime: string
 }

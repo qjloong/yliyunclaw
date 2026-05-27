@@ -1,6 +1,7 @@
 package vip.mate.tool.document;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -21,7 +22,7 @@ public class DocxExportService {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     private final MarkdownDocxRenderer renderer;
-    private final GeneratedFileCache cache;
+    private final GeneratedFileDiskTokenService diskTokenService;
 
     public record ExportedDocx(String fileName,
                                String mimeType,
@@ -33,11 +34,22 @@ public class DocxExportService {
                                        String filename,
                                        @Nullable String pageSize,
                                        @Nullable Path outputTarget) throws IOException {
+        return exportMarkdown(markdown, filename, pageSize, outputTarget, null);
+    }
+
+    public ExportedDocx exportMarkdown(String markdown,
+                                       String filename,
+                                       @Nullable String pageSize,
+                                       @Nullable Path outputTarget,
+                                       @Nullable ToolContext ctx) throws IOException {
         if (!StringUtils.hasText(markdown)) {
             throw new IllegalArgumentException("markdown is blank");
         }
         String safeBaseName = sanitizeBaseName(filename);
         Path normalizedTarget = normalizeTargetPath(outputTarget, safeBaseName);
+        if (normalizedTarget == null) {
+            normalizedTarget = buildDefaultOutputPath(Paths.get("."), safeBaseName).toAbsolutePath().normalize();
+        }
         String finalFileName = normalizedTarget != null && normalizedTarget.getFileName() != null
                 ? normalizedTarget.getFileName().toString()
                 : safeBaseName + ".docx";
@@ -45,18 +57,21 @@ public class DocxExportService {
         byte[] bytes = renderer.render(markdown, normalizePageSize(pageSize));
 
         String savedPath = null;
-        if (normalizedTarget != null) {
-            Path parent = normalizedTarget.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            Files.write(normalizedTarget, bytes);
-            savedPath = normalizedTarget.toAbsolutePath().normalize().toString();
+        Path parent = normalizedTarget.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
         }
+        Files.write(normalizedTarget, bytes);
+        savedPath = normalizedTarget.toAbsolutePath().normalize().toString();
 
-        String id = cache.put(bytes, finalFileName, DOCX_MIME);
+        var origin = vip.mate.agent.context.ChatOrigin.from(ctx);
+        String token = diskTokenService.issue(
+            normalizedTarget,
+            origin.workspaceId(),
+            origin.conversationId(),
+            origin.workspaceBasePath());
         return new ExportedDocx(finalFileName, DOCX_MIME,
-                "/api/v1/files/generated/" + id, savedPath);
+                "/api/v1/files/generated/disk/" + token, savedPath);
     }
 
     @Nullable
@@ -79,8 +94,9 @@ public class DocxExportService {
     }
 
     public Path buildDefaultOutputPath(Path baseDir, String filename) {
-        return ensureDocxExtension(baseDir.resolve("output").resolve(sanitizeBaseName(filename)),
-                sanitizeBaseName(filename));
+        String workspaceFolder = sanitizeBaseName(baseDir.getFileName() != null ? baseDir.getFileName().toString() : "workspace");
+        return ensureDocxExtension(baseDir.resolve("output").resolve(workspaceFolder).resolve(sanitizeBaseName(filename)),
+            sanitizeBaseName(filename));
     }
 
     public String sanitizeBaseName(String name) {

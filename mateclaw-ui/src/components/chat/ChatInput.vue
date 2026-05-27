@@ -56,40 +56,64 @@
       </div>
     </div>
 
-    <!-- 审批栏：有待审批时替换输入区域 -->
-    <div v-if="pendingApproval?.status === 'pending_approval'" class="approval-bar">
-      <div class="approval-bar__info">
-        <span class="approval-bar__icon">
-          <el-icon><WarningFilled /></el-icon>
-        </span>
-        <span class="approval-bar__label">{{ t('chat.approvalAllow') }}</span>
-        <span class="approval-bar__tool">{{ getToolLabel(pendingApproval.toolName) }}</span>
-        <span class="approval-bar__label">{{ t('chat.approvalExecute') }}</span>
+    <!-- 审批卡：有待审批时替换输入区域 -->
+    <div v-if="pendingApproval?.status === 'pending_approval'" class="approval-card" :class="approvalSeverityClass">
+      <div class="approval-card__header">
+        <div class="approval-card__title">
+          <span class="approval-card__icon">
+            <el-icon><WarningFilled /></el-icon>
+          </span>
+          <div>
+            <div class="approval-card__kicker">需要审批</div>
+            <strong>{{ approvalTitle }}</strong>
+          </div>
+        </div>
+        <span v-if="pendingApproval.maxSeverity" class="approval-card__risk">{{ pendingApproval.maxSeverity }}</span>
       </div>
-      <label class="approval-bar__scope">
-        <span class="approval-bar__scope-label">{{ t('chat.approvalRemember') }}</span>
-        <select v-model="approvalScope" class="approval-bar__scope-select">
-          <option value="once">{{ t('chat.approvalScopeOnce') }}</option>
-          <option value="conversation">{{ t('chat.approvalScopeConversation') }}</option>
-          <option value="project">{{ t('chat.approvalScopeProject') }}</option>
-        </select>
-      </label>
-      <div class="approval-bar__actions">
+
+      <div class="approval-card__command">
+        <span>{{ approvalCommandLabel }}</span>
+        <code>{{ approvalCommandPreview }}</code>
+      </div>
+
+      <div class="approval-card__meta">
+        <span v-if="pendingApproval.summary">{{ pendingApproval.summary }}</span>
+        <span v-if="pendingApproval.projectPath">项目：{{ pendingApproval.projectPath }}</span>
+        <span v-if="pendingApproval.reason">原因：{{ pendingApproval.reason }}</span>
+        <span v-if="pendingApproval.alternativePath">替代路径：{{ pendingApproval.alternativePath }}</span>
+      </div>
+
+      <ul v-if="approvalFindings.length" class="approval-card__findings">
+        <li v-for="(finding, idx) in approvalFindings.slice(0, 3)" :key="`${finding.ruleId || 'finding'}-${idx}`">
+          <strong>{{ finding.title || finding.ruleId || '风险检查' }}</strong>
+          <span>{{ finding.description || finding.remediation }}</span>
+        </li>
+      </ul>
+
+      <div class="approval-card__footer">
         <button
           type="button"
-          class="approval-bar__btn approval-bar__btn--deny"
+          class="approval-card__btn approval-card__btn--deny"
           @click="emit('deny', pendingApproval.pendingId)"
         >
           <el-icon><CloseBold /></el-icon>
-          {{ t('chat.deny') }}
+          Skip
         </button>
+        <label class="approval-card__scope">
+          <span>{{ t('chat.approvalRemember') }}</span>
+          <select v-model="approvalScope" class="approval-card__scope-select">
+            <option value="once">{{ approvalScopeLabel('once') }}</option>
+            <option value="conversation">{{ approvalScopeLabel('conversation') }}</option>
+            <option value="project">{{ approvalScopeLabel('project') }}</option>
+          </select>
+        </label>
         <button
           type="button"
-          class="approval-bar__btn approval-bar__btn--approve"
+          class="approval-card__btn approval-card__btn--approve"
           @click="emit('approve', { pendingId: pendingApproval.pendingId, scope: approvalScope })"
         >
           <el-icon><Select /></el-icon>
-          {{ t('chat.approve') }}
+          Allow
         </button>
       </div>
     </div>
@@ -384,6 +408,44 @@ const approvalScope = ref<ApprovalDecisionScope>('once')
 watch(() => props.pendingApproval?.pendingId, () => {
   approvalScope.value = 'once'
 })
+
+const approvalFindings = computed(() => props.pendingApproval?.findings || [])
+
+const approvalSeverityClass = computed(() => {
+  const severity = String(props.pendingApproval?.maxSeverity || '').toLowerCase()
+  if (severity.includes('critical') || severity.includes('high')) return 'approval-card--high'
+  if (severity.includes('medium')) return 'approval-card--medium'
+  return 'approval-card--low'
+})
+
+const approvalTitle = computed(() => {
+  const tool = getToolLabel(props.pendingApproval?.toolName || '')
+  return `是否允许执行 ${tool}?`
+})
+
+const approvalCommandLabel = computed(() => {
+  const tool = getToolLabel(props.pendingApproval?.toolName || '')
+  const path = props.pendingApproval?.projectPath || props.pendingApproval?.workspaceBasePath
+  return path ? `${tool} within ${path}` : tool
+})
+
+const approvalCommandPreview = computed(() => {
+  const meta = props.pendingApproval
+  if (!meta) return ''
+  return compactApprovalText(meta.arguments || meta.summary || meta.reason || '')
+})
+
+function approvalScopeLabel(scope: ApprovalDecisionScope) {
+  if (scope === 'conversation') return t('chat.approvalScopeConversation')
+  if (scope === 'project') return t('chat.approvalScopeProject')
+  return t('chat.approvalScopeOnce')
+}
+
+function compactApprovalText(value: string, max = 360) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!normalized) return '无参数'
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized
+}
 
 // 输入值处理
 const inputValue = computed({
@@ -1017,70 +1079,171 @@ defineExpose({
   pointer-events: none;
 }
 
-/* 审批栏 */
-.approval-bar {
+/* 审批卡 */
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--mc-input-bg, #ffffff);
+  border: 1px solid rgba(217, 119, 87, 0.28);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.1);
+}
+
+.approval-card--high {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.approval-card--medium {
+  border-color: rgba(245, 158, 11, 0.48);
+}
+
+.approval-card--low {
+  border-color: rgba(217, 119, 87, 0.28);
+}
+
+.approval-card__header,
+.approval-card__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  background: var(--mc-input-bg, #ffffff);
-  border-radius: 16px;
-  padding: 8px 8px 8px 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(217, 119, 87, 0.3);
-  min-height: 50px;
+  gap: 10px;
 }
 
-.approval-bar__info {
+.approval-card__title {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex: 1;
+  gap: 10px;
   min-width: 0;
-  font-size: 14px;
-  color: var(--mc-text-secondary, #64748b);
 }
 
-.approval-bar__icon {
-  display: flex;
+.approval-card__icon {
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(217, 119, 87, 0.12);
   color: var(--mc-primary, #D97757);
   flex-shrink: 0;
 }
 
-.approval-bar__label {
-  flex-shrink: 0;
+.approval-card__kicker {
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--mc-text-tertiary, #94a3b8);
 }
 
-.approval-bar__tool {
-  font-weight: 600;
+.approval-card__title strong {
+  display: block;
   color: var(--mc-text-primary, #1e293b);
-  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
-  font-size: 13px;
-  background: var(--mc-bg-sunken, #f1f5f9);
-  padding: 1px 7px;
-  border-radius: 5px;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 1;
+  font-size: 14px;
+  line-height: 1.35;
 }
 
-.approval-bar__scope {
+.approval-card__risk {
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--mc-bg-sunken, #f1f5f9);
+  color: var(--mc-text-secondary, #64748b);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.approval-card--high .approval-card__risk {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.approval-card--medium .approval-card__risk {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+.approval-card__command {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.approval-card__command span {
+  color: var(--mc-text-secondary, #64748b);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.approval-card__command code {
+  display: block;
+  max-height: 96px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--mc-bg-sunken, #f8fafc);
+  border: 1px solid var(--mc-border, #e2e8f0);
+  color: var(--mc-text-primary, #1e293b);
+  padding: 9px 10px;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.approval-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--mc-text-tertiary, #94a3b8);
+  font-size: 12px;
+}
+
+.approval-card__meta span {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  padding: 3px 8px;
+}
+
+.approval-card__findings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-card__findings li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 7px 9px;
+  color: var(--mc-text-secondary, #64748b);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.approval-card__findings strong {
+  color: var(--mc-text-primary, #1e293b);
+  white-space: nowrap;
+}
+
+.approval-card__scope {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
-}
-
-.approval-bar__scope-label {
-  font-size: 12px;
   color: var(--mc-text-tertiary, #94a3b8);
-  white-space: nowrap;
+  font-size: 12px;
+  min-width: 0;
 }
 
-.approval-bar__scope-select {
-  min-width: 156px;
+.approval-card__scope-select {
+  min-width: 172px;
   height: 32px;
   border-radius: 10px;
   border: 1px solid var(--mc-border, #e2e8f0);
@@ -1091,43 +1254,39 @@ defineExpose({
   outline: none;
 }
 
-.approval-bar__actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.approval-bar__btn {
+.approval-card__btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 7px 14px;
+  min-height: 34px;
+  padding: 8px 14px;
   border: none;
   border-radius: 10px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
   line-height: 1;
+  white-space: nowrap;
 }
 
-.approval-bar__btn--approve {
+.approval-card__btn--approve {
   background: var(--mc-primary, #D97757);
   color: #fff;
 }
 
-.approval-bar__btn--approve:hover {
+.approval-card__btn--approve:hover {
   background: var(--mc-primary-hover, #C1572B);
 }
 
-.approval-bar__btn--deny {
+.approval-card__btn--deny {
   background: var(--mc-bg-sunken, #f1f5f9);
   color: var(--mc-text-secondary, #64748b);
   border: 1px solid var(--mc-border, #e2e8f0);
 }
 
-.approval-bar__btn--deny:hover {
+.approval-card__btn--deny:hover {
   background: var(--mc-danger-bg, #fee2e2);
   color: var(--mc-danger, #ef4444);
   border-color: var(--mc-danger-border, #fca5a5);
@@ -1401,32 +1560,26 @@ defineExpose({
     padding: 10px 12px 14px;
   }
 
-  .approval-bar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
+  .approval-card {
     padding: 10px 12px;
   }
 
-  .approval-bar__info {
-    flex-wrap: wrap;
+  .approval-card__header,
+  .approval-card__footer {
+    align-items: stretch;
+    flex-direction: column;
   }
 
-  .approval-bar__scope {
-    justify-content: space-between;
+  .approval-card__scope,
+  .approval-card__scope-select,
+  .approval-card__btn {
+    width: 100%;
   }
 
-  .approval-bar__scope-select {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .approval-bar__actions {
-    justify-content: flex-end;
-  }
-
-  .approval-bar__tool {
-    max-width: 180px;
+  .approval-card__scope {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 5px;
   }
 
   .attachment-chip__label span:first-child {

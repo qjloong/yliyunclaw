@@ -6,8 +6,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import vip.mate.agent.context.ChatOrigin;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -34,10 +36,15 @@ import java.nio.file.Paths;
 public class WriteFileTool {
 
     private final vip.mate.i18n.I18nService i18n;
+    private final vip.mate.tool.document.GeneratedFileDiskTokenService generatedFileDiskTokenService;
+
+    @Value("${mate.generated-files.output-dir:output}")
+    private String outputDir;
 
     @vip.mate.tool.ConcurrencyUnsafe("file write — must serialize with reads/writes on overlapping paths")
         @Tool(description = "Write content to a file. Overwrites if exists, creates if not (auto-creates parent directories). "
-            + "Returns structured JSON with filePath, bytesWritten. "
+            + "Returns structured JSON with filePath, bytesWritten, filename, apiUrl. "
+            + "The apiUrl field is a relative URL that streams the file from disk via backend API. "
             + "Target path must stay inside the active project boundary; risky writes may require user approval.")
     public String write_file(
             @ToolParam(description = "Absolute or relative file path") String filePath,
@@ -75,20 +82,44 @@ public class WriteFileTool {
             }
 
             boolean existed = Files.exists(path);
+            Path finalPath = remapWorkspaceOutputPath(path, ctx);
+            if (!finalPath.equals(path)) {
+                Path finalParent = finalPath.getParent();
+                if (finalParent != null && !Files.exists(finalParent)) {
+                    Files.createDirectories(finalParent);
+                }
+            }
+            boolean finalExisted = Files.exists(finalPath);
 
             // 写入文件
             byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-            Files.write(path, bytes);
+            Files.write(finalPath, bytes);
 
+            result.set("filePath", finalPath.toString());
             result.set("bytesWritten", bytes.length);
-            result.set("created", !existed);
-            result.set("overwritten", existed);
+            result.set("created", !finalExisted);
+            result.set("overwritten", finalExisted);
             result.set("message", existed
-                    ? "Overwritten: " + path + " (" + bytes.length + " bytes)"
-                    : "Created: " + path + " (" + bytes.length + " bytes)");
+                    ? "Overwritten: " + finalPath + " (" + bytes.length + " bytes)"
+                    : "Created: " + finalPath + " (" + bytes.length + " bytes)");
 
-            log.info("[WriteFile] {} file: {} ({} bytes)",
-                    existed ? "Overwritten" : "Created", path, bytes.length);
+            String filename = finalPath.getFileName().toString();
+            result.set("filename", filename);
+            Path outputRoot = resolveOutputRoot(ctx);
+            Path normalizedPath = finalPath.toAbsolutePath().normalize();
+            if (normalizedPath.startsWith(outputRoot)) {
+                ChatOrigin origin = ChatOrigin.from(ctx);
+                String diskToken = generatedFileDiskTokenService.issue(
+                        normalizedPath,
+                        origin.workspaceId(),
+                        origin.conversationId(),
+                        origin.workspaceBasePath());
+                result.set("apiUrl", "/api/v1/files/generated/disk/" + diskToken);
+                log.info("[WriteFile] {} file: {} ({} bytes), issued disk token", existed ? "Overwritten" : "Created", finalPath, bytes.length);
+            } else {
+                log.info("[WriteFile] {} file: {} ({} bytes), skip apiUrl because it is outside output root {}",
+                    existed ? "Overwritten" : "Created", finalPath, bytes.length, outputRoot);
+            }
 
         } catch (Exception e) {
             log.error("[WriteFile] Failed to write file: {}", e.getMessage(), e);
@@ -105,4 +136,62 @@ public class WriteFileTool {
         result.set("message", message);
         return JSONUtil.toJsonPrettyStr(result);
     }
+
+    private Path resolveOutputRoot(@Nullable ToolContext ctx) {
+        Path workspaceDir = vip.mate.tool.guard.WorkspacePathGuard.getWorkingDirectory(ctx);
+        Path base = workspaceDir != null ? workspaceDir : Paths.get(".").toAbsolutePath().normalize();
+        return base.resolve(outputDir).toAbsolutePath().normalize();
+    }
+
+    private Path remapWorkspaceOutputPath(Path originalPath, @Nullable ToolContext ctx) {
+        Path outputRoot = resolveOutputRoot(ctx);
+        Path normalized = originalPath.toAbsolutePath().normalize();
+        if (!normalized.startsWith(outputRoot)) {
+            return normalized;
+        }
+        ChatOrigin origin = ChatOrigin.from(ctx);
+        String workspaceFolder = resolveWorkspaceFolder(origin);
+        Path relative = outputRoot.relativize(normalized);
+        if (relative.getNameCount() > 0 && workspaceFolder.equalsIgnoreCase(relative.getName(0).toString())) {
+            return normalized;
+        }
+        Path remapped = outputRoot.resolve(workspaceFolder).resolve(relative);
+        return remapped.toAbsolutePath().normalize();
+    }
+
+    private String resolveWorkspaceFolder(ChatOrigin origin) {
+        String basePath = origin.workspaceBasePath();
+        if (basePath != null && !basePath.isBlank()) {
+            try {
+                Path p = Paths.get(basePath).toAbsolutePath().normalize();
+                Path fileName = p.getFileName();
+                if (fileName != null) {
+                    String folder = sanitizeFolderName(fileName.toString());
+                    if (!folder.isBlank()) {
+                        return folder;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (origin.workspaceId() != null) {
+            return "workspace-" + origin.workspaceId();
+        }
+        return "workspace";
+    }
+
+    private String sanitizeFolderName(String name) {
+        if (name == null || name.isBlank()) return "workspace";
+        StringBuilder sb = new StringBuilder(name.length());
+        for (char c : name.trim().toCharArray()) {
+            if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || c < 0x20) {
+                sb.append('_');
+            } else {
+                sb.append(c);
+            }
+        }
+        String cleaned = sb.toString().trim();
+        return cleaned.isEmpty() ? "workspace" : cleaned;
+    }
+
 }

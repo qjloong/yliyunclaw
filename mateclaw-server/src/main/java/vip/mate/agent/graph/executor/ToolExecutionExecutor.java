@@ -346,6 +346,7 @@ public class ToolExecutionExecutor {
                                         String workspaceBasePath,
                                         ChatOrigin origin) {
         ChatOrigin safeOrigin = origin != null ? origin : ChatOrigin.EMPTY;
+        String effectiveRequesterId = firstNonBlank(requesterId, safeOrigin.requesterId());
         List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
         List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
         // RFC-052: accumulate full-text outputs from returnDirect tools so the
@@ -397,7 +398,7 @@ public class ToolExecutionExecutor {
             if (!isReplay) {
                 Long workspaceId = resolveWorkspaceId(conversationId, safeOrigin);
                 GuardDecision decision = evaluateGuard(toolCall, toolName, arguments,
-                    conversationId, agentId, toolCalls, i, events, requesterId, workspaceId, safeOrigin);
+                    conversationId, agentId, toolCalls, i, events, effectiveRequesterId, workspaceId, safeOrigin);
 
                 if (decision.blocked) {
                     allResponses.add(new ToolResponseMessage.ToolResponse(
@@ -441,7 +442,7 @@ public class ToolExecutionExecutor {
             // 4. 分类: concurrencySafe
             boolean safe = isConcurrencySafe(toolName);
             preparedCalls.add(new PreparedToolCall(toolCall, callback, arguments, safe, allResponses.size(),
-                    conversationId, requesterId, workspaceBasePath, safeOrigin));
+                    conversationId, effectiveRequesterId, workspaceBasePath, safeOrigin));
             // 占位，Phase 2 填充
             allResponses.add(null);
         }
@@ -1216,15 +1217,24 @@ public class ToolExecutionExecutor {
         }
     }
 
+    private String firstNonBlank(String primary, String fallback) {
+        if (primary != null && !primary.isBlank()) {
+            return primary;
+        }
+        return fallback != null ? fallback : "";
+    }
+
     private String resolveAccountRole(String requesterId, Long userId) {
         if ("system".equalsIgnoreCase(requesterId)) {
             return "system";
         }
-        if (userId == null || authService == null) {
+        if (authService == null) {
             return null;
         }
         try {
-            UserEntity user = authService.findById(userId);
+            UserEntity user = userId != null
+                    ? authService.findById(userId)
+                    : authService.findByUsername(requesterId);
             return user != null ? user.getRole() : null;
         } catch (Exception e) {
             log.debug("[ToolExecutor] Failed to resolve account role for requester={}: {}", requesterId, e.getMessage());

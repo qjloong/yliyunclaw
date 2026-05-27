@@ -31,6 +31,10 @@ public class ToolService {
         return toolRegistry.listEnabledToolEntities();
     }
 
+    public List<ToolEntity> listBindableTools() {
+        return toolRegistry.listBindableToolEntities();
+    }
+
     public ToolEntity getTool(Long id) {
         ToolEntity tool = toolMapper.selectById(id);
         if (tool == null) {
@@ -43,6 +47,9 @@ public class ToolService {
         tool.setBuiltin(false);
         if (tool.getEnabled() == null) {
             tool.setEnabled(true);
+        }
+        if (tool.getBindable() == null) {
+            tool.setBindable(true);
         }
         toolMapper.insert(tool);
         return tool;

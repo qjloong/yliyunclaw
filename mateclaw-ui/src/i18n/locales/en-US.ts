@@ -360,12 +360,14 @@ export default {
     projectChangesSummary: 'Change summary',
     projectChangesFiles: 'Current project files',
     projectChangesLatestReply: 'Latest reply changes',
+    projectChangesGeneratedFiles: 'Latest generated files',
     projectChangesHistory: 'Recent review history',
     projectChangesEmpty: 'No project changes are available yet.',
     projectChangesRecentUnknown: 'Recent reply',
     projectChangesOpenProject: 'Open folder',
     projectChangesRevealProject: 'Reveal folder',
     projectChangesOpenFile: 'Open file',
+    projectChangesDownloadFile: 'Download file',
     projectChangesRevealFile: 'Reveal file',
     projectChangesOpenFailed: 'Failed to open the local path',
     executionOverviewTitle: 'Execution Overview',
@@ -429,6 +431,7 @@ export default {
       sourcesLabel: 'Source traces',
       retrievedSourcesLabel: 'Retrieved sources',
       citedSourcesLabel: 'Cited sources',
+      teacherRuleLabel: 'Teacher rule-pack evidence',
       templateFallback: 'Built-in template',
       titleFallback: 'Sample task',
       status: {
@@ -2706,5 +2709,10 @@ export default {
     listSkillFiles: 'List Skill Files',
     listAvailableSkills: 'List Skills',
     readSkillFile: 'Read Skill File',
+
+    // HTML export
+    renderHtml: 'Generate HTML Report',
+    renderHtmlFromFile: 'HTML Report from File',
+    renderHtmlFromFiles: 'HTML Report from Files',
   },
 } as const

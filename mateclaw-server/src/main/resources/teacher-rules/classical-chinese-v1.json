@@ -1,0 +1,37 @@
+{
+  "id": "teacher.rulepack.classical_chinese.v1",
+  "module": "classical_chinese",
+  "name": "初中文言文阅读规则包 v1",
+  "version": "1.0.0",
+  "defaultQuestionMix": {
+    "wordExplanation": "20%",
+    "sentenceTranslation": "20%",
+    "punctuationPause": "15%",
+    "contentUnderstanding": "20%",
+    "themeEmotion": "15%",
+    "comparisonExtension": "10%"
+  },
+  "questionTypeRules": [
+    { "type": "wordExplanation", "displayName": "文言字词题", "defaultScore": "每小题 1-2 分", "generationRule": "考查教材常见实词、12 个课标常用虚词、古今异义、一词多义、通假字和常见词类活用，不考生僻用法。", "requiresAnswer": true, "requiresScoringRubric": false, "requiresMaterial": true },
+    { "type": "sentenceTranslation", "displayName": "句子翻译题", "defaultScore": "3-4 分", "generationRule": "直译为主、意译为辅，落实关键字词和常见特殊句式，不增删原意。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "punctuationPause", "displayName": "断句停顿题", "defaultScore": "2-3 分", "generationRule": "依据语法结构、句意、对话标志、虚词和固定句式划分，不做复杂语法分析。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "contentUnderstanding", "displayName": "内容理解题", "defaultScore": "3-4 分", "generationRule": "概括文章大意、事件经过、人物形象和关键信息，必须结合文本。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "themeEmotion", "displayName": "主旨情感题", "defaultScore": "3-5 分", "generationRule": "分析作者情感、写作目的、核心道理和人生态度，不做过度解读。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "comparisonExtension", "displayName": "对比迁移题", "defaultScore": "4-6 分", "generationRule": "可做课内外对比或联系现实谈启示，必须观点明确、结合文本、语言简洁。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true }
+  ],
+  "hardRules": [
+    "教材优先；课外篇目需与教材难度相当、文体相近、考点重合。",
+    "课外文言文总字数控制在 150-300 字；生僻字词不超过 3-5 个，并应加注释。",
+    "严禁选用高中文言文篇目、晦涩古籍、生僻异体字过多、典故冷僻、句式过于复杂或价值观不适合中学生的材料。",
+    "字词题只考初中常见实词和 12 个常用虚词：之、其、而、以、于、者、也、则、乃、且、若、所。",
+    "翻译题必须标出关键字词、特殊句式和采分点，答案符合中考阅卷习惯。",
+    "文化常识只考初中常见内容，不考生僻背景。",
+    "内容理解、主旨情感和手法赏析必须源于文本，不做超出文本的深层探究或学术化阐释。"
+  ],
+  "acceptanceMatrix": [
+    { "id": "source_scope", "label": "文章来源", "rule": "教材优先，课外篇目 150-300 字且难度与教材一致。" },
+    { "id": "no_over_scope", "label": "禁止超纲", "rule": "不考高中文言文、复杂语法、生僻虚词和冷僻文化常识。" },
+    { "id": "translation_rubric", "label": "翻译采分", "rule": "翻译题必须落实关键字词、句式和采分点。" },
+    { "id": "text_grounding", "label": "文本依据", "rule": "理解、主旨、赏析题必须结合文本。" }
+  ]
+}
