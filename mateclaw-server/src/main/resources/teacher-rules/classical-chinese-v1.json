@@ -1,8 +1,11 @@
 {
   "id": "teacher.rulepack.classical_chinese.v1",
+  "stage": "junior",
+  "subject": "chinese",
   "module": "classical_chinese",
   "name": "初中文言文阅读规则包 v1",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "status": "builtin",
   "defaultQuestionMix": {
     "wordExplanation": "20%",
     "sentenceTranslation": "20%",
@@ -11,27 +14,53 @@
     "themeEmotion": "15%",
     "comparisonExtension": "10%"
   },
+  "sourceRequirements": [
+    {
+      "id": "curriculum_standard",
+      "label": "课程标准",
+      "rule": "优先使用已绑定知识库中标记为最新版本的初中语文课程标准；缺失时必须提示补充。"
+    },
+    {
+      "id": "textbook",
+      "label": "最新教材",
+      "rule": "涉及篇目、册别和课标文言字词范围时，优先使用已绑定知识库中的最新教材。"
+    }
+  ],
   "questionTypeRules": [
-    { "type": "wordExplanation", "displayName": "文言字词题", "defaultScore": "每小题 1-2 分", "generationRule": "考查教材常见实词、12 个课标常用虚词、古今异义、一词多义、通假字和常见词类活用，不考生僻用法。", "requiresAnswer": true, "requiresScoringRubric": false, "requiresMaterial": true },
-    { "type": "sentenceTranslation", "displayName": "句子翻译题", "defaultScore": "3-4 分", "generationRule": "直译为主、意译为辅，落实关键字词和常见特殊句式，不增删原意。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "punctuationPause", "displayName": "断句停顿题", "defaultScore": "2-3 分", "generationRule": "依据语法结构、句意、对话标志、虚词和固定句式划分，不做复杂语法分析。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "contentUnderstanding", "displayName": "内容理解题", "defaultScore": "3-4 分", "generationRule": "概括文章大意、事件经过、人物形象和关键信息，必须结合文本。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "themeEmotion", "displayName": "主旨情感题", "defaultScore": "3-5 分", "generationRule": "分析作者情感、写作目的、核心道理和人生态度，不做过度解读。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "comparisonExtension", "displayName": "对比迁移题", "defaultScore": "4-6 分", "generationRule": "可做课内外对比或联系现实谈启示，必须观点明确、结合文本、语言简洁。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true }
+    { "type": "wordExplanation", "displayName": "文言字词题", "defaultScore": "每小题 1-2 分", "generationRule": "考查教材常见实词、12 个课标常用虚词（之、其、而、以、于、者、也、则、乃、且、若、所）、古今异义、一词多义、通假字和常见词类活用（名词作动词、名词作状语、形容词作动词、使动用法、意动用法，不超纲），不考生僻用法。", "requiresAnswer": true, "requiresScoringRubric": false, "requiresMaterial": true },
+    { "type": "sentenceTranslation", "displayName": "句子翻译题", "defaultScore": "3-4 分", "generationRule": "直译为主、意译为辅，落实关键字词和常见特殊句式（判断句、省略句、倒装句、被动句），不增删原意；必须标出关键字词、特殊句式和采分点，答案符合中考阅卷习惯。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "punctuationPause", "displayName": "断句停顿题", "defaultScore": "2-3 分", "generationRule": "依据语法结构、句意、对话标志、虚词和固定句式划分；考察重点为主谓结构、对话标志、虚词停顿、固定句式等，不做复杂语法分析。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "contentUnderstanding", "displayName": "内容理解题", "defaultScore": "3-4 分", "generationRule": "概括文章大意、事件经过、人物形象（性格、品质）和关键信息；能结合文本内容筛选关键信息、概括核心内容，不考查深层探究，贴合初中生理解水平。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "themeEmotion", "displayName": "主旨情感题", "defaultScore": "3-5 分", "generationRule": "分析作者的情感倾向、人生态度、写作目的、核心道理等；能结合文本内容分析作者的情感和主旨，不要求过度解读，不考查超出文本的深层内涵。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
+    { "type": "comparisonExtension", "displayName": "对比迁移题", "defaultScore": "4-6 分", "generationRule": "可做课内外对比或联系现实谈启示；必须观点明确、结合文本、语言简洁；评价人物行为、辨析观点正误、提出合理建议等。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true }
   ],
   "hardRules": [
     "教材优先；课外篇目需与教材难度相当、文体相近、考点重合。",
+    "课外文言文选材来源：先秦诸子（《论语》《孟子》《荀子》《庄子》《列子》《韩非子》《吕氏春秋》等篇幅较短、道理显明的段落）、史传文学（《史记》《战国策》《资治通鉴》《左传》等经典人物故事）、笔记小说（《世说新语》《聊斋志异》《阅微草堂笔记》等篇幅短小、情节有趣、富含启发性的篇目）、文人散文（唐宋八大家中适合初中生的写景、记事、说理短篇）、明清小品（张岱、袁宏道、李渔、郑燮等清新浅近的小品文）。",
+    "体裁可优先参考课内出现的铭、说、传、书、记、序、表、谏等体裁进行联读。",
     "课外文言文总字数控制在 150-300 字；生僻字词不超过 3-5 个，并应加注释。",
+    "内容真实可靠，确为作家所写的诗文，严禁捏造虚构，严禁修改文章内容。",
+    "主题积极向上或富有思辨价值；与课内形成知识或能力关联（如同作者、同体裁、同主题、同手法）。",
     "严禁选用高中文言文篇目、晦涩古籍、生僻异体字过多、典故冷僻、句式过于复杂或价值观不适合中学生的材料。",
     "字词题只考初中常见实词和 12 个常用虚词：之、其、而、以、于、者、也、则、乃、且、若、所。",
     "翻译题必须标出关键字词、特殊句式和采分点，答案符合中考阅卷习惯。",
-    "文化常识只考初中常见内容，不考生僻背景。",
-    "内容理解、主旨情感和手法赏析必须源于文本，不做超出文本的深层探究或学术化阐释。"
+    "文化常识只考初中常见内容（作者朝代、作品出处、文体知识、古代称谓、官职、纪年法等），不考生僻背景。",
+    "内容理解、主旨情感和手法赏析必须源于文本，不做超出文本的深层探究或学术化阐释。",
+    "句式应用只要求识别句式类型并根据句式特点翻译句子，不考查复杂句式的语法分析。",
+    "主观题必须提供参考答案和可直接判分的采分点。",
+    "禁止默认使用超纲或学术化术语；必须使用时先解释并降阶表达。",
+    "每次正式出题都应形成独立任务上下文，不把上一轮题量、题型、材料范围自动污染到新任务。",
+    "命题说明和质量审核不作为主结果首屏内容；主结果优先展示试题、参考答案、采分点和来源依据。"
   ],
   "acceptanceMatrix": [
-    { "id": "source_scope", "label": "文章来源", "rule": "教材优先，课外篇目 150-300 字且难度与教材一致。" },
+    { "id": "source_scope", "label": "文章来源", "rule": "教材优先，课外篇目 150-300 字且难度与教材一致，来源真实可靠。" },
     { "id": "no_over_scope", "label": "禁止超纲", "rule": "不考高中文言文、复杂语法、生僻虚词和冷僻文化常识。" },
     { "id": "translation_rubric", "label": "翻译采分", "rule": "翻译题必须落实关键字词、句式和采分点。" },
-    { "id": "text_grounding", "label": "文本依据", "rule": "理解、主旨、赏析题必须结合文本。" }
+    { "id": "text_grounding", "label": "文本依据", "rule": "理解、主旨、赏析题必须结合文本，不做超出文本的深层探究。" },
+    { "id": "question_mix", "label": "题型比例", "rule": "字词 20%、翻译 20%、断句 15%、理解 20%、主旨 15%、迁移 10%。" },
+    { "id": "score_rules", "label": "分值规则", "rule": "字词 1-2 分/小题，断句 2-3 分，翻译/理解 3-4 分，主旨 3-5 分，迁移 4-6 分。" },
+    { "id": "no_overacademic", "label": "避免超纲术语", "rule": "避免复杂语法分析和学术化表达。" },
+    { "id": "primary_ui", "label": "UI 主结果", "rule": "试题优先展示，命题说明/质量审核折叠或内部化。" },
+    { "id": "context_isolation", "label": "上下文隔离", "rule": "新任务只继承用户明确保留的限制。" }
   ]
 }

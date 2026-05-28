@@ -1,37 +1,160 @@
 {
   "id": "teacher.rulepack.modern_reading.v1",
+  "stage": "junior",
+  "subject": "chinese",
   "module": "modern_reading",
   "name": "初中现代文阅读规则包 v1",
-  "version": "1.0.0",
-  "defaultQuestionMix": {
-    "informationExtraction": "15%",
-    "contentSummary": "20%",
-    "languageAppreciation": "20%",
-    "structureAnalysis": "15%",
-    "themeEmotion": "15%",
-    "extensionTask": "15%"
+  "version": "2.0.0",
+  "status": "builtin",
+  "scope": {
+    "subject": "初中语文",
+    "business": "现代文阅读出题",
+    "defaultMaterialPolicy": "文章必须真实可靠，来源为官媒副刊、文学期刊、现当代名家作品或官方平台；严禁捏造虚构，严禁修改文章内容。",
+    "illustrationPolicy": "默认不生成插图；涉及插图时要求用户上传或确认素材来源。"
   },
+  "defaultQuestionMix": {
+    "basicUnderstanding": "10%",
+    "contentSummary": "15%",
+    "characterAnalysis": "15%",
+    "languageAppreciation": "20%",
+    "structureAnalysis": "10%",
+    "themeEmotion": "15%",
+    "narrativeTechnique": "5%",
+    "genreSpecific": "10%"
+  },
+  "scoreRules": {
+    "basicUnderstanding": "每小题 1-2 分，控制空格数量和每空字数。",
+    "contentSummary": "3-5 分，优先用表格/框架图形式，避免直问直答。",
+    "characterAnalysis": "3-5 分，必须结合具体描写分析，给出性格概括和依据。",
+    "languageAppreciation": "3-5 分，必须结合具体句段，指出手法并分析作用。",
+    "structureAnalysis": "3-5 分，分析段落或结构要素作用，必须结合文本位置。",
+    "themeEmotion": "4-6 分，必须结合文本不空泛拔高，给出中心思想和情感依据。",
+    "narrativeTechnique": "2-3 分，识别叙述视角、顺序、线索、人称等作用。",
+    "genreSpecific": "3-5 分，按文体专属考点分层赋分，不得混用其他文体规则。"
+  },
+  "sourceRequirements": [
+    {
+      "id": "textbook",
+      "label": "最新教材",
+      "rule": "涉及教材选用作家和文体知识时，优先使用已绑定知识库中的最新教材；未绑定知识库时不得假称已按最新教材出题。"
+    },
+    {
+      "id": "sample_questions",
+      "label": "样题/范题",
+      "rule": "如用户要求贴近校内或中考风格，应优先分析用户上传的样题或范题命题规律，再高度模仿其问法、难度、结构、设问逻辑、采分方式。"
+    }
+  ],
   "questionTypeRules": [
-    { "type": "informationExtraction", "displayName": "信息提取题", "defaultScore": "2-4 分", "generationRule": "筛选关键语句、信息整合、图表或材料转化，答案必须源于文本。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "contentSummary", "displayName": "内容概括题", "defaultScore": "3-5 分", "generationRule": "概括事件、人物事迹、情感变化和行文脉络，优先用表格、框架图等形式避免直问直答。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "languageAppreciation", "displayName": "语言赏析题", "defaultScore": "3-5 分", "generationRule": "围绕修辞、表现手法、描写方法、词语表达效果和语言特色，必须结合具体句段。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "structureAnalysis", "displayName": "结构作用题", "defaultScore": "3-5 分", "generationRule": "分析标题、开头、中间段、结尾、过渡、插叙、照应、线索等作用。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "themeEmotion", "displayName": "主旨情感题", "defaultScore": "4-6 分", "generationRule": "概括中心、作者情感、标题含义、深层意蕴和感悟启示，不空泛拔高。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true },
-    { "type": "extensionTask", "displayName": "拓展任务题", "defaultScore": "4-8 分", "generationRule": "可设计活动情境、对话、海报、卡片、微写作、跨学科任务，但必须可评分且不脱离文本。", "requiresAnswer": true, "requiresScoringRubric": true, "requiresMaterial": true }
+    {
+      "type": "basicUnderstanding",
+      "displayName": "基础理解题",
+      "defaultScore": "1-2 分",
+      "generationRule": "考查字音字形、词语含义、句子表层意思、文章情节梳理、行文脉络、段落层次划分等；必须源于文本，控制书写量。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": false,
+      "requiresMaterial": true
+    },
+    {
+      "type": "contentSummary",
+      "displayName": "内容概括题",
+      "defaultScore": "3-5 分",
+      "generationRule": "概括主要内容、事件、人物事迹、梳理情感变化等；优先用表格梳理、框架图、思维导图等形式出题，避免直问直答；必须源于文本，答案可量化。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "characterAnalysis",
+      "displayName": "人物形象题",
+      "defaultScore": "3-5 分",
+      "generationRule": "考查人物性格分析、人物形象概括、人物描写方法及作用、人物心理揣摩等；必须结合文本中的具体描写，给出性格关键词和文本依据。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "languageAppreciation",
+      "displayName": "语言赏析题",
+      "defaultScore": "3-5 分",
+      "generationRule": "考查修辞手法（比喻、拟人、排比、夸张、衬托、反问、反复、对偶、设问、引用、通感等）、表现手法（对比、伏笔、铺垫、设置悬念、卒章显志、详略得当、虚实结合、象征、欲扬先抑、托物言志、借景抒情、以小见大、动静结合、联想想象等）、描写手法（外貌、语言、动作、心理、环境、细节等）、词语赏析、表达效果、句式作用、语言特色、朗读设计等；必须结合具体句段分析，不能只列术语。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "structureAnalysis",
+      "displayName": "结构作用题",
+      "defaultScore": "3-5 分",
+      "generationRule": "考查开头作用、中间段落作用、结尾作用、过渡句、插叙、照应、线索设置等；必须结合文本位置和内容分析，给出结构功能和内容作用。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "themeEmotion",
+      "displayName": "主旨情感题",
+      "defaultScore": "4-6 分",
+      "generationRule": "考查中心思想、作者情感、标题含义与作用、深层意蕴、感悟启示、联系生活、联系初中必读十二部名著等；必须结合文本，不空泛拔高，不脱离文本空谈。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "narrativeTechnique",
+      "displayName": "叙事技巧题",
+      "defaultScore": "2-3 分",
+      "generationRule": "考查记叙线索、人称及叙述视角、记叙顺序、表达方式等；要求识别叙事要素并分析其对表达效果的作用，贴合初中生理解水平。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "genreSpecific",
+      "displayName": "文体专属题",
+      "defaultScore": "3-5 分",
+      "generationRule": "必须先识别文本类型，再使用对应考点：文学类文本重点考查赏析/人物/主旨/情节；新闻重点考查拟标题/导语/倒金字塔结构/真实性与时效性/特写与通讯文学性；现代诗歌重点考查音韵美/节奏美/陌生化语言/分行跨行作用/意象/色彩象征义；戏剧重点考查戏剧冲突/人物形象/台词朗读设计/舞台说明/剧本主旨/戏剧评论；说明文重点考查说明对象/说明方法/说明顺序/语言准确性与生动性/信息筛选；议论文重点考查中心论点/论证方法/论证思路/论据作用/补充论据；非连续性文本重点考查信息整合/比较分析/图文转换/情境表达/拓展运用/综合素质。各文体不得混用规则。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    }
   ],
   "hardRules": [
-    "必须先识别文本类型，再使用对应考点：文学类、新闻、现代诗歌、戏剧、说明文、议论文、非连续性文本不得混用规则。",
-    "文章来源应真实可靠，可来自官媒副刊、文学期刊、现当代名家、官方平台；严禁捏造或篡改文章内容。",
-    "禁止选用语文课本课内课文、课后阅读篇目、网络口水文、自媒体低俗文案、心灵鸡汤碎片短文和版权或来源不清材料。",
-    "禁止涉及敏感政治、消极颓废、三观不正、猎奇怪异主题；语言必须贴合初中生理解层级。",
-    "每道题必须有采分点，答案必须源于文本，不能脱离文本空谈。",
-    "文学类文本适配篇幅 800-1700 字；新闻 200-1500 字；现代诗歌 200-700 字；戏剧 800-1700 字；说明文 900-1300 字；议论文 1000-1400 字。",
-    "避免成人化、学术化、空泛哲理和 AI 套话。"
+    "必须先识别文本类型，再使用对应考点：文学类（记叙文/散文/小说）、新闻、现代诗歌、戏剧、说明文、议论文、非连续性文本不得混用规则。",
+    "文章来源应真实可靠，可来自：官媒副刊（《人民日报》副刊、《光明日报》笔会、《文汇报》、《中国青年作家报》等）、文学期刊（《散文》《读者》《青年文摘》《意林》《微型小说选刊》《特别关注》《知识窗》《中学生阅读》等）、现当代名家（中国：汪曾祺、杨绛、史铁生、季羡林、毕淑敏、梁衡、迟子建、鲁迅、老舍、宗璞、李娟、阿城、魏巍、梁晓声、刘慈欣、冯骥才、沈从文、鲍尔吉·原野、朱自清、刘湛秋、艾青、席慕蓉、海子、穆旦等；外国：契诃夫、莫泊桑、欧·亨利、伊塔洛·卡尔维诺、罗伯特·巴里、马尔克斯、雷·布拉德伯里、星新一、泰戈尔、安徒生等）、官方平台（中国作家网、学习强国文艺板块、正规文学公众号等优质时文）。",
+    "可优先选用部编版初中六册语文教材中选用文章的作家；避免使用台湾作家以及版权有争议的作家。",
+    "严禁捏造虚构，严禁修改文章内容。",
+    "禁止选用语文课本课内课文、课后阅读篇目、网络口水文、自媒体低俗文案、心灵鸡汤碎片化短文。",
+    "禁止涉及敏感政治、消极颓废、三观不正、猎奇怪异主题。",
+    "禁止篇幅过短＜700字、过长＞2000字，可微调精简至标准篇幅。",
+    "各文体适配篇幅：文学类文本 800-1700字；新闻 200-1500字；现代诗歌 200-700字；戏剧 800-1700字；说明文 900-1300字；议论文 1000-1400字；非连续性文本根据材料组合合理控制。",
+    "禁止语言过于成人化、学术化、晦涩难懂，必须贴合初中生理解层级。",
+    "每道题必须有采分点，每道题必须能够拆分核心得分点、标准答题方向，避免答案无法量化。答案必须源于文本，不能脱离文本空谈。",
+    "具体题型可包括：文字问答、表格、填空、思维导图、圈点批注、活动情境、阅读任务、对话交流、框架图、筛选提取、补写、续写、改写、活动策划、海报设计、卡片档案、微写作、判断正误、连线匹配、图文结合、内心独白、角色写信、跨学科任务等；必须控制书写量，不得让学生大段抄写。",
+    "主观题必须提供参考答案和可直接判分的采分点；生成标准答案的同时标注采分点分值。",
+    "答案必须符合中考阅卷习惯、条理清晰、语言规范、可直接作为参考答案；禁止过度文学化、AI套话、空泛分析。字数在合理范围。",
+    "难度必须合理，符合初中生认知水平、中考真实难度、有梯度、有区分度；基础题面向全体学生，提升题面向中等水平学生，拓展题面向优秀学生，不追求全员得分。",
+    "不出偏题、怪题、超纲题，全部贴合初中生课标，符合初中语文应试表达。",
+    "避免重复：不出现重复考点、重复题型，确保试题的多样性和实用性。",
+    "如果用户给出指定文体、指定考点、指定题型、指定真题风格，必须优先贴近要求生成；如果用户上传题库或范题，必须先分析其命题规律，再高度模仿其问法、难度、结构、设问逻辑、采分方式。",
+    "9年级题目对标中考题型、难度，参考近3-5年当地中考真题，确保出题导向一致。",
+    "禁止默认使用超纲或学术化术语；必须使用时先解释并降阶表达。",
+    "每次正式出题都应形成独立任务上下文，不把上一轮题量、题型、材料范围自动污染到新任务。",
+    "命题说明和质量审核不作为主结果首屏内容；主结果优先展示试题、参考答案、采分点和来源依据。"
   ],
   "acceptanceMatrix": [
-    { "id": "genre_specific", "label": "文体专属", "rule": "必须先识别文体，再使用对应考点。" },
-    { "id": "source_authenticity", "label": "来源真实", "rule": "文章来源必须真实可靠，严禁编造和篡改。" },
-    { "id": "text_based_answer", "label": "答案源于文本", "rule": "所有答案和采分点必须基于文本。" },
-    { "id": "no_textbook_reuse", "label": "不复用课内课文", "rule": "现代文阅读不得默认选用课内课文或课后篇目。" }
+    { "id": "genre_identification", "label": "文体识别", "rule": "必须先识别文体，再使用对应考点，各文体不得混用规则。" },
+    { "id": "source_scope", "label": "文章来源", "rule": "来源为官媒副刊、文学期刊、现当代名家、官方平台；优先选用教材已选作家；避免台湾作家和版权争议作家。" },
+    { "id": "source_authenticity", "label": "来源真实", "rule": "文章必须真实可靠，严禁捏造虚构，严禁修改文章内容。" },
+    { "id": "no_textbook_reuse", "label": "不复用课内课文", "rule": "禁止选用语文课本课内课文、课后阅读篇目。" },
+    { "id": "length_compliance", "label": "篇幅合规", "rule": "禁止＜700字或＞2000字；各文体适配篇幅符合规定范围。" },
+    { "id": "tone_appropriate", "label": "语言贴合初中生", "rule": "禁止成人化、学术化、晦涩难懂、AI套话、空泛哲理。" },
+    { "id": "subjective_answers", "label": "主观题答案", "rule": "主观题必须有参考答案和可直接判分的采分点。" },
+    { "id": "text_grounding", "label": "答案源于文本", "rule": "所有答案和采分点必须基于文本，不能脱离文本空谈。" },
+    { "id": "score_rules", "label": "分值规则", "rule": "分值符合中考阅卷习惯并能分点评分。" },
+    { "id": "difficulty_gradient", "label": "难度梯度", "rule": "有梯度、有区分度；基础/提升/拓展三层难度分布合理。" },
+    { "id": "question_variety", "label": "题型多样", "rule": "避免重复考点和重复题型，确保多样性。" },
+    { "id": "no_overacademic", "label": "避免超纲术语", "rule": "避免未经解释的学术化表达；必须使用时先解释并降阶。" },
+    { "id": "primary_ui", "label": "UI 主结果", "rule": "试题优先展示，命题说明/质量审核折叠或内部化。" },
+    { "id": "context_isolation", "label": "上下文隔离", "rule": "新任务只继承用户明确保留的限制。" }
   ]
 }

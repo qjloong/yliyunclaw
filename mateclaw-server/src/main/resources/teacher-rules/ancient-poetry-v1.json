@@ -4,12 +4,14 @@
   "subject": "chinese",
   "module": "ancient_poetry",
   "name": "初中古诗词鉴赏规则包 v1",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "status": "builtin",
   "defaultQuestionMix": {
-    "recitationUnderstanding": "20%",
-    "imageEmotion": "25%",
+    "emotionTheme": "15%",
     "languageAppreciation": "20%",
-    "techniqueAnalysis": "15%",
+    "imageDescription": "15%",
+    "techniqueAnalysis": "20%",
+    "imageAnalysis": "10%",
     "comparisonReading": "20%"
   },
   "sourceRequirements": [
@@ -23,5 +25,86 @@
       "label": "最新教材",
       "rule": "涉及篇目、册别和背诵范围时，优先使用已绑定知识库中的最新教材。"
     }
+  ],
+  "questionTypeRules": [
+    {
+      "type": "emotionTheme",
+      "displayName": "情感主旨题",
+      "defaultScore": "3-5 分",
+      "generationRule": "考查诗歌表达了什么情感、抒发了什么志向、体现了怎样的人生态度；必须结合诗句或意象分析，不做过度解读。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "languageAppreciation",
+      "displayName": "炼字赏析题",
+      "defaultScore": "2-4 分",
+      "generationRule": "赏析虚词、语气词、动词、形容词、叠词、副词、颜色词、数量词、拟声词的表达效果；分析字词如何写景、传情、绘态，必须给出具体诗句和替代字对比。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "imageDescription",
+      "displayName": "画面描绘题",
+      "defaultScore": "3-4 分",
+      "generationRule": "抓取意象，用优美语言翻译、扩写诗句，还原诗歌场景；考察翻译、联想、语言表达能力，必须源于原诗意象。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "techniqueAnalysis",
+      "displayName": "表现手法题",
+      "defaultScore": "3-5 分",
+      "generationRule": "考查借景抒情、情景交融、托物言志、对比、衬托、动静结合、虚实结合、互文、用典、直抒胸臆等；必须指出手法所在诗句并分析作用。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "imageAnalysis",
+      "displayName": "意象分析题",
+      "defaultScore": "2-3 分",
+      "generationRule": "解读诗句中典型意象的含义和文化内涵；必须联系具体诗句，不脱离文本做抽象阐释。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    },
+    {
+      "type": "comparisonReading",
+      "displayName": "对比联读题",
+      "defaultScore": "4-8 分",
+      "generationRule": "从两首古诗词曲中相同的意象、手法、体裁、主旨等角度对比联读谈异同；必须观点明确、结合文本、语言简洁。",
+      "requiresAnswer": true,
+      "requiresScoringRubric": true,
+      "requiresMaterial": true
+    }
+  ],
+  "hardRules": [
+    "教材古诗词篇目优先；课外篇目限于教材古诗词作者的其他作品、教材课后推荐/单元拓展作品、唐诗三百首、宋词三百首。",
+    "高频主题覆盖：山水田园、羁旅思乡、送别惜别、爱国忧民、边塞征战、咏史怀古、咏物言志、人生感慨、哲理感悟等。",
+    "内容真实可靠，确为作家所写的诗文，严禁捏造虚构，严禁修改文章内容。",
+    "严禁选用高中篇目、晦涩难懂的古籍篇目、生僻字/异体字过多、典故过于冷僻、句式过于复杂的篇目。",
+    "严禁选用内容消极、不符合中学生价值观的篇目。",
+    "主题积极向上或富有思辨价值；与课内形成知识或能力关联（如同作者、同体裁、同主题、同手法）。",
+    "主观题必须提供参考答案和可直接判分的采分点。",
+    "画面描绘题答案必须基于原诗意象，不得脱离文本做过度文学化扩写。",
+    "表现手法赏析必须指出具体诗句并分析作用，禁止只列术语不做文本分析。",
+    "禁止默认使用超纲或学术化术语；必须使用时先解释并降阶表达。",
+    "每次正式出题都应形成独立任务上下文，不把上一轮题量、题型、材料范围自动污染到新任务。",
+    "命题说明和质量审核不作为主结果首屏内容；主结果优先展示试题、参考答案、采分点和来源依据。"
+  ],
+  "acceptanceMatrix": [
+    { "id": "source_scope", "label": "文章来源", "rule": "教材优先，课外篇目确为作家原作，严禁捏造。" },
+    { "id": "no_over_scope", "label": "禁止超纲", "rule": "不选高中篇目、晦涩古籍、冷僻典故、消极内容。" },
+    { "id": "subjective_answers", "label": "主观题答案", "rule": "情感主旨、手法赏析等主观题必须有参考答案和采分点。" },
+    { "id": "text_grounding", "label": "文本依据", "rule": "炼字、画面、意象、手法题必须结合具体诗句分析。" },
+    { "id": "question_mix", "label": "题型比例", "rule": "情感主旨约15%、炼字赏析约20%、画面描绘约15%、表现手法约20%、意象分析约10%、对比联读约20%。" },
+    { "id": "score_rules", "label": "分值规则", "rule": "炼字/意象 2-3分，画面/情感/手法 3-5分，对比联读 4-8分。" },
+    { "id": "no_overacademic", "label": "避免超纲术语", "rule": "避免未经解释的学术化表达。" },
+    { "id": "primary_ui", "label": "UI 主结果", "rule": "试题优先展示，命题说明/质量审核折叠或内部化。" },
+    { "id": "context_isolation", "label": "上下文隔离", "rule": "新任务只继承用户明确保留的限制。" }
   ]
 }

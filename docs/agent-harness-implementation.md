@@ -305,3 +305,34 @@ Before implementing feature code for v2, confirm this staged order:
 - After completing a phase, set its status to `done`, list actual modified files, record tests, and capture residual risks.
 - If blocked, set status to `blocked` with reason and recommended path.
 - Before moving to the next phase, check `git status` and confirm unrelated files were not changed.
+
+## Teacher RulePack Upgrade Convention
+
+> **Effective: 2026-05-28**
+
+Rule pack IDs are treated as **stable identifiers** and must **not** change when the rule content is upgraded. Only the `version` field and rule content are updated.
+
+### Why
+
+- Changing the ID (e.g. `.v1` → `.v2`) forces cascading edits across `TeacherRulePackService`, `TeacherSkillDefinitionService`, `TeacherAcceptanceService`, `StateGraphPlanExecuteAgent`, template JSON `rulePackIds`, and any UI bindings.
+- `TeacherRulePack` already has an independent `version` field (e.g. `"2.0.0"`) that is visible to operators and can be checked for compatibility.
+
+### Upgrade Checklist
+
+| Step | Location | Action |
+| --- | --- | --- |
+| 1 | `TeacherRulePackService.java` | Update the hard-coded `TeacherRulePack` object content: `questionTypeRules`, `hardRules`, `acceptanceMatrix`, `defaultQuestionMix`, `scoreRules`, etc. Bump its `version` (e.g. `"1.0.0"` → `"2.0.0"`). **Do not change the ID constant.** |
+| 2 | `teacher-rules/<pack>.json` | Update the JSON resource file to match the new hard-coded content and bumped `version`. |
+| 3 | Template JSON (`teacher-exam-assistant.json`, etc.) | **No change** if the template already references the stable ID. |
+| 4 | Other Java consumers (`TeacherSkillDefinitionService`, `TeacherAcceptanceService`, `StateGraphPlanExecuteAgent`, etc.) | **No change** if they already reference the stable constant (e.g. `MODERN_READING_V1_ID`). |
+| 5 | UI / Agent bindings | **No change**; existing bindings continue to resolve the same ID to the updated content. |
+
+### Legacy IDs
+
+- Existing IDs with version suffixes (e.g. `teacher.rulepack.modern_reading.v1`, `teacher.rulepack.classical_chinese.v1`) are kept as-is for backward compatibility; treat them as stable identifiers going forward.
+- Future new rule packs should prefer IDs **without** a version suffix (e.g. `teacher.rulepack.writing` rather than `teacher.rulepack.writing.v1`) to make the convention obvious from the start.
+
+### Verification
+
+- After upgrading, run JSON validation on the resource file (`ConvertFrom-Json` / `JSON.parse`) and targeted Java compilation on `TeacherRulePackService`.
+- Confirm `listBuiltInRulePacks()` returns the updated `version` in its DTO output.
