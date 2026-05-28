@@ -93,6 +93,7 @@ public abstract class BaseAgent {
 
     /** 内置模板绑定信息（用于模板专项运行时门控） */
     protected String templateId;
+    protected String pluginKey;
     protected String profileId;
     protected String capabilityPackId;
     protected String templateMetadataJson;

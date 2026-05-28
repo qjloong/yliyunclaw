@@ -50,9 +50,36 @@ export interface Agent {
   profileId?: string | null
   capabilityPackId?: string | null
   templateMetadataJson?: string | null
+  pluginBindings?: AgentPluginBinding[] | null
   knowledgeBaseIdsJson?: string | null
   homeSubtitle?: string | null
   homeQuickStartsJson?: string | null
+  createTime?: string
+  updateTime?: string
+}
+
+export interface AgentPluginBinding {
+  id?: string | number
+  agentId?: string | number
+  pluginKey?: string | null
+  capabilityPackId?: string | null
+  stage?: string | null
+  subject?: string | null
+  enabled?: boolean | null
+  configJson?: string | null
+  createTime?: string | null
+  updateTime?: string | null
+}
+
+export interface WorkspaceSummary {
+  id: string | number
+  name: string
+  slug?: string
+  description?: string
+  basePath?: string
+  ownerId?: number
+  settingsJson?: string
+  projectPermissionMode?: 'limited' | 'full'
   createTime?: string
   updateTime?: string
 }
@@ -79,6 +106,7 @@ export interface AgentTemplate {
   defaultWorkspacePolicy?: Record<string, any> | null
   agentProfile?: Record<string, any> | null
   capabilityPack?: Record<string, any> | null
+  pluginBindings?: Record<string, any>[] | null
   knowledgeBindings?: Record<string, any> | null
   tools?: Record<string, any>[] | null
   inputSchema?: Record<string, any> | null
@@ -128,9 +156,6 @@ export interface TeacherRulePack {
 export interface TeacherRulePackView {
   rulePack: TeacherRulePack
   overridden: boolean
-  workspaceOverridden: boolean
-  globalOverridden: boolean
-  workspaceId?: string | number | null
   builtIn: TeacherRulePack
 }
 

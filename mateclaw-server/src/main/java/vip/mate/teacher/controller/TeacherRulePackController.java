@@ -24,11 +24,10 @@ import vip.mate.system.service.SystemSettingService;
 import java.util.List;
 
 /**
- * Teacher rule pack read API.
+ * Teacher rule pack API.
  *
- * <p>Phase 6 starts with a read-only foundation so the UI can expose the
- * built-in rules that already affect Teacher runs. Workspace/admin overrides
- * can be added without changing this response contract.</p>
+ * <p>Supports viewing built-in rules and saving custom overrides.
+ * Custom config takes precedence over built-in defaults.</p>
  */
 @Tag(name = "Teacher Rule Packs")
 @RestController
@@ -71,7 +70,7 @@ public class TeacherRulePackController {
         return R.ok(pack);
     }
 
-    @Operation(summary = "Get one Teacher rule pack with override state")
+    @Operation(summary = "Get one Teacher rule pack with custom config state")
     @GetMapping("/{id}/view")
     public R<TeacherRulePackView> view(@PathVariable String id,
                                        @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
@@ -80,12 +79,11 @@ public class TeacherRulePackController {
             throw new MateClawException(404, "Teacher rule pack not found: " + id);
         }
         loadWorkspaceOverrideIfPresent(id, workspaceId);
+        boolean overridden = TeacherRulePackService.hasWorkspaceOverride(id, workspaceId)
+                || TeacherRulePackService.hasOverride(id);
         return R.ok(new TeacherRulePackView(
                 TeacherRulePackService.effectiveRulePack(id, workspaceId),
-                TeacherRulePackService.hasWorkspaceOverride(id, workspaceId) || TeacherRulePackService.hasOverride(id),
-                TeacherRulePackService.hasWorkspaceOverride(id, workspaceId),
-                TeacherRulePackService.hasOverride(id),
-                workspaceId,
+                overridden,
                 builtIn
         ));
     }

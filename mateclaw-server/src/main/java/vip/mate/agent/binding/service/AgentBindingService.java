@@ -4,9 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import vip.mate.agent.binding.model.AgentPluginBinding;
 import vip.mate.agent.binding.model.AgentProviderPreference;
 import vip.mate.agent.binding.model.AgentSkillBinding;
 import vip.mate.agent.binding.model.AgentToolBinding;
+import vip.mate.agent.binding.repository.AgentPluginBindingMapper;
 import vip.mate.agent.binding.repository.AgentProviderPreferenceMapper;
 import vip.mate.agent.binding.repository.AgentSkillBindingMapper;
 import vip.mate.agent.binding.repository.AgentToolBindingMapper;
@@ -32,6 +35,7 @@ public class AgentBindingService {
 
     private final AgentSkillBindingMapper skillBindingMapper;
     private final AgentToolBindingMapper toolBindingMapper;
+    private final AgentPluginBindingMapper pluginBindingMapper;
     private final AgentProviderPreferenceMapper providerPreferenceMapper;
 
     // ==================== Skill Bindings ====================
@@ -169,6 +173,57 @@ public class AgentBindingService {
                 toolBindingMapper.insert(binding);
             }
         }
+    }
+
+    // ==================== Plugin Bindings ====================
+
+    public List<AgentPluginBinding> listPluginBindings(Long agentId) {
+        return pluginBindingMapper.selectList(
+                new LambdaQueryWrapper<AgentPluginBinding>()
+                        .eq(AgentPluginBinding::getAgentId, agentId)
+                        .orderByAsc(AgentPluginBinding::getCreateTime));
+    }
+
+    public AgentPluginBinding getPrimaryEnabledPluginBinding(Long agentId) {
+        return listPluginBindings(agentId).stream()
+                .filter(binding -> Boolean.TRUE.equals(binding.getEnabled()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public void setPluginBindings(Long agentId, List<AgentPluginBinding> pluginBindings) {
+        pluginBindingMapper.delete(
+                new LambdaQueryWrapper<AgentPluginBinding>()
+                        .eq(AgentPluginBinding::getAgentId, agentId));
+        if (pluginBindings == null) {
+            return;
+        }
+        for (AgentPluginBinding pluginBinding : pluginBindings) {
+            if (pluginBinding == null) {
+                continue;
+            }
+            String pluginKey = trimToNull(pluginBinding.getPluginKey());
+            if (!StringUtils.hasText(pluginKey)) {
+                continue;
+            }
+            AgentPluginBinding row = new AgentPluginBinding();
+            row.setAgentId(agentId);
+            row.setPluginKey(pluginKey);
+            row.setCapabilityPackId(trimToNull(pluginBinding.getCapabilityPackId()));
+            row.setStage(trimToNull(pluginBinding.getStage()));
+            row.setSubject(trimToNull(pluginBinding.getSubject()));
+            row.setEnabled(pluginBinding.getEnabled() == null || pluginBinding.getEnabled());
+            row.setConfigJson(trimToNull(pluginBinding.getConfigJson()));
+            pluginBindingMapper.insert(row);
+        }
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     // ==================== Provider Preferences (RFC-009 PR-3) ====================

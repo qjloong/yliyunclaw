@@ -778,6 +778,7 @@ interface AgentTemplateManifestMeta {
   starterPrompts?: AgentTemplateStarterPromptMeta[] | null
   qualityGates?: Record<string, AgentTemplateQualityGateMeta> | null
   mockAcceptanceTasks?: AgentTemplateMockTaskMeta[] | null
+  pluginBindings?: Record<string, any>[] | null
 }
 
 interface ActiveTemplateMockTask {
@@ -2580,7 +2581,10 @@ function parseAgentTemplateManifest(agent?: Agent | null): AgentTemplateManifest
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed as AgentTemplateManifestMeta : null
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed.template && typeof parsed.template === 'object'
+      ? parsed.template as AgentTemplateManifestMeta
+      : parsed as AgentTemplateManifestMeta
   } catch {
     return null
   }
@@ -2614,7 +2618,13 @@ function getAgentPreferredRuntimeMode(agent?: Agent | null): ConversationRuntime
 }
 
 function isTeacherExamAssistantAgent(agent?: Agent | null): boolean {
-  return agent?.templateId === 'builtin.teacher_exam_assistant'
+  const effectivePluginBindings = Array.isArray(agent?.pluginBindings) && agent?.pluginBindings?.length
+    ? agent.pluginBindings
+    : (parseAgentTemplateManifest(agent)?.pluginBindings || [])
+  const hasTeacherPlugin = effectivePluginBindings
+    .some(binding => binding?.pluginKey === 'builtin.teacher_exam')
+  return hasTeacherPlugin
+    || agent?.templateId === 'builtin.teacher_exam_assistant'
     || agent?.profileId === 'teacher_exam_assistant_profile'
     || agent?.capabilityPackId === 'capability.education.junior_chinese_exam'
     || agent?.capabilityPackId === 'capability.education.junior_classics_exam'

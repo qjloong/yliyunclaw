@@ -317,12 +317,8 @@ public final class TeacherRulePackService {
     }
 
     public static TeacherRulePack effectiveRulePack(String id, Long workspaceId) {
-        if (workspaceId != null) {
-            TeacherRulePack workspaceOverride = WORKSPACE_OVERRIDES.get(workspaceOverrideKey(id, workspaceId));
-            if (workspaceOverride != null) {
-                return workspaceOverride;
-            }
-        }
+        // T2-2-10e: 运行时规则优先级去 workspace 化，workspace 覆盖不再参与运行时优先级
+        // 保留全局覆盖作为系统插件默认规则，实例级覆盖由调用方通过 configJson 单独处理
         return effectiveRulePack(id);
     }
 
@@ -369,6 +365,14 @@ public final class TeacherRulePackService {
 
     public static String classicReadingPromptRules(Long workspaceId) {
         TeacherRulePack pack = classicReadingV2(workspaceId);
+        return promptRules(pack);
+    }
+
+    public static String promptRules(String rulePackId) {
+        TeacherRulePack pack = effectiveRulePack(rulePackId);
+        if (pack == null) {
+            pack = effectiveRulePack(CLASSIC_READING_V2_ID);
+        }
         return promptRules(pack);
     }
 

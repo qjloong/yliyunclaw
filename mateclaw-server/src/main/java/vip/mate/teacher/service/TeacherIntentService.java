@@ -14,6 +14,7 @@ import java.util.Locale;
 public final class TeacherIntentService {
 
     public static final String TEMPLATE_ID = "builtin.teacher_exam_assistant";
+    public static final String PLUGIN_KEY = "builtin.teacher_exam";
     public static final String PROFILE_ID = "teacher_exam_assistant_profile";
     public static final String CAPABILITY_PACK_ID = "capability.education.junior_chinese_exam";
     public static final String LEGACY_CAPABILITY_PACK_ID = "capability.education.junior_classics_exam";
@@ -22,9 +23,31 @@ public final class TeacherIntentService {
     }
 
     public static boolean isTeacherAgent(String templateId, String profileId, String capabilityPackId) {
+        return isTeacherAgent(templateId, profileId, capabilityPackId, null);
+    }
+
+    public static boolean isTeacherAgent(String templateId,
+                                         String profileId,
+                                         String capabilityPackId,
+                                         String pluginKey) {
+        if (isTeacherPlugin(pluginKey, capabilityPackId)) {
+            return true;
+        }
         return TEMPLATE_ID.equals(templateId)
                 || PROFILE_ID.equals(profileId)
-                || CAPABILITY_PACK_ID.equals(capabilityPackId)
+                || isTeacherCapabilityPack(capabilityPackId);
+    }
+
+    public static boolean isTeacherPlugin(String pluginKey, String capabilityPackId) {
+        return PLUGIN_KEY.equals(pluginKey)
+                && (capabilityPackId == null
+                || capabilityPackId.isBlank()
+                || isTeacherCapabilityPack(capabilityPackId)
+                || capabilityPackId.startsWith("capability.education."));
+    }
+
+    public static boolean isTeacherCapabilityPack(String capabilityPackId) {
+        return CAPABILITY_PACK_ID.equals(capabilityPackId)
                 || LEGACY_CAPABILITY_PACK_ID.equals(capabilityPackId);
     }
 

@@ -728,6 +728,8 @@ export const agentBindingApi = {
   unbindSkill: (agentId: string | number, skillId: number) => http.delete(`/agents/${agentId}/skills/${skillId}`),
   listTools: (agentId: string | number) => http.get(`/agents/${agentId}/tools`),
   setTools: (agentId: string | number, toolNames: string[]) => http.put(`/agents/${agentId}/tools`, toolNames),
+  listPlugins: (agentId: string | number) => http.get(`/agents/${agentId}/plugins`),
+  setPlugins: (agentId: string | number, pluginBindings: any[]) => http.put(`/agents/${agentId}/plugins`, pluginBindings),
   // RFC-009 PR-3: per-agent provider preference order. Empty list = use global chain order.
   listProviderPreferences: (agentId: string | number) =>
     http.get(`/agents/${agentId}/provider-preferences`),

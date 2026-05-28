@@ -68,8 +68,19 @@
   },
   "capabilityPack": {
     "packId": "capability.education.junior_chinese_exam",
+    "pluginKey": "builtin.teacher_exam",
+    "stage": "junior",
+    "subject": "chinese",
     "name": "初中语文出题能力包",
     "defaultRulePackId": "teacher.rulepack.classic_reading.v2",
+    "rulePackIds": [
+      "teacher.rulepack.classic_reading.v2",
+      "teacher.rulepack.classical_chinese.v1",
+      "teacher.rulepack.modern_reading.v1",
+      "teacher.rulepack.ancient_poetry.v1",
+      "teacher.rulepack.basic_knowledge.v1",
+      "teacher.rulepack.writing.v1"
+    ],
     "defaultTeacherSkillIds": [
       "teacher.skill.classic_exam_loop.v1",
       "teacher.skill.exam_review.v1"
@@ -87,6 +98,27 @@
       "session_document_augmentation"
     ]
   },
+  "pluginBindings": [
+    {
+      "pluginKey": "builtin.teacher_exam",
+      "enabled": true,
+      "capabilityPackId": "capability.education.junior_chinese_exam",
+      "stage": "junior",
+      "subject": "chinese",
+      "defaultRulePackIds": [
+        "teacher.rulepack.classic_reading.v2",
+        "teacher.rulepack.classical_chinese.v1",
+        "teacher.rulepack.modern_reading.v1",
+        "teacher.rulepack.ancient_poetry.v1",
+        "teacher.rulepack.basic_knowledge.v1",
+        "teacher.rulepack.writing.v1"
+      ],
+      "defaultTeacherSkillIds": [
+        "teacher.skill.classic_exam_loop.v1",
+        "teacher.skill.exam_review.v1"
+      ]
+    }
+  ],
   "contextSources": {
     "knowledgeBases": {
       "mode": "agent_config_optional",

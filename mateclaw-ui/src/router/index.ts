@@ -33,7 +33,19 @@ const router = createRouter({
           path: 'teacher-ops',
           name: 'TeacherOps',
           component: () => import('@/views/TeacherOps.vue'),
-          meta: { title: 'Teacher Ops', requiresAdmin: true },
+          meta: { title: '初中语文出题规则', requiresAdmin: true },
+        },
+        {
+          path: 'plugins/education-exam-rules',
+          name: 'PluginEducationExamRules',
+          component: () => import('@/views/TeacherOps.vue'),
+          meta: { title: '初中语文出题规则', requiresAdmin: true },
+        },
+        {
+          path: 'plugins/education-exam-rules/agents',
+          name: 'PluginEducationExamRuleAgents',
+          component: () => import('@/views/PluginAgentBindings.vue'),
+          meta: { title: '规则插件绑定 Agent', requiresAdmin: true },
         },
         {
           path: 'wiki',

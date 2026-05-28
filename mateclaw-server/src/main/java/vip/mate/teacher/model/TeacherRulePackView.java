@@ -6,9 +6,6 @@ package vip.mate.teacher.model;
 public record TeacherRulePackView(
         TeacherRulePack rulePack,
         boolean overridden,
-        boolean workspaceOverridden,
-        boolean globalOverridden,
-        Long workspaceId,
         TeacherRulePack builtIn
 ) {
 }

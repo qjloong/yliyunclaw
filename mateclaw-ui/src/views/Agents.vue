@@ -156,38 +156,13 @@
                 <div class="template-tags">
                   <span v-for="tag in templateTags(tpl)" :key="tag" class="tag-chip">{{ tag }}</span>
                 </div>
-                <div v-if="templateRulePack(tpl)" class="template-rule-pack">
+                <div v-if="isTeacherTemplate(tpl) && templatePluginBinding(tpl)" class="template-rule-pack">
                   <div class="template-rule-pack__head">
-                    <span class="template-rule-pack__label">规则包</span>
-                    <strong>{{ templateRulePack(tpl)?.name }}</strong>
-                    <span>v{{ templateRulePack(tpl)?.version }}</span>
-                    <button class="template-rule-pack__detail" type="button" @click.stop="openRulePackDetail(templateRulePack(tpl))">
+                    <span class="template-rule-pack__label">插件绑定</span>
+                    <strong>教学出题规则插件</strong>
+                    <span>{{ templatePluginBinding(tpl)?.capabilityPackName }}</span>
+                    <button class="template-rule-pack__detail" type="button" @click.stop="goToTeacherOpsFromTemplate">
                       查看规则
-                    </button>
-                  </div>
-                  <div class="template-rule-pack__rules">
-                    <span
-                      v-for="rule in templateRulePack(tpl)?.questionTypeRules?.slice(0, 4)"
-                      :key="rule.type"
-                    >
-                      {{ rule.displayName }} · {{ rule.defaultScore }}
-                    </span>
-                  </div>
-                </div>
-                <div v-if="isTeacherTemplate(tpl) && teacherRulePackList.length" class="template-rule-pack">
-                  <div class="template-rule-pack__head">
-                    <span class="template-rule-pack__label">初中语文模块</span>
-                    <strong>{{ teacherRulePackList.length }} 类规则包</strong>
-                  </div>
-                  <div class="template-rule-pack__rules">
-                    <button
-                      v-for="pack in teacherRulePackList"
-                      :key="pack.id"
-                      class="template-skill-chip"
-                      type="button"
-                      @click.stop="openRulePackDetail(pack)"
-                    >
-                      {{ pack.name }}
                     </button>
                   </div>
                 </div>
@@ -281,200 +256,202 @@
       </div>
     </div>
 
-    <div v-if="selectedRulePack" class="modal-overlay" @click.self="closeRulePackDetail">
+    <div v-if="selectedRulePack" class="modal-overlay modal-overlay--top" @click.self="closeRulePackDetail">
       <div class="modal rule-pack-modal">
         <div class="modal-header">
           <div>
             <p class="rule-pack-kicker">Teacher 规则包</p>
             <h2>{{ selectedRulePack.name }} v{{ selectedRulePack.version }}</h2>
-            <p v-if="selectedRulePackView?.workspaceOverridden" class="rule-pack-override-state">当前工作区使用管理员覆盖版本</p>
-            <p v-else-if="selectedRulePackView?.globalOverridden" class="rule-pack-override-state">当前使用全局管理员覆盖版本</p>
+            <p v-if="selectedRulePackView?.overridden" class="rule-pack-override-state">当前使用自定义配置</p>
+            <p v-else class="rule-pack-override-state">当前使用插件统一配置</p>
           </div>
-          <button class="modal-close" @click="closeRulePackDetail">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
+          <div class="modal-header__actions">
+            <button v-if="isAdmin" class="btn-secondary" type="button" @click="rulePackEditMode = !rulePackEditMode">
+              {{ rulePackEditMode ? '返回查看' : '编辑配置' }}
+            </button>
+            <button class="modal-close" @click="closeRulePackDetail">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="modal-body rule-pack-body">
-          <section v-if="isAdmin" class="rule-pack-section rule-pack-editor">
-            <div class="rule-pack-editor__head">
-              <h3>管理员覆盖配置</h3>
-              <div class="rule-pack-editor__actions">
-                <button class="template-sync-btn" type="button" @click="syncRulePackJsonFromForm">
-                  从表单生成 JSON
-                </button>
-                <button class="template-sync-btn" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('workspace')">
-                  保存工作区覆盖
-                </button>
-                <button class="template-sync-btn" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('global')">
-                  保存全局覆盖
-                </button>
-                <button class="template-sync-btn" type="button" :disabled="savingRulePack || !selectedRulePackView?.workspaceOverridden" @click="clearRulePackOverride('workspace')">
-                  清除工作区覆盖
-                </button>
-                <button class="template-sync-btn" type="button" :disabled="savingRulePack || !selectedRulePackView?.globalOverridden" @click="clearRulePackOverride('global')">
-                  清除全局覆盖
-                </button>
-              </div>
-            </div>
-            <div class="rule-pack-form-editor">
-              <div class="rule-pack-form-grid">
-                <div class="form-group">
-                  <label class="form-label">学段</label>
-                  <input v-model="rulePackForm.stage" class="form-input" placeholder="junior" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">学科</label>
-                  <input v-model="rulePackForm.subject" class="form-input" placeholder="chinese" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">模块</label>
-                  <input v-model="rulePackForm.module" class="form-input" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">名称</label>
-                  <input v-model="rulePackForm.name" class="form-input" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">版本</label>
-                  <input v-model="rulePackForm.version" class="form-input" />
+          <!-- Edit Mode -->
+          <div v-if="rulePackEditMode" class="rule-pack-edit-body">
+            <section class="rule-pack-section rule-pack-editor">
+              <div class="rule-pack-editor__head">
+                <h3>管理员覆盖配置</h3>
+                <div class="rule-pack-editor__actions">
+                  <button class="btn-primary" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('workspace')">
+                    保存实例自定义配置
+                  </button>
+                  <button class="btn-secondary danger" type="button" :disabled="savingRulePack || !selectedRulePackView?.overridden" @click="clearRulePackOverride('workspace')">
+                    恢复插件统一配置
+                  </button>
                 </div>
               </div>
-              <div class="rule-pack-form-block">
-                <h4>题型比例</h4>
+              <div class="rule-pack-form-editor">
                 <div class="rule-pack-form-grid">
-                  <div v-for="item in rulePackMixFormItems" :key="item.key" class="form-group">
-                    <label class="form-label">{{ item.label }}</label>
-                    <input v-model="rulePackForm.defaultQuestionMix[item.key]" class="form-input" />
+                  <div class="form-group">
+                    <label class="form-label">学段</label>
+                    <input v-model="rulePackForm.stage" class="form-input" placeholder="junior" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">学科</label>
+                    <input v-model="rulePackForm.subject" class="form-input" placeholder="chinese" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">模块</label>
+                    <input v-model="rulePackForm.module" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">名称</label>
+                    <input v-model="rulePackForm.name" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">版本</label>
+                    <input v-model="rulePackForm.version" class="form-input" />
                   </div>
                 </div>
-              </div>
-              <div class="rule-pack-form-block">
-                <h4>题型规则</h4>
-                <div class="rule-pack-question-editor">
-                  <div v-for="rule in rulePackForm.questionTypeRules" :key="rule.type" class="rule-pack-question-edit-item">
-                    <div class="rule-pack-form-grid">
-                      <div class="form-group">
-                        <label class="form-label">题型</label>
-                        <input v-model="rule.displayName" class="form-input" />
-                      </div>
-                      <div class="form-group">
-                        <label class="form-label">默认分值</label>
-                        <input v-model="rule.defaultScore" class="form-input" />
-                      </div>
-                    </div>
-                    <div class="form-group full-width">
-                      <label class="form-label">生成规则</label>
-                      <textarea v-model="rule.generationRule" class="form-textarea" rows="2"></textarea>
-                    </div>
-                    <div class="rule-pack-checkboxes">
-                      <label><input v-model="rule.requiresAnswer" type="checkbox" /> 必须有答案</label>
-                      <label><input v-model="rule.requiresScoringRubric" type="checkbox" /> 必须有采分点</label>
-                      <label><input v-model="rule.requiresMaterial" type="checkbox" /> 必须有材料/来源</label>
+                <div class="rule-pack-form-block">
+                  <h4>题型比例</h4>
+                  <div class="rule-pack-form-grid">
+                    <div v-for="item in rulePackMixFormItems" :key="item.key" class="form-group">
+                      <label class="form-label">{{ item.label }}</label>
+                      <input v-model="rulePackForm.defaultQuestionMix[item.key]" class="form-input" />
                     </div>
                   </div>
                 </div>
-              </div>
-              <div class="rule-pack-form-block">
-                <h4>硬性规则</h4>
-                <div class="rule-pack-hard-edit-list">
-                  <div v-for="(_, idx) in rulePackForm.hardRules" :key="idx" class="rule-pack-hard-edit-item">
-                    <input v-model="rulePackForm.hardRules[idx]" class="form-input" />
-                    <button class="provider-pref-btn danger" type="button" @click="removeHardRule(idx)">×</button>
-                  </div>
-                </div>
-                <button class="template-sync-btn" type="button" @click="addHardRule">新增硬性规则</button>
-              </div>
-              <div class="rule-pack-form-block">
-                <h4>资料与课标要求</h4>
-                <div class="rule-pack-hard-edit-list">
-                  <div v-for="(_, idx) in rulePackForm.sourceRequirements" :key="idx" class="rule-pack-source-edit-item">
-                    <div class="rule-pack-form-grid">
-                      <div class="form-group">
-                        <label class="form-label">类型</label>
-                        <input v-model="rulePackForm.sourceRequirements[idx].label" class="form-input" placeholder="课程标准 / 最新教材 / 题型要求" />
+                <div class="rule-pack-form-block">
+                  <h4>题型规则</h4>
+                  <div class="rule-pack-question-editor">
+                    <div v-for="rule in rulePackForm.questionTypeRules" :key="rule.type" class="rule-pack-question-edit-item">
+                      <div class="rule-pack-form-grid">
+                        <div class="form-group">
+                          <label class="form-label">题型</label>
+                          <input v-model="rule.displayName" class="form-input" />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label">默认分值</label>
+                          <input v-model="rule.defaultScore" class="form-input" />
+                        </div>
                       </div>
-                      <div class="form-group">
-                        <label class="form-label">识别 Key</label>
-                        <input v-model="rulePackForm.sourceRequirements[idx].id" class="form-input" placeholder="curriculum_standard" />
+                      <div class="form-group full-width">
+                        <label class="form-label">生成规则</label>
+                        <textarea v-model="rule.generationRule" class="form-textarea" rows="2"></textarea>
+                      </div>
+                      <div class="rule-pack-checkboxes">
+                        <label><input v-model="rule.requiresAnswer" type="checkbox" /> 必须有答案</label>
+                        <label><input v-model="rule.requiresScoringRubric" type="checkbox" /> 必须有采分点</label>
+                        <label><input v-model="rule.requiresMaterial" type="checkbox" /> 必须有材料/来源</label>
                       </div>
                     </div>
-                    <div class="form-group full-width">
-                      <label class="form-label">要求</label>
-                      <textarea v-model="rulePackForm.sourceRequirements[idx].rule" class="form-textarea" rows="2"></textarea>
-                    </div>
-                    <button class="provider-pref-btn danger" type="button" @click="removeSourceRequirement(idx)">×</button>
                   </div>
                 </div>
-                <button class="template-sync-btn" type="button" @click="addSourceRequirement">新增资料要求</button>
-              </div>
-            </div>
-            <textarea v-model="rulePackJsonDraft" class="rule-pack-json-editor" spellcheck="false"></textarea>
-            <p class="binding-hint">工作区覆盖优先于全局覆盖；覆盖只影响新会话；请保持 id 不变。普通用户只能使用管理员发布后的有效规则。</p>
-          </section>
-          <section class="rule-pack-section">
-            <h3>适用边界</h3>
-            <div class="rule-pack-mix">
-              <span>学段：{{ selectedRulePack.stage || 'junior' }}</span>
-              <span>学科：{{ selectedRulePack.subject || 'chinese' }}</span>
-              <span>模块：{{ selectedRulePack.module }}</span>
-            </div>
-          </section>
-          <section class="rule-pack-section">
-            <h3>默认题型比例</h3>
-            <div class="rule-pack-mix">
-              <span v-for="item in rulePackMixItems(selectedRulePack)" :key="item.key">
-                {{ item.label }}：{{ item.value }}
-              </span>
-            </div>
-          </section>
-          <section class="rule-pack-section">
-            <h3>题型规则</h3>
-            <div class="rule-pack-rule-list">
-              <article v-for="rule in selectedRulePack.questionTypeRules" :key="rule.type" class="rule-pack-rule-item">
-                <div class="rule-pack-rule-item__head">
-                  <strong>{{ rule.displayName }}</strong>
-                  <span>{{ rule.defaultScore }}</span>
+                <div class="rule-pack-form-block">
+                  <h4>硬性规则</h4>
+                  <div class="rule-pack-hard-edit-list">
+                    <div v-for="(_, idx) in rulePackForm.hardRules" :key="idx" class="rule-pack-hard-edit-item">
+                      <input v-model="rulePackForm.hardRules[idx]" class="form-input" />
+                      <button class="provider-pref-btn danger" type="button" @click="removeHardRule(idx)">×</button>
+                    </div>
+                  </div>
+                  <button class="btn-secondary" type="button" @click="addHardRule">新增硬性规则</button>
                 </div>
-                <p>{{ rule.generationRule }}</p>
-                <div class="rule-pack-flags">
-                  <span v-if="rule.requiresAnswer">必须有答案</span>
-                  <span v-if="rule.requiresScoringRubric">必须有采分点</span>
-                  <span v-if="rule.requiresMaterial">必须有材料/来源</span>
+                <div class="rule-pack-form-block">
+                  <h4>资料与课标要求</h4>
+                  <div class="rule-pack-hard-edit-list">
+                    <div v-for="(_, idx) in rulePackForm.sourceRequirements" :key="idx" class="rule-pack-source-edit-item">
+                      <div class="rule-pack-form-grid">
+                        <div class="form-group">
+                          <label class="form-label">类型</label>
+                          <input v-model="rulePackForm.sourceRequirements[idx].label" class="form-input" placeholder="课程标准 / 最新教材 / 题型要求" />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label">识别 Key</label>
+                          <input v-model="rulePackForm.sourceRequirements[idx].id" class="form-input" placeholder="curriculum_standard" />
+                        </div>
+                      </div>
+                      <div class="form-group full-width">
+                        <label class="form-label">要求</label>
+                        <textarea v-model="rulePackForm.sourceRequirements[idx].rule" class="form-textarea" rows="2"></textarea>
+                      </div>
+                      <button class="provider-pref-btn danger" type="button" @click="removeSourceRequirement(idx)">×</button>
+                    </div>
+                  </div>
+                  <button class="btn-secondary" type="button" @click="addSourceRequirement">新增资料要求</button>
                 </div>
-              </article>
-            </div>
-          </section>
-          <section class="rule-pack-section">
-            <h3>硬性规则</h3>
-            <ul class="rule-pack-hard-rules">
-              <li v-for="rule in selectedRulePack.hardRules" :key="rule">{{ rule }}</li>
-            </ul>
-          </section>
-          <section v-if="selectedRulePack.sourceRequirements?.length" class="rule-pack-section">
-            <h3>资料与课标要求</h3>
-            <div class="rule-pack-acceptance">
-              <div v-for="item in selectedRulePack.sourceRequirements" :key="item.id || item.label" class="rule-pack-acceptance__item">
-                <strong>{{ item.label || item.id }}</strong>
-                <span>{{ item.rule }}</span>
               </div>
-            </div>
-          </section>
-          <section class="rule-pack-section">
-            <h3>验收项</h3>
-            <div class="rule-pack-acceptance">
-              <div v-for="item in selectedRulePack.acceptanceMatrix" :key="item.id || item.label" class="rule-pack-acceptance__item">
-                <strong>{{ item.label }}</strong>
-                <span>{{ item.rule }}</span>
+              <textarea v-model="rulePackJsonDraft" class="rule-pack-json-editor" spellcheck="false"></textarea>
+              <p class="binding-hint">修改后仅对当前实例生效，保持 id 不变。</p>
+            </section>
+          </div>
+          <!-- View Mode -->
+          <div v-else class="rule-pack-view-body">
+            <section class="rule-pack-section">
+              <h3>适用边界</h3>
+              <div class="rule-pack-mix">
+                <span>学段：{{ selectedRulePack.stage || 'junior' }}</span>
+                <span>学科：{{ selectedRulePack.subject || 'chinese' }}</span>
+                <span>模块：{{ selectedRulePack.module }}</span>
               </div>
-            </div>
-          </section>
+            </section>
+            <section class="rule-pack-section">
+              <h3>默认题型比例</h3>
+              <div class="rule-pack-mix">
+                <span v-for="item in rulePackMixItems(selectedRulePack)" :key="item.key">
+                  {{ item.label }}：{{ item.value }}
+                </span>
+              </div>
+            </section>
+            <section class="rule-pack-section">
+              <h3>题型规则</h3>
+              <div class="rule-pack-rule-list">
+                <article v-for="rule in selectedRulePack.questionTypeRules" :key="rule.type" class="rule-pack-rule-item">
+                  <div class="rule-pack-rule-item__head">
+                    <strong>{{ rule.displayName }}</strong>
+                    <span>{{ rule.defaultScore }}</span>
+                  </div>
+                  <p>{{ rule.generationRule }}</p>
+                  <div class="rule-pack-flags">
+                    <span v-if="rule.requiresAnswer">必须有答案</span>
+                    <span v-if="rule.requiresScoringRubric">必须有采分点</span>
+                    <span v-if="rule.requiresMaterial">必须有材料/来源</span>
+                  </div>
+                </article>
+              </div>
+            </section>
+            <section class="rule-pack-section">
+              <h3>硬性规则</h3>
+              <ul class="rule-pack-hard-rules">
+                <li v-for="rule in selectedRulePack.hardRules" :key="rule">{{ rule }}</li>
+              </ul>
+            </section>
+            <section v-if="selectedRulePack.sourceRequirements?.length" class="rule-pack-section">
+              <h3>资料与课标要求</h3>
+              <div class="rule-pack-acceptance">
+                <div v-for="item in selectedRulePack.sourceRequirements" :key="item.id || item.label" class="rule-pack-acceptance__item">
+                  <strong>{{ item.label || item.id }}</strong>
+                  <span>{{ item.rule }}</span>
+                </div>
+              </div>
+            </section>
+            <section class="rule-pack-section">
+              <h3>验收项</h3>
+              <div class="rule-pack-acceptance">
+                <div v-for="item in selectedRulePack.acceptanceMatrix" :key="item.id || item.label" class="rule-pack-acceptance__item">
+                  <strong>{{ item.label }}</strong>
+                  <span>{{ item.rule }}</span>
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
       </div>
     </div>
 
-    <div v-if="selectedTeacherSkill" class="modal-overlay" @click.self="selectedTeacherSkill = null">
+    <div v-if="selectedTeacherSkill" class="modal-overlay modal-overlay--top" @click.self="selectedTeacherSkill = null">
       <div class="modal rule-pack-modal">
         <div class="modal-header">
           <div>
@@ -696,15 +673,44 @@
           </div>
 
           <div v-if="modalTab === 'teacherRules'" class="binding-tab binding-tab--teacher-rules">
-            <div class="teacher-rules-intro">
-              <div>
-                <h3>Teacher 教学命题插件规则</h3>
-                <p>这些能力来自系统内置 Teacher 教学命题插件。RulePack 是硬规则来源；知识库负责教材、课标和稿件依据；Prompt 只负责角色与流程。当前 Teacher 实例默认可用全部规则，由出题意图自动路由。</p>
+            <!-- T2-2-10d: 实例级插件绑定管理 -->
+            <div class="plugin-binding-section mc-surface-card">
+              <div class="plugin-binding-head">
+                <div class="plugin-binding-head__left">
+                  <h4>插件绑定状态</h4>
+                  <span v-if="selectedPluginBindings.some(b => b.pluginKey === 'builtin.education_exam_rules' || b.pluginKey === 'builtin.teacher_exam')" class="status-badge status-enabled">已绑定</span>
+                  <span v-else class="status-badge status-disabled">未绑定</span>
+                </div>
+                <button v-if="isAdmin" class="btn-secondary" type="button" @click="goToTeacherOps">
+                  打开插件配置
+                </button>
               </div>
-              <button v-if="isAdmin" class="template-sync-btn" type="button" @click="goToTeacherOps">
-                打开插件配置
-              </button>
+              <div v-if="selectedPluginBindings.some(b => b.pluginKey === 'builtin.education_exam_rules' || b.pluginKey === 'builtin.teacher_exam')" class="plugin-binding-detail">
+                <div class="plugin-binding-row">
+                  <span class="detail-label">插件</span>
+                  <span class="detail-value">教学出题规则插件</span>
+                </div>
+                <div class="plugin-binding-row">
+                  <span class="detail-label">能力包</span>
+                  <span class="detail-value">初中语文出题规则</span>
+                </div>
+                <div v-if="isAdmin" class="plugin-binding-actions">
+                  <button class="btn-secondary danger" type="button" @click="unbindEducationPlugin">
+                    解绑插件
+                  </button>
+                </div>
+              </div>
+              <div v-else-if="isAdmin" class="plugin-binding-detail">
+                <p class="binding-hint">当前实例未绑定教学出题规则插件。绑定后即可使用初中语文出题规则能力包、RulePack 和 Teacher Skill。</p>
+                <button class="btn-primary" type="button" @click="bindEducationPlugin">
+                  绑定教学出题规则插件
+                </button>
+              </div>
+              <div v-else class="plugin-binding-detail">
+                <p class="binding-hint">当前实例未绑定教学出题规则插件，请联系管理员配置。</p>
+              </div>
             </div>
+
             <div v-if="teacherRulePackList.length === 0" class="binding-empty">暂无可用 Teacher 规则包</div>
             <div v-else class="teacher-rule-pack-grid">
               <article v-for="pack in teacherRulePackList" :key="pack.id" class="teacher-rule-pack-card">
@@ -724,7 +730,7 @@
                   </span>
                 </div>
                 <div class="teacher-rule-pack-card__actions">
-                  <button class="template-sync-btn" type="button" @click="openRulePackDetail(pack)">
+                  <button class="btn-secondary" type="button" @click="openRulePackDetail(pack)">
                     {{ isAdmin ? '查看/调整规则' : '查看规则' }}
                   </button>
                 </div>
@@ -840,7 +846,7 @@ import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, te
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { isGlobalAdmin } from '@/utils/access'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import type { Agent, AgentTemplate, TeacherRulePack, TeacherRulePackView, TeacherSkillBindingView, TeacherSkillDefinition, TemplateAppliedAgentHealth, TemplateHealth } from '@/types/index'
+import type { Agent, AgentPluginBinding, AgentTemplate, TeacherRulePack, TeacherRulePackView, TeacherSkillBindingView, TeacherSkillDefinition, TemplateAppliedAgentHealth, TemplateHealth } from '@/types/index'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -865,6 +871,8 @@ const homeQuickStarts = ref<Array<{ title: string; prompt: string }>>(createEmpt
 // RFC-009 PR-3: per-agent provider preference order
 const availableProviders = ref<{ id: string; name: string }[]>([])
 const selectedProviderIds = ref<string[]>([])
+// T2-2-10d: Agent 实例级插件绑定
+const selectedPluginBindings = ref<AgentPluginBinding[]>([])
 
 // Template selector state
 const showTemplateSelector = ref(false)
@@ -881,6 +889,7 @@ const selectedRulePackView = ref<TeacherRulePackView | null>(null)
 const rulePackJsonDraft = ref('')
 const rulePackForm = ref<TeacherRulePack>(createEmptyRulePackForm())
 const savingRulePack = ref(false)
+const rulePackEditMode = ref(false)
 const selectedTeacherSkill = ref<TeacherSkillDefinition | null>(null)
 const rulePackMixLabels: Record<string, string> = {
   fillBlank: '填空',
@@ -1082,9 +1091,39 @@ function clearHomeConfig() {
   homeQuickStarts.value = createEmptyHomeQuickStarts()
 }
 
+function parseAgentTemplateMeta(agent?: Agent | null): Record<string, any> | null {
+  const raw = agent?.templateMetadataJson?.trim()
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed.template && typeof parsed.template === 'object'
+      ? parsed.template as Record<string, any>
+      : parsed as Record<string, any>
+  } catch {
+    return null
+  }
+}
+
+function agentPluginBindings(agent?: Agent | null): Record<string, any>[] {
+  const instanceBindings = agent?.pluginBindings
+  if (Array.isArray(instanceBindings) && instanceBindings.length) {
+    return instanceBindings
+  }
+  const templateBindings = parseAgentTemplateMeta(agent)?.pluginBindings
+  return Array.isArray(templateBindings) ? templateBindings : []
+}
+
+function teacherPluginBinding(agent?: Agent | null): Record<string, any> | null {
+  return agentPluginBindings(agent).find(binding =>
+    binding?.pluginKey === 'builtin.teacher_exam' || binding?.pluginKey === 'builtin.education_exam_rules'
+  ) || null
+}
+
 function isTeacherAgentEntity(agent?: Agent | null): boolean {
   if (!agent) return false
-  return agent.templateId === 'builtin.teacher_exam_assistant'
+  return !!teacherPluginBinding(agent)
+    || agent.templateId === 'builtin.teacher_exam_assistant'
     || agent.profileId === 'teacher_exam_assistant_profile'
     || agent.capabilityPackId === 'capability.education.junior_chinese_exam'
     || agent.capabilityPackId === 'capability.education.junior_classics_exam'
@@ -1116,9 +1155,47 @@ function teacherRuleModuleLabel(module: string) {
   return labels[module] || module
 }
 
+function teacherAgentCapabilityLabel(agent?: Agent | null) {
+  if (!agent) return '未绑定能力包'
+  const pluginCapabilityPackId = teacherPluginBinding(agent)?.capabilityPackId
+  const resolvedCapabilityPackId = pluginCapabilityPackId || agent.capabilityPackId
+  if (resolvedCapabilityPackId === 'capability.education.junior_chinese_exam'
+    || resolvedCapabilityPackId === 'capability.education.junior_classics_exam') {
+    return '初中语文命题'
+  }
+  return resolvedCapabilityPackId || 'Teacher 默认能力包'
+}
+
 function goToTeacherOps() {
   closeModal()
   router.push('/teacher-ops')
+}
+
+function goToTeacherOpsFromTemplate() {
+  showTemplateSelector.value = false
+  router.push('/teacher-ops')
+}
+
+function bindEducationPlugin() {
+  // T2-2-10d: 同业务域仅允许一个主规则插件，绑定前清除同域旧绑定
+  selectedPluginBindings.value = selectedPluginBindings.value.filter(b =>
+    !(b.pluginKey === 'builtin.teacher_exam' || b.pluginKey === 'builtin.education_exam_rules')
+  )
+  selectedPluginBindings.value.push({
+    pluginKey: 'builtin.education_exam_rules',
+    capabilityPackId: 'capability.education.junior_chinese_exam',
+    stage: 'junior',
+    subject: 'chinese',
+    enabled: true,
+  })
+  ElMessage.success('已绑定教学出题规则插件，保存后生效')
+}
+
+function unbindEducationPlugin() {
+  selectedPluginBindings.value = selectedPluginBindings.value.filter(b =>
+    !(b.pluginKey === 'builtin.teacher_exam' || b.pluginKey === 'builtin.education_exam_rules')
+  )
+  ElMessage.success('已解绑教学出题规则插件，保存后生效')
 }
 
 function findTeacherTemplate(): AgentTemplate | undefined {
@@ -1244,16 +1321,36 @@ function templateTags(tpl: AgentTemplate): string[] {
 }
 
 function isTeacherTemplate(tpl: AgentTemplate): boolean {
-  return tpl.id === 'builtin.teacher_exam_assistant'
+  return (Array.isArray(tpl.pluginBindings) && tpl.pluginBindings.some(binding => binding?.pluginKey === 'builtin.teacher_exam'))
+    || tpl.id === 'builtin.teacher_exam_assistant'
     || tpl.capabilityPack?.defaultRulePackId === 'teacher.rulepack.classic_reading.v2'
     || tpl.capabilityPack?.packId === 'capability.education.junior_chinese_exam'
     || tpl.capabilityPack?.packId === 'capability.education.junior_classics_exam'
 }
 
+function templatePluginBinding(tpl: AgentTemplate): { pluginKey: string; pluginName: string; capabilityPackId: string; capabilityPackName: string } | undefined {
+  const binding = Array.isArray(tpl.pluginBindings)
+    ? tpl.pluginBindings.find(b => b?.enabled !== false && (b?.pluginKey === 'builtin.teacher_exam' || b?.pluginKey === 'builtin.education_exam_rules'))
+    : null
+  if (!binding) return undefined
+  const capabilityPackId = binding.capabilityPackId || tpl.capabilityPack?.packId || ''
+  let capabilityPackName = '初中语文出题规则'
+  if (capabilityPackId === 'capability.education.junior_chinese_exam' || capabilityPackId === 'capability.education.junior_classics_exam') {
+    capabilityPackName = '初中语文出题规则'
+  }
+  return {
+    pluginKey: binding.pluginKey || 'builtin.education_exam_rules',
+    pluginName: '教学出题规则插件',
+    capabilityPackId,
+    capabilityPackName,
+  }
+}
+
 function templateRulePack(tpl: AgentTemplate): TeacherRulePack | undefined {
-  const rulePackId = typeof tpl.capabilityPack?.defaultRulePackId === 'string'
-    ? tpl.capabilityPack.defaultRulePackId
-    : ''
+  const binding = templatePluginBinding(tpl)
+  const rulePackId = binding?.capabilityPackId
+    ? (typeof tpl.capabilityPack?.defaultRulePackId === 'string' ? tpl.capabilityPack.defaultRulePackId : '')
+    : (typeof tpl.capabilityPack?.defaultRulePackId === 'string' ? tpl.capabilityPack.defaultRulePackId : '')
   return rulePackId ? teacherRulePackMap.value[rulePackId] : undefined
 }
 
@@ -1280,6 +1377,7 @@ function closeRulePackDetail() {
   selectedRulePackView.value = null
   rulePackJsonDraft.value = ''
   rulePackForm.value = createEmptyRulePackForm()
+  rulePackEditMode.value = false
 }
 
 async function saveRulePackOverride(scope: 'workspace' | 'global' = 'workspace') {
@@ -1367,14 +1465,17 @@ function templateTeacherSkills(tpl: AgentTemplate): TeacherSkillDefinition[] {
   if (!isTeacherTemplate(tpl)) {
     return []
   }
+  const binding = templatePluginBinding(tpl)
   const activeIds = teacherSkillBindingView.value?.activeSkillIds
   const ids = Array.isArray(activeIds) && activeIds.length > 0
     ? activeIds
+    : Array.isArray(binding?.pluginKey ? tpl.pluginBindings?.find(b => b?.pluginKey === binding.pluginKey)?.defaultTeacherSkillIds : null)
+    ? tpl.pluginBindings!.find(b => b?.pluginKey === binding!.pluginKey)!.defaultTeacherSkillIds!
     : Array.isArray(tpl.capabilityPack?.defaultTeacherSkillIds)
     ? tpl.capabilityPack.defaultTeacherSkillIds
     : []
   return ids
-    .map(id => teacherSkillMap.value[String(id)])
+    .map((id: string) => teacherSkillMap.value[String(id)])
     .filter(Boolean)
 }
 
@@ -1603,6 +1704,8 @@ async function openEditModal(agent: Agent) {
     await ensureTeacherRulePacksLoaded()
   }
   selectedKnowledgeBaseIds.value = normalizeKnowledgeBaseIds(knowledgeBaseIds)
+  // T2-2-10d: 初始化插件绑定状态
+  selectedPluginBindings.value = Array.isArray(agent.pluginBindings) ? [...agent.pluginBindings] : []
   showModal.value = true
 
   if (!isAdmin.value) {
@@ -1611,7 +1714,7 @@ async function openEditModal(agent: Agent) {
 
   // Load available skills/tools/providers and current bindings in parallel
   try {
-    const [skillsRes, toolsRes, providersRes, boundSkillsRes, boundToolsRes, providerPrefsRes] = await Promise.all([
+    const [skillsRes, toolsRes, providersRes, boundSkillsRes, boundToolsRes, providerPrefsRes, boundPluginsRes] = await Promise.all([
       // RFC-042: /skills is now paginated; binding dropdown only needs enabled skills,
       // so listEnabled() is both semantically correct and shape-stable (returns array).
       skillApi.listEnabled(),
@@ -1620,6 +1723,7 @@ async function openEditModal(agent: Agent) {
       agentBindingApi.listSkills(agent.id),
       agentBindingApi.listTools(agent.id),
       agentBindingApi.listProviderPreferences(agent.id),
+      agentBindingApi.listPlugins(agent.id),
     ])
     availableSkills.value = (skillsRes as any).data || []
     availableTools.value = (toolsRes as any).data || []
@@ -1637,6 +1741,10 @@ async function openEditModal(agent: Agent) {
     selectedProviderIds.value = ((providerPrefsRes as any).data || [])
       .filter((b: any) => b.enabled)
       .map((b: any) => b.providerId)
+    const boundPlugins = ((boundPluginsRes as any).data || []) as AgentPluginBinding[]
+    if (boundPlugins.length) {
+      selectedPluginBindings.value = boundPlugins
+    }
   } catch {
     // Non-blocking: binding data load failure doesn't prevent editing basic info
   }
@@ -1670,6 +1778,8 @@ async function saveAgent() {
         agentBindingApi.setSkills(agentId, selectedSkillIds.value),
         agentBindingApi.setTools(agentId, selectedToolNames.value),
         agentBindingApi.setProviderPreferences(agentId, selectedProviderIds.value),
+        // T2-2-10d: Agent 实例级插件绑定持久化
+        agentBindingApi.setPlugins(agentId, selectedPluginBindings.value),
       ])
     }
 
@@ -2070,6 +2180,7 @@ async function toggleAgent(agent: Agent) {
 .modal-header h2 { font-size: 18px; font-weight: 600; color: var(--mc-text-primary); margin: 0; }
 .modal-close { width: 32px; height: 32px; border: none; background: none; cursor: pointer; color: var(--mc-text-tertiary); display: flex; align-items: center; justify-content: center; border-radius: 6px; }
 .modal-close:hover { background: var(--mc-bg-sunken); color: var(--mc-text-primary); }
+.modal-header__actions { display: flex; align-items: center; gap: 10px; }
 .modal-body { flex: 1; overflow-y: auto; padding: 20px 24px; }
 
 /* Modal Tabs */
@@ -2092,7 +2203,29 @@ async function toggleAgent(agent: Agent) {
 /* Binding Tab */
 .binding-tab { min-height: 200px; }
 .binding-tab--home { display: flex; flex-direction: column; }
+.modal-overlay--top { z-index: 1010; }
 .binding-tab--teacher-rules { display: flex; flex-direction: column; gap: 14px; }
+
+/* Buttons */
+.btn-primary { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--mc-primary); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.15s; }
+.btn-primary:hover { background: var(--mc-primary-hover); }
+.btn-primary:disabled { background: var(--mc-border); cursor: not-allowed; }
+.btn-secondary { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 10px; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+.btn-secondary:hover { background: var(--mc-bg-sunken); }
+.btn-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+.danger { color: var(--mc-danger); border-color: color-mix(in srgb, var(--mc-danger) 40%, var(--mc-border)); }
+
+/* Plugin binding section */
+.plugin-binding-section { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.plugin-binding-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.plugin-binding-head__left { display: flex; align-items: center; gap: 10px; }
+.plugin-binding-head h4 { margin: 0; font-size: 15px; color: var(--mc-text-primary); }
+.plugin-binding-detail { display: flex; flex-direction: column; gap: 10px; }
+.plugin-binding-row { display: flex; align-items: center; gap: 8px; }
+.plugin-binding-row .detail-label { font-size: 13px; color: var(--mc-text-secondary); min-width: 48px; }
+.plugin-binding-row .detail-value { font-size: 13px; color: var(--mc-text-primary); font-weight: 500; }
+.plugin-binding-actions { display: flex; gap: 10px; margin-top: 4px; }
+
 .teacher-rules-intro {
   display: flex;
   align-items: flex-start;

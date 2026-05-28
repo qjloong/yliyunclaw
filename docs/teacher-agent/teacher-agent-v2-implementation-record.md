@@ -12,8 +12,30 @@
 | 总控台账 | `docs/agent-harness-implementation.md` |
 | 当前实施文件 | `docs/teacher-agent/teacher-agent-v2-implementation-record.md` |
 | 需求来源 | `docs/teacher-agent/iusses.md`、`docs/teacher-agent/名著题内测.docx`、`docs/teacher-agent/初中名著出题要求.docx`、`docs/teacher-agent/初中文言文出题要求.docx`、`docs/teacher-agent/初中现代文出题要求.docx` |
-| 当前优先级 | v2-2 回归优化：模板/实例同步、Skill 隔离、规则实例化配置、自优化草案独立化、首用引导与连续会话衔接 |
-| 当前原则 | 不新增独立总计划；不以 prompt-only 方式继续堆规则；规则、状态、展示、验收必须闭环 |
+| 当前优先级 | T2-2-10 第二阶段：系统级公共规则插件、模板默认绑定、Agent 实例覆盖、去 workspace 化的运行时优先级 |
+| 当前原则 | 不新增独立总计划；不以 prompt-only 方式继续堆规则；规则、状态、展示、验收必须闭环；Teacher 规则最终优先级遵循“实例 > 模板 > 系统插件默认” |
+
+## 0.1 2026-05-28 方案确认补充
+
+### 已确认的目标结构
+
+1. Teacher 规则插件调整为系统级公共插件，建议总名称为“教学出题规则插件”。
+2. 当前页面命名从“Teacher 运维”收口为能力包配置页，例如“初中语文出题规则”。
+3. 插件默认内置 6 类初中语文出题规则；后续小学/高中/其他学科通过新增能力包扩展，而不是复制新的独立 Teacher 运维入口。
+4. 模板的意义是减少 Agent 实例初始化操作，因此模板默认规则统一从系统插件能力包引用，而不是维护独立规则事实源。
+5. Agent 实例支持绑定/解绑/修改 Teacher 规则插件，并允许实例级 override；实例修改不回写模板，也不回写系统插件公共配置。
+6. 多插件策略采用“允许多插件，但同业务域只允许一个主规则插件”。
+7. 实际会话规则优先级固定为：`Agent实例规则 > 模板默认规则 > 系统插件默认规则 > 内置兜底`；与 workspace 无关。
+
+### 第二阶段任务清单
+
+| Task | Status | Goal | Planned files |
+| --- | --- | --- | --- |
+| T2-2-10a | done | 将插件卡片、规则配置页、能力包命名统一为系统级公共规则插件表达，并为后续学段/学科扩展预留能力包入口。 | `Plugins.vue`; `TeacherOps.vue`; `PluginAgentBindings.vue`; `Agents.vue` | 所有 kicker/标题/描述统一为“教学出题规则插件 / 初中语文出题规则”；`vue-tsc --noEmit` passed。 |
+| T2-2-10b | done | 将“配置规则/Agent 绑定”改为二级页；规则配置页和绑定实例列表都可返回插件列表。 | `Plugins.vue`; `TeacherOps.vue`; `PluginAgentBindings.vue`; `router/index.ts` | 插件页“配置规则”跳转 `/plugins/education-exam-rules`（`TeacherOps.vue`）、“绑定 Agent”跳转 `/plugins/education-exam-rules/agents`（`PluginAgentBindings.vue`）；两个二级页均支持返回插件列表；绑定列表展示工作区/Agent/能力包/更新时间。 |
+| T2-2-10c | done | 模板管理页支持插件绑定/解绑，模板默认规则统一引用系统插件能力包。 | `Agents.vue`; `teacher-exam-assistant.json` | 模板卡片新增“插件绑定”展示区域；`templatePluginBinding` 优先从 `pluginBindings` 解析；`templateRulePack` / `templateTeacherSkills` 优先使用插件绑定中的能力包信息。 |
+| T2-2-10d | done | Agent 实例支持插件绑定、解绑、修改和实例级 override，同业务域仅允许一个主规则插件。 | `Agents.vue`; `api/index.ts`; `AgentBindingService` | Teacher 规则 Tab 新增插件绑定状态卡片：未绑定时显示绑定按钮，已绑定时显示解绑按钮；`bindEducationPlugin` / `unbindEducationPlugin` 强制同业务域仅保留一个主插件；`saveAgent` 通过 `agentBindingApi.setPlugins` 持久化；`openEditModal` 加载现有 plugin bindings。 |
+| T2-2-10e | done | 运行时 Teacher RulePack / Skill 解析改为实例优先、模板回退、系统插件默认兜底，移除 workspace 优先级。 | `TeacherRulePackService`; `StateGraphPlanExecuteAgent`; `TeacherImprovementDraftService` | `effectiveRulePack(id, workspaceId)` 已改为直接委托 `effectiveRulePack(id)`，workspace 覆盖不再参与运行时优先级；`StateGraphPlanExecuteAgent` 中所有 `promptRules(..., currentWorkspaceId)` 改为无 workspace 版本；`TeacherImprovementDraftService` 同步去 workspace 化。 |
 
 ## 1. 执行同步规则
 
@@ -285,3 +307,5 @@
 | 2026-05-27 | T2-2-1 / T2-2-3 + T2.5-4 回归 | done | `mateclaw-ui/src/views/Agents.vue`; `mateclaw-ui/src/components/chat/ProjectChangesPanel.vue`; `mateclaw-ui/src/types/index.ts`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；`teacher-exam-assistant.json` `ConvertFrom-Json` passed；`git diff --check` passed（仅 CRLF warning）。 | 已创建 Teacher 实例可在编辑页“首页”Tab 一键同步模板默认首页副标题和 4 个快捷入口，用户保存后生效且不覆盖 Prompt/知识库/RulePack/Skill；Teacher 自优化草案从模板卡片内迁移到页面顶部管理员运营面板，普通模板选择流程不再暴露草案。浏览器环境下 Project 面板增强生成文件路径映射：新增/变更文件可按 `app/output`、`output`、文件名映射到生成文件，HTML 提供 `/inline` 预览，下载走原始文件接口，点击不跳转会话。 |
 | 2026-05-27 | T2-2-8 Teacher 运维入口与实例规则配置修正 | done | `mateclaw-ui/src/views/TeacherOps.vue`; `mateclaw-ui/src/views/Agents.vue`; `mateclaw-ui/src/router/index.ts`; `mateclaw-ui/src/views/layout/MainLayout.vue`; `mateclaw-ui/src/i18n/locales/zh-CN.ts`; `mateclaw-ui/src/i18n/locales/en-US.ts`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；`git diff --check` passed（仅 CRLF warning）。 | 自优化草案定位为 Teacher 质量改进/运营诊断模块，已从智能体列表页移除并归入独立 `/teacher-ops` 管理员页面。Teacher 运维页集中展示 6 类初中语文 RulePack、Teacher Skill 绑定和自优化草案审核发布；Teacher 实例编辑页新增 `Teacher 规则` Tab，显示 6 类有效 RulePack，管理员可进入规则详情调整工作区/全局覆盖，普通用户只读；非 Teacher Agent 不显示该 Tab。 |
 | 2026-05-27 | T2-2-9 Teacher 内置插件化入口修正 | done | `mateclaw-ui/src/views/Plugins.vue`; `mateclaw-ui/src/views/layout/MainLayout.vue`; `mateclaw-ui/src/views/Agents.vue`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；`git diff --check` passed（仅 CRLF warning）。 | 撤销左侧工作空间通用导航中的 Teacher 运维入口，避免没有 Teacher Agent 或教育业务的工作空间出现业务菜单。插件页新增“系统内置插件”分组和“Teacher 教学命题插件”卡片，集中展示 RulePack、Teacher Skill、自优化草案、Harness 验收能力，并提供“配置插件”“绑定 Agent”入口；`/teacher-ops` 保留为管理员隐藏配置路由。Teacher Agent 实例规则 Tab 保留，并明确规则来自系统内置 Teacher 教学命题插件。 |
+| 2026-05-28 | T2-2-10 Teacher 插件能力包与学段学科扩展模型 | done | `mateclaw-server/src/main/java/vip/mate/agent/binding/model/AgentPluginBinding.java`; `mateclaw-server/src/main/java/vip/mate/agent/binding/repository/AgentPluginBindingMapper.java`; `mateclaw-server/src/main/java/vip/mate/agent/binding/service/AgentBindingService.java`; `mateclaw-server/src/main/java/vip/mate/agent/binding/controller/AgentBindingController.java`; `mateclaw-server/src/main/java/vip/mate/agent/service/TemplateService.java`; `mateclaw-server/src/main/java/vip/mate/agent/AgentGraphBuilder.java`; `mateclaw-server/src/main/java/vip/mate/teacher/service/TeacherIntentService.java`; `mateclaw-server/src/main/resources/db/schema.sql`; `mateclaw-server/src/main/resources/db/schema-mysql.sql`; `mateclaw-server/src/main/resources/db/migration/h2/V108__agent_plugin_binding.sql`; `mateclaw-server/src/main/resources/db/migration/mysql/V108__agent_plugin_binding.sql`; `mateclaw-ui/src/api/index.ts`; `mateclaw-ui/src/views/Agents.vue`; `mateclaw-ui/src/views/ChatConsole.vue`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | 已完成：目标文件 `get_errors` 无新增 Java 报错；`vue-tsc --project mateclaw-ui/tsconfig.json --noEmit` passed；`git diff --check` passed（仅现有 CRLF warning）。当前环境未提供 `mvn` 命令，服务端整包编译留待本地/CI Maven 环境补跑。 | Teacher 插件模型从“模板元数据闭环”推进到“实例级真实绑定闭环”：新增 `mate_agent_plugin` 表和 H2/MySQL `V108` 迁移；模板应用时将 `pluginBindings` 写入 Agent 绑定；旧 Teacher 实例自动回填 `builtin.teacher_exam` + 能力包默认绑定；运行时 Teacher 判断优先按 `pluginKey + capabilityPackId` 识别，前端 Teacher UI 识别同步优先读取插件绑定元数据，仍保留旧字段兼容。 |
+| 2026-05-28 | T2-2-10a~e 第二阶段推进 | done | `TeacherOps.vue`; `PluginAgentBindings.vue`; `Plugins.vue`; `Agents.vue`; `TeacherRulePackService.java`; `StateGraphPlanExecuteAgent.java`; `TeacherImprovementDraftService.java`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `vue-tsc --noEmit` passed；Java lint 无新增报错；`git diff --check` passed（仅现有 CRLF warning）。 | T2-2-10a: 统一插件页/二级页/Agent Tab 文案为“教学出题规则插件 / 初中语文出题规则”。T2-2-10b: 确认二级页面与返回链路已完备。T2-2-10c: 模板卡片增加插件绑定展示，`templateRulePack`/`templateTeacherSkills` 优先从 `pluginBindings` 解析。T2-2-10d: Agent 编辑页 Teacher 规则 Tab 新增插件绑定/解绑卡片，`saveAgent` 通过 `agentBindingApi.setPlugins` 持久化，`teacherPluginBinding` 兼容新旧 pluginKey。T2-2-10e: `effectiveRulePack(id, workspaceId)` 去 workspace 化，运行时直接委托无 workspace 版本；`StateGraphPlanExecuteAgent` 与 `TeacherImprovementDraftService` 同步移除 workspaceId 参数。 |

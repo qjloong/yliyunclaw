@@ -35,13 +35,13 @@
                   </svg>
                 </div>
                 <div class="plugin-meta">
-                  <div class="plugin-name">Teacher 教学命题插件</div>
-                  <div class="plugin-version">builtin · junior-chinese</div>
+                  <div class="plugin-name">教学出题规则插件</div>
+                  <div class="plugin-version">builtin.education_exam_rules</div>
                 </div>
                 <span class="status-badge status-enabled">Enabled</span>
               </div>
 
-              <p class="plugin-desc">面向初中语文命题场景，提供 6 类 RulePack、Teacher Skill、质量改进草案和 Harness 验收能力。绑定到 Teacher Agent 后在实例配置中展示规则入口。</p>
+              <p class="plugin-desc">面向教学出题场景的系统级公共规则插件。当前默认内置“初中语文出题规则”能力包和 6 类出题规则，后续可继续扩展小学、高中或其他学科能力包。</p>
 
               <div class="plugin-details">
                 <div class="plugin-detail-row">
@@ -55,6 +55,11 @@
               </div>
 
               <div class="plugin-capabilities">
+                <div class="capability-section">
+                  <span class="capability-label">CapabilityPack:</span>
+                  <span class="capability-tag">初中语文出题规则</span>
+                  <span class="capability-tag capability-tag--muted">小学/高中/其他学科待扩展</span>
+                </div>
                 <div class="capability-section">
                   <span class="capability-label">RulePack:</span>
                   <span class="capability-tag">名著</span>
@@ -73,7 +78,7 @@
               </div>
 
               <div class="plugin-actions">
-                <button class="btn-secondary" type="button" @click="openTeacherPluginConfig">配置插件</button>
+                <button class="btn-secondary" type="button" @click="openTeacherPluginConfig">配置规则</button>
                 <button class="btn-secondary" type="button" @click="openAgentBinding">绑定 Agent</button>
               </div>
             </div>
@@ -249,11 +254,11 @@ function hasCapabilities(plugin: PluginInfo): boolean {
 }
 
 function openTeacherPluginConfig() {
-  router.push('/teacher-ops')
+  router.push('/plugins/education-exam-rules')
 }
 
 function openAgentBinding() {
-  router.push('/agents')
+  router.push('/plugins/education-exam-rules/agents')
 }
 
 onMounted(() => {
@@ -431,6 +436,10 @@ onMounted(() => {
   border-radius: 3px;
   font-family: var(--mc-font-mono, monospace);
   font-size: 11px;
+}
+
+.capability-tag--muted {
+  opacity: .72;
 }
 
 .plugin-error {

@@ -164,6 +164,26 @@ Status: `in_progress`
 | T2-2-7 v2-2 回归验收 | in_progress | 把模板同步、Skill 隔离、槽位补全、删除列表、首页引导加入专项验收。 | harness, docs | `HarnessRunService` / teacher acceptance service; docs | 至少覆盖：旧实例同步、Code Agent 不显示 Teacher Skill、“需要”承接上一轮、默认列表不展示已删除、无 KB 时按内置规则生成但标注资料边界。 | 已完成代码级回归：`vue-tsc --noEmit`、模板 JSON 校验、`git diff --check` 通过；下一步补充/执行 Teacher v2-2 mock acceptance，把专项状态收口为 done。 |
 | T2-2-8 Teacher 运维入口与实例规则配置修正 | done | 新增 Teacher 配置页，并在 Teacher 实例编辑页展示 6 类有效 RulePack。 | teacher ops, agents ui, navigation | `TeacherOps.vue`; `Agents.vue`; `router/index.ts`; `MainLayout.vue`; i18n | Teacher 配置页集中管理 RulePack、Teacher Skill、自优化草案；智能体列表页不再显示自优化草案；已创建 Teacher 实例编辑页显示 Teacher 规则 Tab 和 6 类规则包；非 Teacher Agent 不显示该 Tab。 | 已新增 `/teacher-ops` 管理员配置路由；Teacher 配置页复用现有 RulePack/Skill/Improvement API；Teacher 实例编辑页新增 `Teacher 规则` Tab，显示 6 类 RulePack 并可进入详情。后续 T2-2-9 将入口从左侧导航迁移到插件页，避免通用工作空间菜单常驻 Teacher 业务入口。 |
 | T2-2-9 Teacher 内置插件化入口修正 | done | 将 Teacher 业务入口从工作空间通用导航迁移到插件页，作为系统内置业务插件管理。 | plugins, teacher ops, agents ui | `Plugins.vue`; `MainLayout.vue`; `Agents.vue`; docs | 左侧工作空间导航不再显示 Teacher 运维；插件页显示“Teacher 教学命题插件”内置插件卡；管理员从插件卡进入配置页；Teacher 实例规则 Tab 文案说明能力来自内置插件。 | 已移除侧边栏 `/teacher-ops` 项，保留受 admin 权限保护的隐藏配置路由；`Plugins.vue` 新增系统内置插件分组和 Teacher 插件卡，提供“配置插件”“绑定 Agent”入口；Teacher 实例规则说明改为插件来源。`vue-tsc --noEmit` passed；`git diff --check` passed。 |
+| T2-2-10 Teacher 插件能力包与学段学科扩展模型 | in_progress | 将 Teacher 插件从“初中语文单点入口”升级为“教学命题平台插件 + 能力包”模型，为小学/高中/其他学科扩展预留结构，并继续收口为“系统公共规则插件 → 模板默认绑定 → Agent 实例覆盖”的统一规则链。 | template metadata, plugins, agents ui, agent bindings, runtime routing, rulepack, skill | `teacher-exam-assistant.json`; `TemplateDTO`; `TemplateService`; `AgentPluginBinding`; `AgentBindingService`; `AgentGraphBuilder`; `TeacherIntentService`; `TeacherRulePackService`; `TeacherSkillDefinitionService`; `Plugins.vue`; `Agents.vue`; `types/index.ts`; docs | 运行时规则优先级明确为“Agent 实例规则 > 模板默认规则 > 系统插件默认规则”，且与 workspace 无关；插件页支持“配置规则/Agent 绑定”二级页返回；模板页支持插件绑定/解绑；Agent 实例支持绑定/解绑/调整 Teacher 规则插件且不回写模板或公共插件。 | T2-2-10a~e 已全部完成：a) 统一命名文案；b) 二级页面与绑定列表；c) 模板卡片插件绑定展示与 pluginBindings 优先解析；d) Agent 编辑页插件绑定/解绑管理与持久化；e) 后端运行时去 workspace 化。`vue-tsc --noEmit` 和 Java lint 均通过。 |
+
+#### T2-2-10 第二阶段确认方案（2026-05-28）
+
+- 规则插件升级为系统级公共插件，建议统一命名为“教学出题规则插件”；当前能力包页面命名为“初中语文出题规则”。
+- 插件作为公共规则中心，默认与 workspace、Agent 无强耦合；workspace 仅保留资源边界和权限语义，不再参与 Teacher RulePack / Skill 的生效优先级。
+- 模板不再作为 RulePack/Skill 的事实来源，只作为“默认绑定初始化器”：负责减少实例初始化操作，声明默认插件、能力包、默认 RulePack/Skill 选择以及首页引导等。
+- Agent 实例是最终运行实体；实例可绑定/解绑/调整 Teacher 规则插件，并允许实例级 override，但不影响模板和系统插件公共配置。
+- 多插件策略采用“允许多插件，但同业务域仅允许一个主规则插件生效”；教育出题域当前只允许一个主规则插件处于 enabled + primary 状态。
+- 实际会话规则优先级锁定为：`Agent实例规则 > 模板默认规则 > 系统插件默认规则 > 内置兜底`。
+
+#### T2-2-10 第二阶段任务清单
+
+| Task | Status | Scope | Acceptance |
+| --- | --- | --- | --- |
+| T2-2-10a 系统级公共插件重命名与能力包入口收口 | pending | plugins, navigation, docs | 插件页主卡片文案、二级页标题、入口描述统一为“教学出题规则插件 / 初中语文出题规则”；为后续小学/高中/其他学科能力包扩展保留列表结构。 |
+| T2-2-10b 插件页二级页面与 Agent 绑定列表 | pending | plugins ui, router, api | “配置规则”进入规则配置二级页并支持返回插件列表；“Agent 绑定”进入绑定实例列表二级页，展示工作区、Agent 名称、能力包、更新时间，并支持返回。 |
+| T2-2-10c 模板默认绑定统一改为插件引用 | pending | templates, template ui, dto, api | 模板管理页支持绑定/解绑规则插件，模板默认配置统一从系统插件能力包引用，模板不再承载独立规则事实源。 |
+| T2-2-10d Agent 实例级插件配置与 override 模型 | pending | agent bindings, agents ui, runtime model | Agent 实例支持绑定/解绑/调整 Teacher 规则插件，支持实例级规则 override；实例修改不影响模板与公共插件；同业务域只允许一个主规则插件。 |
+| T2-2-10e 运行时规则优先级去 workspace 化 | pending | runtime routing, rulepack, skill | Teacher 会话实际生效规则优先级改为“实例 > 模板 > 系统插件默认”，移除 workspace 在 Teacher RulePack / Skill 解析中的优先级语义。 |
 
 ### Requirement Sources
 

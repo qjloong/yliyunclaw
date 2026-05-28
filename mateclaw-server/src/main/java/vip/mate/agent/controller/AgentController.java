@@ -9,6 +9,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.AgentState;
+import vip.mate.agent.binding.service.AgentBindingService;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.common.result.R;
@@ -33,6 +34,7 @@ import java.util.concurrent.Executors;
 public class AgentController {
 
     private final AgentService agentService;
+    private final AgentBindingService agentBindingService;
     private final AuditEventService auditEventService;
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
@@ -43,7 +45,7 @@ public class AgentController {
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         // 无 header 时强制使用默认 workspace，不返回全局数据
         long wsId = workspaceId != null ? workspaceId : 1L;
-        return R.ok(agentService.listAgentsByWorkspace(wsId));
+        return R.ok(enrichPluginBindings(agentService.listAgentsByWorkspace(wsId)));
     }
 
     @Operation(summary = "获取已删除Agent列表")
@@ -52,7 +54,7 @@ public class AgentController {
     public R<List<AgentEntity>> listDeleted(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         long wsId = workspaceId != null ? workspaceId : 1L;
-        return R.ok(agentService.listDeletedAgentsByWorkspace(wsId));
+        return R.ok(enrichPluginBindings(agentService.listDeletedAgentsByWorkspace(wsId)));
     }
 
     @Operation(summary = "获取Agent详情")
@@ -62,7 +64,7 @@ public class AgentController {
                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
-        return R.ok(agent);
+        return R.ok(enrichPluginBindings(agent));
     }
 
     @Operation(summary = "创建Agent")
@@ -75,7 +77,7 @@ public class AgentController {
         agent.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
         AgentEntity created = agentService.createAgent(agent);
         auditEventService.record("CREATE", "AGENT", String.valueOf(created.getId()), created.getName(), null);
-        return R.ok(created);
+        return R.ok(enrichPluginBindings(created));
     }
 
     @Operation(summary = "更新Agent")
@@ -89,7 +91,23 @@ public class AgentController {
         agent.setWorkspaceId(existing.getWorkspaceId()); // 不允许跨 workspace 迁移
         AgentEntity updated = agentService.updateAgent(agent);
         auditEventService.record("UPDATE", "AGENT", String.valueOf(id), updated.getName(), null);
-        return R.ok(updated);
+        return R.ok(enrichPluginBindings(updated));
+    }
+
+    private List<AgentEntity> enrichPluginBindings(List<AgentEntity> agents) {
+        if (agents == null || agents.isEmpty()) {
+            return agents;
+        }
+        agents.forEach(this::enrichPluginBindings);
+        return agents;
+    }
+
+    private AgentEntity enrichPluginBindings(AgentEntity agent) {
+        if (agent == null || agent.getId() == null) {
+            return agent;
+        }
+        agent.setPluginBindings(agentBindingService.listPluginBindings(agent.getId()));
+        return agent;
     }
 
     @Operation(summary = "删除Agent")

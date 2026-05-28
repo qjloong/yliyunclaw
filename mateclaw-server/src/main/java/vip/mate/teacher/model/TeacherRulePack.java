@@ -6,8 +6,7 @@ import java.util.Map;
 /**
  * Runtime-facing Teacher rule pack contract.
  *
- * <p>Phase 4 keeps this immutable and template-backed. Phase 6 can add
- * workspace/admin overrides without changing the prompt-facing shape.</p>
+ * <p>Custom overrides are supported without changing the prompt-facing shape.</p>
  */
 public record TeacherRulePack(
         String id,

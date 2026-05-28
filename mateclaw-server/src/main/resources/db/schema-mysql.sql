@@ -586,6 +586,22 @@ CREATE TABLE IF NOT EXISTS mate_agent_tool (
     UNIQUE KEY uk_agent_tool (agent_id, tool_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS mate_agent_plugin (
+    id                 BIGINT       NOT NULL PRIMARY KEY,
+    agent_id           BIGINT       NOT NULL,
+    plugin_key         VARCHAR(128) NOT NULL,
+    capability_pack_id VARCHAR(128) DEFAULT NULL,
+    stage              VARCHAR(64)  DEFAULT NULL,
+    subject            VARCHAR(64)  DEFAULT NULL,
+    enabled            TINYINT(1)   NOT NULL DEFAULT 1,
+    config_json        TEXT,
+    create_time        DATETIME     NOT NULL,
+    update_time        DATETIME     NOT NULL,
+    deleted            INT          NOT NULL DEFAULT 0,
+    UNIQUE KEY uk_agent_plugin (agent_id, plugin_key, capability_pack_id),
+    KEY idx_agent_plugin_agent (agent_id, enabled, create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- =============================================
 -- CronJob 执行历史（Phase 3 Sprint 3）
 -- =============================================

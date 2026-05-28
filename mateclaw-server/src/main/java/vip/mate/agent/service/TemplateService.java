@@ -16,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.service.AuthService;
 import vip.mate.agent.AgentService;
+import vip.mate.agent.binding.model.AgentPluginBinding;
+import vip.mate.agent.binding.service.AgentBindingService;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.model.TemplateHealthDTO;
 import vip.mate.agent.model.TemplateDTO;
@@ -56,6 +58,7 @@ public class TemplateService {
     private final WikiPageService wikiPageService;
     private final ObjectMapper objectMapper;
     private final AuthService authService;
+    private final AgentBindingService agentBindingService;
     /** WP-6: provides typed section classification for template field inventory. */
     private final TemplateMetadataResolver templateMetadataResolver;
     /** WP-6: validates template contracts against the current TemplateSection schema. */
@@ -204,6 +207,7 @@ public class TemplateService {
         agent.setHomeQuickStartsJson(toJsonOrNull(template.getHomeQuickStarts()));
         agent.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
         AgentEntity created = agentService.createAgent(agent);
+        syncAgentPluginBindings(created.getId(), template);
         seedDefaultKnowledgeBases(template, created.getWorkspaceId(), creatorUserId);
 
         // 2. 创建工作区文件
@@ -552,7 +556,98 @@ public class TemplateService {
             changed = true;
         }
 
+        List<AgentPluginBinding> expectedPluginBindings = toAgentPluginBindings(template);
+        if (!samePluginBindings(agentBindingService.listPluginBindings(agent.getId()), expectedPluginBindings)) {
+            agentBindingService.setPluginBindings(agent.getId(), expectedPluginBindings);
+            changed = true;
+        }
+
         return changed;
+    }
+
+    private void syncAgentPluginBindings(Long agentId, TemplateDTO template) {
+        agentBindingService.setPluginBindings(agentId, toAgentPluginBindings(template));
+    }
+
+    private List<AgentPluginBinding> toAgentPluginBindings(TemplateDTO template) {
+        if (template == null || template.getPluginBindings() == null || template.getPluginBindings().isEmpty()) {
+            return List.of();
+        }
+        List<AgentPluginBinding> bindings = new ArrayList<>();
+        for (Map<String, Object> binding : template.getPluginBindings()) {
+            AgentPluginBinding row = toAgentPluginBinding(binding);
+            if (row != null) {
+                bindings.add(row);
+            }
+        }
+        return bindings;
+    }
+
+    private AgentPluginBinding toAgentPluginBinding(Map<String, Object> source) {
+        String pluginKey = extractString(source, "pluginKey");
+        if (pluginKey == null || pluginKey.isBlank()) {
+            return null;
+        }
+        AgentPluginBinding row = new AgentPluginBinding();
+        row.setPluginKey(pluginKey.trim());
+        row.setCapabilityPackId(trimToNull(extractString(source, "capabilityPackId")));
+        row.setStage(trimToNull(extractString(source, "stage")));
+        row.setSubject(trimToNull(extractString(source, "subject")));
+        row.setEnabled(extractBoolean(source, "enabled", true));
+        row.setConfigJson(toJsonOrNull(source.get("config")));
+        return row;
+    }
+
+    private boolean samePluginBindings(List<AgentPluginBinding> current, List<AgentPluginBinding> expected) {
+        return normalizePluginBindings(current).equals(normalizePluginBindings(expected));
+    }
+
+    private List<String> normalizePluginBindings(List<AgentPluginBinding> bindings) {
+        if (bindings == null || bindings.isEmpty()) {
+            return List.of();
+        }
+        return bindings.stream()
+                .map(binding -> String.join("|",
+                        trimToEmpty(binding.getPluginKey()),
+                        trimToEmpty(binding.getCapabilityPackId()),
+                        trimToEmpty(binding.getStage()),
+                        trimToEmpty(binding.getSubject()),
+                        String.valueOf(Boolean.TRUE.equals(binding.getEnabled())),
+                        trimToEmpty(binding.getConfigJson())))
+                .sorted()
+                .toList();
+    }
+
+    private Boolean extractBoolean(Map<String, Object> source, String key, boolean defaultValue) {
+        if (source == null || key == null) {
+            return defaultValue;
+        }
+        Object value = source.get(key);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text) {
+            String normalized = text.trim();
+            if (normalized.equalsIgnoreCase("true")) {
+                return true;
+            }
+            if (normalized.equalsIgnoreCase("false")) {
+                return false;
+            }
+        }
+        return defaultValue;
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String trimToEmpty(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private boolean shouldRepairTextField(String current, String expected) {

@@ -485,6 +485,7 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
         metadata.put("agentType", "plan_execute");
         if (isTeacherAgent()) {
             metadata.put("templateId", templateId);
+            metadata.put("pluginKey", pluginKey);
             metadata.put("profileId", profileId);
             metadata.put("capabilityPackId", capabilityPackId);
             metadata.put("teacherWorkflow", true);
@@ -561,7 +562,7 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
     }
 
     private boolean isTeacherAgent() {
-        return TeacherIntentService.isTeacherAgent(templateId, profileId, capabilityPackId);
+        return TeacherIntentService.isTeacherAgent(templateId, profileId, capabilityPackId, pluginKey);
     }
 
     private boolean hasAwaitingTeacherPlan(String conversationId) {
@@ -769,24 +770,24 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
     }
 
     private String buildClassicReadingPromptRules() {
-        loadWorkspaceRulePackOverrideIfNeeded();
-        return TeacherRulePackService.classicReadingPromptRules(currentWorkspaceId.get());
+        // T2-2-10e: 运行时去 workspace 化，不再加载 workspace 覆盖
+        return TeacherRulePackService.classicReadingPromptRules();
     }
 
     private String buildTeacherRulePackPromptRules(String rulePackId) {
-        loadWorkspaceRulePackOverrideIfNeeded(rulePackId);
-        return TeacherRulePackService.promptRules(rulePackId, currentWorkspaceId.get());
+        // T2-2-10e: 运行时去 workspace 化，直接使用全局覆盖/内置规则
+        return TeacherRulePackService.promptRules(rulePackId);
     }
 
     private String buildTeacherRulePackPromptRules(String rulePackId, String module) {
         if ("paper_assembly".equals(module)) {
             return String.join("\n\n",
-                    TeacherRulePackService.promptRules(TeacherRulePackService.CLASSIC_READING_V2_ID, currentWorkspaceId.get()),
-                    TeacherRulePackService.promptRules(TeacherRulePackService.CLASSICAL_CHINESE_V1_ID, currentWorkspaceId.get()),
-                    TeacherRulePackService.promptRules(TeacherRulePackService.MODERN_READING_V1_ID, currentWorkspaceId.get()),
-                    TeacherRulePackService.promptRules(TeacherRulePackService.ANCIENT_POETRY_V1_ID, currentWorkspaceId.get()),
-                    TeacherRulePackService.promptRules(TeacherRulePackService.BASIC_KNOWLEDGE_V1_ID, currentWorkspaceId.get()),
-                    TeacherRulePackService.promptRules(TeacherRulePackService.WRITING_V1_ID, currentWorkspaceId.get()));
+                    TeacherRulePackService.promptRules(TeacherRulePackService.CLASSIC_READING_V2_ID),
+                    TeacherRulePackService.promptRules(TeacherRulePackService.CLASSICAL_CHINESE_V1_ID),
+                    TeacherRulePackService.promptRules(TeacherRulePackService.MODERN_READING_V1_ID),
+                    TeacherRulePackService.promptRules(TeacherRulePackService.ANCIENT_POETRY_V1_ID),
+                    TeacherRulePackService.promptRules(TeacherRulePackService.BASIC_KNOWLEDGE_V1_ID),
+                    TeacherRulePackService.promptRules(TeacherRulePackService.WRITING_V1_ID));
         }
         return buildTeacherRulePackPromptRules(rulePackId);
     }

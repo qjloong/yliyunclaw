@@ -53,7 +53,8 @@ public class TeacherImprovementDraftService {
         List<String> missingItems = toStringList(mockAcceptance.get("missingItems"));
 
         String effectiveRulePackId = asString(signals.get("teacherRulePackId"), TeacherRulePackService.CLASSIC_READING_V2_ID);
-        TeacherRulePack basePack = TeacherRulePackService.effectiveRulePack(effectiveRulePackId, workspaceId);
+        // T2-2-10e: 运行时去 workspace 化
+        TeacherRulePack basePack = TeacherRulePackService.effectiveRulePack(effectiveRulePackId);
         TeacherRulePack proposed = proposeRulePack(basePack, gateBlockers, missingItems, signals);
         Map<String, Object> diagnosis = buildDiagnosis(gateBlockers, missingItems, signals);
         Map<String, Object> skillPatch = buildSkillPatch(diagnosis, gateBlockers, missingItems, signals);

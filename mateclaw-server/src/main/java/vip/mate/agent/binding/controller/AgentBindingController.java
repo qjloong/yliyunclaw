@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.agent.AgentService;
+import vip.mate.agent.binding.model.AgentPluginBinding;
 import vip.mate.agent.binding.model.AgentProviderPreference;
 import vip.mate.agent.binding.model.AgentSkillBinding;
 import vip.mate.agent.binding.model.AgentToolBinding;
@@ -100,6 +101,30 @@ public class AgentBindingController {
         agentService.invalidateAgentCache(agentId);
         auditEventService.record("UPDATE", "AGENT_TOOL", String.valueOf(agentId),
                 "tools=" + toolNames.size(), null);
+        return R.ok();
+    }
+
+    // ==================== Plugin Bindings ====================
+
+    @Operation(summary = "获取 Agent 已绑定的 Plugins")
+    @GetMapping("/plugins")
+    @RequireWorkspaceRole("viewer")
+    public R<List<AgentPluginBinding>> listPlugins(@PathVariable Long agentId,
+                                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyAgentWorkspace(agentId, workspaceId);
+        return R.ok(bindingService.listPluginBindings(agentId));
+    }
+
+    @Operation(summary = "批量设置 Agent 的 Plugin 绑定")
+    @PutMapping("/plugins")
+    @RequireWorkspaceRole("admin")
+    public R<Void> setPlugins(@PathVariable Long agentId, @RequestBody List<AgentPluginBinding> pluginBindings,
+                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyAgentWorkspace(agentId, workspaceId);
+        bindingService.setPluginBindings(agentId, pluginBindings);
+        agentService.invalidateAgentCache(agentId);
+        auditEventService.record("UPDATE", "AGENT_PLUGIN", String.valueOf(agentId),
+                "plugins=" + (pluginBindings == null ? 0 : pluginBindings.size()), null);
         return R.ok();
     }
 

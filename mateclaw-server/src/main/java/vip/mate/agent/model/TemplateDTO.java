@@ -36,6 +36,7 @@ public class TemplateDTO {
     private Map<String, Object> defaultWorkspacePolicy;
     private Map<String, Object> agentProfile;
     private Map<String, Object> capabilityPack;
+    private List<Map<String, Object>> pluginBindings;
     private Map<String, Object> contextSources;
     private Map<String, Object> knowledgeBindings;
     private List<Map<String, Object>> tools;

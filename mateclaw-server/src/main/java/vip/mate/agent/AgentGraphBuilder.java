@@ -52,6 +52,7 @@ import vip.mate.agent.graph.plan.edge.StepProgressDispatcher;
 import vip.mate.agent.graph.plan.node.*;
 import vip.mate.agent.graph.plan.state.PlanStateKeys;
 import vip.mate.agent.graph.state.MateClawStateKeys;
+import vip.mate.agent.binding.model.AgentPluginBinding;
 import vip.mate.harness.service.HarnessRunService;
 import vip.mate.agent.binding.service.AgentBindingService;
 import vip.mate.agent.model.AgentEntity;
@@ -77,6 +78,7 @@ import vip.mate.approval.ApprovalGrantService;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.auth.service.AuthService;
 import vip.mate.channel.web.ChatStreamTracker;
+import vip.mate.teacher.service.TeacherIntentService;
 import vip.mate.wiki.service.WikiContextService;
 
 import java.lang.reflect.Field;
@@ -249,7 +251,9 @@ public class AgentGraphBuilder {
             toolSet = AgentToolSet.fromCallbacks(List.of(), List.of());
         }
 
-        String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled, effectiveRuntimeMode, modelSupportsTools);
+        PluginBindingContext pluginBindingContext = resolvePluginBindingContext(entity);
+        String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled, effectiveRuntimeMode,
+            modelSupportsTools, pluginBindingContext.pluginKey(), pluginBindingContext.capabilityPackId());
 
         // 当前仅支持 DashScope 和 OpenAI-compatible，其他协议直接拒绝
         if (!supportsStateGraph(protocol)) {
@@ -281,8 +285,9 @@ public class AgentGraphBuilder {
         agent.runtimeProviderId = provider != null ? provider.getProviderId() : "";
         agent.runtimeMode = effectiveRuntimeMode;
         agent.templateId = entity.getTemplateId();
+        agent.pluginKey = pluginBindingContext.pluginKey();
         agent.profileId = entity.getProfileId();
-        agent.capabilityPackId = entity.getCapabilityPackId();
+        agent.capabilityPackId = pluginBindingContext.capabilityPackId();
         agent.templateMetadataJson = entity.getTemplateMetadataJson();
         agent.knowledgeBaseIdsJson = entity.getKnowledgeBaseIdsJson();
         agent.temperature = runtimeModel.getTemperature();
@@ -900,7 +905,12 @@ public class AgentGraphBuilder {
 
     // ==================== Prompt 构建 ====================
 
-    private String buildEnhancedPrompt(AgentEntity entity, boolean builtinSearchEnabled, String runtimeMode, boolean toolsEnabled) {
+    private String buildEnhancedPrompt(AgentEntity entity,
+                                       boolean builtinSearchEnabled,
+                                       String runtimeMode,
+                                       boolean toolsEnabled,
+                                       String pluginKey,
+                                       String capabilityPackId) {
         // 通过 MemoryManager 从所有 MemoryProvider 组装系统提示词（快照冻结）
         String memoryPrompt = memoryManager.buildSystemPromptBlock(entity.getId());
         String basePrompt = (memoryPrompt != null && !memoryPrompt.isBlank())
@@ -1086,6 +1096,7 @@ public class AgentGraphBuilder {
             return "";
         }
         try {
+            PluginBindingContext pluginBindingContext = resolvePluginBindingContext(entity);
             JsonNode root = objectMapper.readTree(entity.getTemplateMetadataJson());
             JsonNode template = root.path("template");
             if (template.isMissingNode() || template.isNull()) {
@@ -1112,7 +1123,7 @@ public class AgentGraphBuilder {
 
             JsonNode capabilityPack = template.path("capabilityPack");
             if (capabilityPack.isObject()) {
-                appendLine(sb, "Capability Pack", firstText(capabilityPack.path("packId"), entity.getCapabilityPackId()));
+                appendLine(sb, "Capability Pack", firstText(capabilityPack.path("packId"), pluginBindingContext.capabilityPackId()));
                 appendArray(sb, "Capabilities", capabilityPack.path("capabilities"), 12);
             }
 
@@ -1162,7 +1173,8 @@ public class AgentGraphBuilder {
 
             appendToolNames(sb, template.path("tools"), 16);
 
-            if ("builtin.teacher_exam_assistant".equals(firstText(template.path("templateId"), entity.getTemplateId()))) {
+            if (TeacherIntentService.isTeacherAgent(firstText(template.path("templateId"), entity.getTemplateId()),
+                    entity.getProfileId(), pluginBindingContext.capabilityPackId(), pluginBindingContext.pluginKey())) {
                 sb.append("""
 
                     Teacher exam workflow:
@@ -1206,6 +1218,63 @@ public class AgentGraphBuilder {
             log.warn("Failed to build template runtime guidance for agent {}", entity.getId(), e);
             return "";
         }
+    }
+
+    private PluginBindingContext resolvePluginBindingContext(AgentEntity entity) {
+        String pluginKey = null;
+        String capabilityPackId = entity.getCapabilityPackId();
+        if (entity.getId() != null) {
+            AgentPluginBinding binding = agentBindingService.getPrimaryEnabledPluginBinding(entity.getId());
+            if (binding != null) {
+                pluginKey = binding.getPluginKey();
+                if (StringUtils.hasText(binding.getCapabilityPackId())) {
+                    capabilityPackId = binding.getCapabilityPackId();
+                }
+            }
+        }
+        if (!StringUtils.hasText(pluginKey) || !StringUtils.hasText(capabilityPackId)) {
+            PluginBindingContext metadataContext = resolvePluginBindingContextFromMetadata(entity.getTemplateMetadataJson());
+            if (!StringUtils.hasText(pluginKey)) {
+                pluginKey = metadataContext.pluginKey();
+            }
+            if (!StringUtils.hasText(capabilityPackId)) {
+                capabilityPackId = metadataContext.capabilityPackId();
+            }
+        }
+        return new PluginBindingContext(pluginKey, capabilityPackId != null ? capabilityPackId : entity.getCapabilityPackId());
+    }
+
+    private PluginBindingContext resolvePluginBindingContextFromMetadata(String templateMetadataJson) {
+        if (!StringUtils.hasText(templateMetadataJson)) {
+            return PluginBindingContext.EMPTY;
+        }
+        try {
+            JsonNode template = objectMapper.readTree(templateMetadataJson).path("template");
+            JsonNode pluginBindings = template.path("pluginBindings");
+            if (pluginBindings.isArray()) {
+                for (JsonNode pluginBinding : pluginBindings) {
+                    if (!pluginBinding.isObject()) {
+                        continue;
+                    }
+                    String pluginKey = firstText(pluginBinding.path("pluginKey"), null);
+                    String capabilityPackId = firstText(pluginBinding.path("capabilityPackId"), null);
+                    if (StringUtils.hasText(pluginKey)) {
+                        return new PluginBindingContext(pluginKey, capabilityPackId);
+                    }
+                }
+            }
+            JsonNode capabilityPack = template.path("capabilityPack");
+            return new PluginBindingContext(
+                    firstText(capabilityPack.path("pluginKey"), null),
+                    firstText(capabilityPack.path("packId"), null));
+        } catch (Exception e) {
+            log.debug("Failed to resolve plugin binding context from template metadata: {}", e.getMessage());
+            return PluginBindingContext.EMPTY;
+        }
+    }
+
+    private record PluginBindingContext(String pluginKey, String capabilityPackId) {
+        private static final PluginBindingContext EMPTY = new PluginBindingContext(null, null);
     }
 
     private String firstText(JsonNode node, String fallback) {

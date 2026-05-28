@@ -619,6 +619,24 @@ CREATE TABLE IF NOT EXISTS mate_agent_tool (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_tool ON mate_agent_tool(agent_id, tool_name);
 
+CREATE TABLE IF NOT EXISTS mate_agent_plugin (
+    id                 BIGINT       NOT NULL PRIMARY KEY,
+    agent_id           BIGINT       NOT NULL,
+    plugin_key         VARCHAR(128) NOT NULL,
+    capability_pack_id VARCHAR(128),
+    stage              VARCHAR(64),
+    subject            VARCHAR(64),
+    enabled            BOOLEAN      NOT NULL DEFAULT TRUE,
+    config_json        TEXT,
+    create_time        DATETIME     NOT NULL,
+    update_time        DATETIME     NOT NULL,
+    deleted            INT          NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_plugin
+    ON mate_agent_plugin(agent_id, plugin_key, capability_pack_id);
+CREATE INDEX IF NOT EXISTS idx_agent_plugin_agent
+    ON mate_agent_plugin(agent_id, enabled, create_time);
+
 -- =============================================
 -- CronJob 执行历史（Phase 3 Sprint 3）
 -- =============================================

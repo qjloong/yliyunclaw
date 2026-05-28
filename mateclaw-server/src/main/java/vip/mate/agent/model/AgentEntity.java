@@ -2,8 +2,10 @@ package vip.mate.agent.model;
 
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
+import vip.mate.agent.binding.model.AgentPluginBinding;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Agent 配置实体
@@ -80,6 +82,10 @@ public class AgentEntity {
 
     @TableField(value = "home_quick_starts_json", updateStrategy = FieldStrategy.ALWAYS)
     private String homeQuickStartsJson;
+
+    /** Real per-agent plugin bindings materialized from template or manual configuration. */
+    @TableField(exist = false)
+    private List<AgentPluginBinding> pluginBindings;
 
     /** 所属工作区 ID（默认 1 = default） */
     private Long workspaceId;

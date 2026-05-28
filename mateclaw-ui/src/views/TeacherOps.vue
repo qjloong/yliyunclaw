@@ -3,14 +3,24 @@
     <div class="mc-page-frame">
       <div class="mc-page-inner teacher-ops-page">
         <div class="mc-page-header">
-          <div>
-            <div class="mc-page-kicker">Teacher Ops</div>
-            <h1 class="mc-page-title">Teacher 运维</h1>
-            <p class="mc-page-desc">集中管理初中语文 RulePack、Teacher Skill、自优化草案和验收信号。</p>
+          <div class="mc-page-header__left">
+            <button class="btn-back" type="button" @click="goBackToPlugins">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+              </svg>
+              返回插件列表
+            </button>
+            <div>
+              <div class="mc-page-kicker">教学出题规则插件</div>
+              <h1 class="mc-page-title">初中语文出题规则</h1>
+              <p class="mc-page-desc">集中管理“教学出题规则插件”下的初中语文 RulePack、执行流程、自优化草案和验收信号。</p>
+            </div>
           </div>
-          <button class="btn-secondary" type="button" :disabled="loading" @click="loadAll">
-            {{ loading ? '刷新中...' : '刷新' }}
-          </button>
+          <div class="teacher-ops-header-actions">
+            <button class="btn-secondary" type="button" :disabled="loading" @click="loadAll">
+              {{ loading ? '刷新中...' : '刷新' }}
+            </button>
+          </div>
         </div>
 
         <section class="teacher-ops-summary">
@@ -36,7 +46,7 @@
             <div class="teacher-ops-panel__head">
               <div>
                 <h2>初中语文规则包</h2>
-                <p>RulePack 是硬规则来源；知识库负责教材、课标和稿件依据；Prompt 只负责角色和流程。</p>
+                <p>RulePack 是硬规则来源；知识库负责教材、课标和稿件依据；Prompt 只负责角色和流程。后续其他学段/学科将以新增能力包方式接入同一系统插件。</p>
               </div>
             </div>
             <div class="rule-pack-list">
@@ -59,8 +69,8 @@
           <article class="teacher-ops-panel mc-surface-card">
             <div class="teacher-ops-panel__head">
               <div>
-                <h2>Teacher Skill 绑定</h2>
-                <p>Skill 定义执行流程，RulePack 定义出题规则。这里调整的是 Teacher 默认流程。</p>
+                <h2>默认执行流程</h2>
+                <p>Skill 定义执行流程，RulePack 定义出题规则。这里调整的是“初中语文出题规则”能力包的系统默认流程。</p>
               </div>
               <span v-if="skillBindingView?.overridden" class="ops-badge">管理员覆盖</span>
             </div>
@@ -131,11 +141,14 @@
           <div>
             <p class="rule-pack-kicker">Teacher 规则包</p>
             <h2>{{ selectedRulePack.name }} v{{ selectedRulePack.version }}</h2>
-            <p v-if="selectedRulePackView?.workspaceOverridden" class="rule-pack-override-state">当前工作区使用管理员覆盖版本</p>
-            <p v-else-if="selectedRulePackView?.globalOverridden" class="rule-pack-override-state">当前使用全局管理员覆盖版本</p>
-            <p v-else class="rule-pack-override-state">当前使用系统内置规则</p>
+            <p v-if="selectedRulePackView?.overridden" class="rule-pack-override-state">当前使用自定义配置</p>
+            <p v-else class="rule-pack-override-state">当前使用插件统一配置</p>
           </div>
-          <button class="modal-close" @click="closeRulePack">×</button>
+          <button class="modal-close" @click="closeRulePack">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
         <div class="modal-body rule-pack-body">
           <section class="rule-pack-section">
@@ -161,19 +174,13 @@
           <section class="rule-pack-section">
             <h3>管理员覆盖配置</h3>
             <textarea v-model="rulePackJsonDraft" class="rule-pack-json-editor" spellcheck="false"></textarea>
-            <p class="binding-hint">工作区覆盖优先于全局覆盖；覆盖只影响新会话；请保持 id 不变。</p>
+            <p class="binding-hint">修改后将作为自定义配置生效，保持 id 不变。</p>
             <div class="teacher-ops-actions">
               <button class="btn-primary" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('workspace')">
-                保存工作区覆盖
+                保存自定义配置
               </button>
-              <button class="btn-secondary" type="button" :disabled="savingRulePack" @click="saveRulePackOverride('global')">
-                保存全局覆盖
-              </button>
-              <button class="btn-secondary" type="button" :disabled="savingRulePack || !selectedRulePackView?.workspaceOverridden" @click="clearRulePackOverride('workspace')">
-                清除工作区覆盖
-              </button>
-              <button class="btn-secondary" type="button" :disabled="savingRulePack || !selectedRulePackView?.globalOverridden" @click="clearRulePackOverride('global')">
-                清除全局覆盖
+              <button class="btn-secondary danger" type="button" :disabled="savingRulePack || !selectedRulePackView?.overridden" @click="clearRulePackOverride('workspace')">
+                恢复插件统一配置
               </button>
             </div>
           </section>
@@ -185,10 +192,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { teacherImprovementApi, teacherRulePackApi, teacherSkillApi } from '@/api'
 import type { TeacherImprovementDraft, TeacherRulePack, TeacherRulePackView, TeacherSkillBindingView, TeacherSkillDefinition } from '@/types'
 
+const router = useRouter()
 const loading = ref(false)
 const rulePacks = ref<TeacherRulePack[]>([])
 const skills = ref<TeacherSkillDefinition[]>([])
@@ -207,6 +216,10 @@ const pendingDraftCount = computed(() => drafts.value.filter(draft => draft.stat
 
 onMounted(loadAll)
 
+function goBackToPlugins() {
+  router.push('/plugins')
+}
+
 async function loadAll() {
   loading.value = true
   try {
@@ -224,7 +237,7 @@ async function loadAll() {
       : skills.value.map(skill => skill.id)
     drafts.value = draftRes.data || []
   } catch (error: any) {
-    ElMessage.error(error?.message || 'Teacher 运维数据加载失败')
+    ElMessage.error(error?.message || '初中语文出题规则数据加载失败')
   } finally {
     loading.value = false
   }
@@ -392,6 +405,15 @@ function draftStatusLabel(status: string) {
 
 <style scoped>
 .teacher-ops-page { display: flex; flex-direction: column; gap: 18px; }
+.mc-page-header__left { display: flex; flex-direction: column; gap: 10px; }
+.btn-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; background: var(--mc-bg-elevated); color: var(--mc-text-secondary);
+  border: 1px solid var(--mc-border); border-radius: 10px;
+  font-size: 13px; cursor: pointer; transition: all 0.15s;
+  width: fit-content;
+}
+.btn-back:hover { background: var(--mc-bg-sunken); color: var(--mc-text-primary); }
 .teacher-ops-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .teacher-ops-stat { padding: 18px; }
 .teacher-ops-stat span { color: var(--mc-text-secondary); font-size: 13px; }
@@ -426,7 +448,25 @@ function draftStatusLabel(status: string) {
 .ops-empty { padding: 20px; border: 1px dashed var(--mc-border); border-radius: 8px; color: var(--mc-text-secondary); text-align: center; }
 .draft-card { padding: 14px; }
 .draft-card__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+
+/* Buttons */
+.btn-primary { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--mc-primary); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.15s; }
+.btn-primary:hover { background: var(--mc-primary-hover); }
+.btn-primary:disabled { background: var(--mc-border); cursor: not-allowed; }
+.btn-secondary { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 10px; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+.btn-secondary:hover { background: var(--mc-bg-sunken); }
+.btn-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
 .danger { color: var(--mc-danger); border-color: color-mix(in srgb, var(--mc-danger) 40%, var(--mc-border)); }
+
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+.modal { background: var(--mc-bg-elevated); border: 1px solid var(--mc-border); border-radius: 16px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--mc-border-light); }
+.modal-header h2 { font-size: 18px; font-weight: 600; color: var(--mc-text-primary); margin: 0; }
+.modal-close { width: 32px; height: 32px; border: none; background: none; cursor: pointer; color: var(--mc-text-tertiary); display: flex; align-items: center; justify-content: center; border-radius: 6px; }
+.modal-close:hover { background: var(--mc-bg-sunken); color: var(--mc-text-primary); }
+.modal-body { flex: 1; overflow-y: auto; padding: 20px 24px; }
+
 .rule-pack-modal { max-width: 980px; width: min(980px, calc(100vw - 40px)); }
 .rule-pack-kicker { margin: 0 0 4px; color: var(--mc-primary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .rule-pack-override-state,
