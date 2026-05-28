@@ -17,13 +17,76 @@
           </button>
         </div>
 
+        <section class="builtin-plugin-section">
+          <div class="section-heading">
+            <div>
+              <h2>系统内置插件</h2>
+              <p>业务能力包通过插件统一管理，按需绑定到智能体实例。</p>
+            </div>
+          </div>
+          <div class="plugins-grid">
+            <div class="plugin-card plugin-card--builtin mc-surface-card">
+              <div class="plugin-header">
+                <div class="plugin-icon-wrap plugin-icon-wrap--teacher">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    <path d="M9 7h7M9 11h5M9 15h4"/>
+                  </svg>
+                </div>
+                <div class="plugin-meta">
+                  <div class="plugin-name">Teacher 教学命题插件</div>
+                  <div class="plugin-version">builtin · junior-chinese</div>
+                </div>
+                <span class="status-badge status-enabled">Enabled</span>
+              </div>
+
+              <p class="plugin-desc">面向初中语文命题场景，提供 6 类 RulePack、Teacher Skill、质量改进草案和 Harness 验收能力。绑定到 Teacher Agent 后在实例配置中展示规则入口。</p>
+
+              <div class="plugin-details">
+                <div class="plugin-detail-row">
+                  <span class="detail-label">{{ t('plugins.type') }}</span>
+                  <span class="type-badge type-builtin">BUILTIN</span>
+                </div>
+                <div class="plugin-detail-row">
+                  <span class="detail-label">{{ t('plugins.status') }}</span>
+                  <span class="detail-value">系统内置，默认可用</span>
+                </div>
+              </div>
+
+              <div class="plugin-capabilities">
+                <div class="capability-section">
+                  <span class="capability-label">RulePack:</span>
+                  <span class="capability-tag">名著</span>
+                  <span class="capability-tag">文言文</span>
+                  <span class="capability-tag">现代文</span>
+                  <span class="capability-tag">古诗词</span>
+                  <span class="capability-tag">基础知识</span>
+                  <span class="capability-tag">写作</span>
+                </div>
+                <div class="capability-section">
+                  <span class="capability-label">Capabilities:</span>
+                  <span class="capability-tag">Teacher Skill</span>
+                  <span class="capability-tag">Self-Improve Draft</span>
+                  <span class="capability-tag">Harness Acceptance</span>
+                </div>
+              </div>
+
+              <div class="plugin-actions">
+                <button class="btn-secondary" type="button" @click="openTeacherPluginConfig">配置插件</button>
+                <button class="btn-secondary" type="button" @click="openAgentBinding">绑定 Agent</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- Loading -->
         <div v-if="loading" class="loading-state mc-surface-card">
           <div class="loading-spinner"></div>
           <p>{{ t('plugins.loading') }}</p>
         </div>
 
-        <!-- Plugin Cards -->
+        <!-- External Plugin Cards -->
         <div v-else class="plugins-grid">
           <div v-for="plugin in plugins" :key="plugin.name" class="plugin-card mc-surface-card">
             <div class="plugin-header">
@@ -112,11 +175,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { pluginApi } from '@/api'
 
 const { t } = useI18n()
+const router = useRouter()
 
 interface PluginInfo {
   name: string
@@ -183,6 +248,14 @@ function hasCapabilities(plugin: PluginInfo): boolean {
   )
 }
 
+function openTeacherPluginConfig() {
+  router.push('/teacher-ops')
+}
+
+function openAgentBinding() {
+  router.push('/agents')
+}
+
 onMounted(() => {
   loadPlugins()
 })
@@ -190,6 +263,31 @@ onMounted(() => {
 
 <style scoped>
 .plugins-page { gap: 18px; }
+
+.builtin-plugin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.section-heading h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--mc-text-primary);
+}
+
+.section-heading p {
+  margin: 0;
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+}
 
 .plugins-grid {
   display: grid;
@@ -204,6 +302,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.plugin-card--builtin {
+  border-color: color-mix(in srgb, var(--mc-accent, #6366f1) 26%, var(--mc-border, #e5e7eb));
 }
 
 .plugin-header {
@@ -222,6 +324,10 @@ onMounted(() => {
   background: var(--mc-accent-bg, #f0f0ff);
   color: var(--mc-accent, #6366f1);
   flex-shrink: 0;
+}
+
+.plugin-icon-wrap--teacher {
+  background: color-mix(in srgb, var(--mc-accent, #6366f1) 12%, white);
 }
 
 .plugin-meta {
@@ -284,6 +390,7 @@ onMounted(() => {
 .type-provider { background: #fef3c7; color: #92400e; }
 .type-channel { background: #d1fae5; color: #065f46; }
 .type-memory { background: #ede9fe; color: #5b21b6; }
+.type-builtin { background: #e0f2fe; color: #075985; }
 
 .status-badge {
   font-size: 11px;
@@ -338,6 +445,13 @@ onMounted(() => {
   line-height: 1.4;
 }
 .plugin-error svg { flex-shrink: 0; margin-top: 1px; }
+
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
 
 /* Toggle switch (reuse pattern from Tools.vue) */
 .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
@@ -401,10 +515,12 @@ onMounted(() => {
 :root.dark .type-provider { background: #451a03; color: #fcd34d; }
 :root.dark .type-channel { background: #064e3b; color: #6ee7b7; }
 :root.dark .type-memory { background: #2e1065; color: #c4b5fd; }
+:root.dark .type-builtin { background: #082f49; color: #7dd3fc; }
 :root.dark .status-enabled { background: #064e3b; color: #6ee7b7; }
 :root.dark .status-disabled { background: #374151; color: #9ca3af; }
 :root.dark .status-error { background: #450a0a; color: #fca5a5; }
 :root.dark .status-loaded { background: #1e3a5f; color: #93c5fd; }
 :root.dark .plugin-error { background: #450a0a; color: #fca5a5; }
 :root.dark .plugin-icon-wrap { background: #2e1065; }
+:root.dark .plugin-icon-wrap--teacher { background: #082f49; }
 </style>

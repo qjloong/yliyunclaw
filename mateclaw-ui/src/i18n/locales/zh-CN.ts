@@ -608,6 +608,7 @@ export default {
     mcpServers: 'MCP 服务',
     settingsGroup: '设置',
     agents: '智能体',
+    teacherOps: 'Teacher 运维',
     security: '安全',
     tokenUsage: 'Token 统计',
     cronJobs: '定时任务',

@@ -87,6 +87,8 @@ export interface AgentTemplate {
   mockAcceptanceTasks?: Record<string, any>[] | null
   interactionHints?: Record<string, any> | null
   starterPrompts?: Record<string, any>[] | null
+  homeSubtitle?: string | null
+  homeQuickStarts?: Record<string, any>[] | null
   mvpScope?: Record<string, any> | null
   defaultKnowledgeBases?: AgentTemplateDefaultKnowledgeBase[] | null
 }

@@ -65,7 +65,10 @@ public final class TeacherIntentService {
 
     public static boolean isTeacherPlanConfirmation(String text) {
         String normalized = normalize(text);
-        return normalized.matches(".*(确认|同意|可以|开始出题|正式出题|按方案|生成试题|继续生成|confirm|go ahead|proceed).*");
+        if (normalized.matches("^(需要|要|好的|好|可以|可以的|确认|同意|按这个|就按这个|按上面|按上述|按方案|开始|开始吧|继续|继续吧)$")) {
+            return true;
+        }
+        return normalized.matches(".*(确认|同意|可以|开始出题|正式出题|按方案|按这个来|就按这个来|按上面的方案|生成试题|继续生成|confirm|go ahead|proceed).*");
     }
 
     public static boolean isTeacherExamIntent(String text) {

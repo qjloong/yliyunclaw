@@ -207,6 +207,14 @@
                 </button>
               </div>
               <div v-else-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
+                <button
+                  v-if="resolveGeneratedArtifactPreviewUrl(file.path)"
+                  class="project-changes-action"
+                  type="button"
+                  @click.stop="handlePreviewGeneratedArtifactByPath(file.path)"
+                >
+                  预览
+                </button>
                 <button class="project-changes-action" type="button" @click.stop="handleDownloadGeneratedArtifactByPath(file.path)">
                   {{ t('chat.projectChangesDownloadFile') }}
                 </button>
@@ -244,6 +252,14 @@
                 </button>
               </div>
               <div v-else-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
+                <button
+                  v-if="resolveGeneratedArtifactPreviewUrl(file.path)"
+                  class="project-changes-action"
+                  type="button"
+                  @click.stop="handlePreviewGeneratedArtifactByPath(file.path)"
+                >
+                  预览
+                </button>
                 <button class="project-changes-action" type="button" @click.stop="handleDownloadGeneratedArtifactByPath(file.path)">
                   {{ t('chat.projectChangesDownloadFile') }}
                 </button>
@@ -289,6 +305,14 @@
             </summary>
             <div class="project-file-row__body">
               <div class="project-changes-item__actions">
+                <button
+                  v-if="isPreviewableGeneratedArtifact(artifact)"
+                  class="project-changes-action"
+                  type="button"
+                  @click.stop="handlePreviewGeneratedArtifact(artifact)"
+                >
+                  预览
+                </button>
                 <button class="project-changes-action" type="button" :disabled="!artifact.url" @click.stop="handleDownloadGeneratedArtifact(artifact)">
                   {{ t('chat.projectChangesDownloadFile') }}
                 </button>
@@ -567,24 +591,28 @@ function artifactDisplayPath(artifact: GeneratedArtifactRecord) {
   return normalizeFilePath(String(artifact.path || artifact.url || artifact.name || ''))
 }
 
-function handleDownloadGeneratedArtifact(artifact: GeneratedArtifactRecord) {
-  const rawUrl = resolveArtifactUrl(String(artifact.url || ''))
+function isPreviewableGeneratedArtifact(artifact: GeneratedArtifactRecord) {
+  const probe = [
+    artifact.name,
+    artifact.path,
+    artifact.mimeType,
+    artifact.url,
+  ].map(item => String(item || '')).join(' ')
+  return /(?:text\/html|\.html?|\.xhtml|text\/plain|text\/markdown|application\/json|text\/csv|\.txt|\.md|\.json|\.csv|\.log)(?:\b|$)/i.test(probe)
+}
+
+function openGeneratedArtifactUrl(url: string, download = false, filename = '') {
+  const rawUrl = resolveArtifactUrl(url)
   if (!rawUrl) {
     ElMessage.error(t('chat.downloadFailed'))
     return
   }
-  const filename = artifactDisplayName(artifact)
-  const isPreviewable = /\.(html?|xhtml|txt|md|json|csv|log)$/i.test(filename)
   const baseUrl = rawUrl.replace(/\/inline$/, '')
   const link = document.createElement('a')
-  if (isPreviewable) {
-    link.href = `${baseUrl}/inline`
-    link.target = '_blank'
-    link.rel = 'noopener noreferrer'
-  } else {
-    link.href = baseUrl
-    link.target = '_blank'
-    link.rel = 'noopener noreferrer'
+  link.href = download ? baseUrl : `${baseUrl}/inline`
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  if (download && filename) {
     link.download = filename
   }
   document.body.appendChild(link)
@@ -592,16 +620,49 @@ function handleDownloadGeneratedArtifact(artifact: GeneratedArtifactRecord) {
   document.body.removeChild(link)
 }
 
+function handlePreviewGeneratedArtifact(artifact: GeneratedArtifactRecord) {
+  const url = String(artifact.previewUrl || artifact.url || '')
+  openGeneratedArtifactUrl(url, false, artifactDisplayName(artifact))
+}
+
+function handleDownloadGeneratedArtifact(artifact: GeneratedArtifactRecord) {
+  openGeneratedArtifactUrl(String(artifact.url || ''), true, artifactDisplayName(artifact))
+}
+
 const generatedArtifactDownloadByPath = computed(() => {
-  const map = new Map<string, string>()
+  const map = new Map<string, GeneratedArtifactRecord>()
+
+  function addPathMapping(pathLike: unknown, artifact: GeneratedArtifactRecord) {
+    const normalized = normalizeFilePath(String(pathLike || '')).toLowerCase()
+    if (!normalized) return
+    map.set(normalized, artifact)
+    const outputIndex = normalized.lastIndexOf('/output/')
+    if (outputIndex >= 0) {
+      map.set(normalized.slice(outputIndex + 1), artifact)
+      map.set(normalized.slice(outputIndex + '/output/'.length), artifact)
+    }
+    const appOutputIndex = normalized.lastIndexOf('/app/output/')
+    if (appOutputIndex >= 0) {
+      map.set(normalized.slice(appOutputIndex + 1), artifact)
+      map.set(normalized.slice(appOutputIndex + '/app/'.length), artifact)
+    }
+  }
 
   function tryCollect(rawResult: unknown) {
     if (!rawResult) return
     try {
       const parsed = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult
-      if (parsed && typeof parsed === 'object' && (parsed as any).apiUrl && (parsed as any).filePath && !(parsed as any).error) {
-        const key = normalizeFilePath(String((parsed as any).filePath)).toLowerCase()
-        if (key) map.set(key, String((parsed as any).apiUrl))
+      if (parsed && typeof parsed === 'object' && (parsed as any).apiUrl && !(parsed as any).error) {
+        const artifact: GeneratedArtifactRecord = {
+          name: String((parsed as any).filename || (parsed as any).fileName || (parsed as any).filePath || '生成文件'),
+          path: (parsed as any).filePath || (parsed as any).path || (parsed as any).outputPath,
+          url: String((parsed as any).apiUrl),
+          previewUrl: (parsed as any).previewUrl,
+          mimeType: (parsed as any).mimeType,
+          source: (parsed as any).source,
+        }
+        addPathMapping(artifact.path, artifact)
+        addPathMapping(artifact.name, artifact)
       }
     } catch {
       // ignore non-JSON tool results
@@ -613,9 +674,8 @@ const generatedArtifactDownloadByPath = computed(() => {
   if (Array.isArray(artifacts)) {
     for (const artifact of artifacts) {
       if (!artifact?.url || !artifact.path) continue
-      const key = normalizeFilePath(String(artifact.path)).toLowerCase()
-      if (!key) continue
-      map.set(key, String(artifact.url))
+      addPathMapping(artifact.path, artifact)
+      addPathMapping(artifact.name, artifact)
     }
   }
 
@@ -634,29 +694,44 @@ const generatedArtifactDownloadByPath = computed(() => {
 })
 
 function resolveGeneratedArtifactDownloadUrl(filePath?: string) {
+  return resolveGeneratedArtifactByPath(filePath)?.url || ''
+}
+
+function resolveGeneratedArtifactPreviewUrl(filePath?: string) {
+  const artifact = resolveGeneratedArtifactByPath(filePath)
+  if (!artifact || !isPreviewableGeneratedArtifact(artifact)) return ''
+  return artifact.previewUrl || (artifact.url ? `${artifact.url.replace(/\/inline$/, '')}/inline` : '')
+}
+
+function resolveGeneratedArtifactByPath(filePath?: string): GeneratedArtifactRecord | null {
   const normalizedPath = normalizeFilePath(String(filePath || '')).toLowerCase()
-  if (!normalizedPath) return ''
+  if (!normalizedPath) return null
   const direct = generatedArtifactDownloadByPath.value.get(normalizedPath)
   if (direct) return direct
-  for (const [key, url] of generatedArtifactDownloadByPath.value.entries()) {
+  for (const [key, artifact] of generatedArtifactDownloadByPath.value.entries()) {
     if (key.endsWith(normalizedPath) || normalizedPath.endsWith(key)) {
-      return url
+      return artifact
     }
   }
-  return ''
+  return null
 }
 
 function handleDownloadGeneratedArtifactByPath(filePath?: string) {
-  const url = resolveGeneratedArtifactDownloadUrl(filePath)
-  if (!url) {
+  const artifact = resolveGeneratedArtifactByPath(filePath)
+  if (!artifact) {
     ElMessage.error(t('chat.downloadFailed'))
     return
   }
-  handleDownloadGeneratedArtifact({
-    name: normalizeFilePath(String(filePath || 'generated-file')),
-    path: filePath,
-    url,
-  })
+  handleDownloadGeneratedArtifact(artifact)
+}
+
+function handlePreviewGeneratedArtifactByPath(filePath?: string) {
+  const artifact = resolveGeneratedArtifactByPath(filePath)
+  if (!artifact) {
+    ElMessage.error(t('chat.downloadFailed'))
+    return
+  }
+  handlePreviewGeneratedArtifact(artifact)
 }
 
 const getChangeTypeLabel = (changeType?: string) => {
@@ -1143,6 +1218,9 @@ const latestGeneratedArtifacts = computed<GeneratedArtifactRecord[]>(() => {
           name: String((parsed as any).filename),
           path: (parsed as any).filePath,
           url: String((parsed as any).apiUrl),
+          previewUrl: (parsed as any).previewUrl,
+          mimeType: (parsed as any).mimeType,
+          source: (parsed as any).source,
         })
       }
     } catch {

@@ -608,6 +608,7 @@ export default {
     mcpServers: 'MCP Servers',
     settingsGroup: 'Settings',
     agents: 'Agents',
+    teacherOps: 'Teacher Ops',
     security: 'Security',
     tokenUsage: 'Token Usage',
     cronJobs: 'Cron Jobs',

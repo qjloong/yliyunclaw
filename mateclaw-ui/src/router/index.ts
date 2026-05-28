@@ -30,6 +30,12 @@ const router = createRouter({
           meta: { title: 'Agents' },
         },
         {
+          path: 'teacher-ops',
+          name: 'TeacherOps',
+          component: () => import('@/views/TeacherOps.vue'),
+          meta: { title: 'Teacher Ops', requiresAdmin: true },
+        },
+        {
           path: 'wiki',
           name: 'Wiki',
           component: () => import('@/views/Wiki/index.vue'),

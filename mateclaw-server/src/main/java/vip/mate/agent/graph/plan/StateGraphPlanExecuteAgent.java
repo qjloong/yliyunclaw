@@ -513,10 +513,10 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
             return TeacherWorkflowDecision.continueWith(buildConfirmedTeacherExamPrompt(text, explicitLocalScope, conversationId));
         }
         if (awaitingConfirmation) {
-            return TeacherWorkflowDecision.respondAwaitingConfirmation(buildTeacherPlanResponse(text, true, explicitLocalScope));
+            return TeacherWorkflowDecision.respondAwaitingConfirmation(buildTeacherPlanResponse(text, true, explicitLocalScope, conversationId));
         }
         if (!awaitingConfirmation && isTeacherExamIntent(text)) {
-            return TeacherWorkflowDecision.respondAwaitingConfirmation(buildTeacherPlanResponse(text, false, explicitLocalScope));
+            return TeacherWorkflowDecision.respondAwaitingConfirmation(buildTeacherPlanResponse(text, false, explicitLocalScope, conversationId));
         }
         if (explicitLocalScope) {
             return TeacherWorkflowDecision.continueWith(buildTeacherLocalDirectoryPriorityPrompt(userMessage));
@@ -662,9 +662,9 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
                 """.formatted(userMessage != null ? userMessage : "");
     }
 
-    private String buildTeacherPlanResponse(String userMessage, boolean revision, boolean explicitLocalScope) {
+    private String buildTeacherPlanResponse(String userMessage, boolean revision, boolean explicitLocalScope, String conversationId) {
         boolean hasKnowledge = hasBoundKnowledgeBases();
-        String module = TeacherIntentService.detectBusinessModule(userMessage);
+        String module = revision ? resolveTeacherModule(userMessage, conversationId) : TeacherIntentService.detectBusinessModule(userMessage);
         String rulePackId = TeacherRulePackService.rulePackIdForModule(module);
         String moduleLabel = teacherModuleLabel(module);
         String questionTypeSummary = teacherQuestionTypeSummary(module);
