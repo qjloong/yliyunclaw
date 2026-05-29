@@ -1,19 +1,25 @@
 package vip.mate.wiki.service;
 
-import lombok.RequiredArgsConstructor;
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.dto.PageSearchResult;
+import vip.mate.wiki.dto.RawSearchRef;
 import vip.mate.wiki.dto.RelatedPageResult;
 import vip.mate.wiki.dto.WikiPageLite;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiPageMapper;
+import vip.mate.wiki.repository.WikiRawMaterialMapper;
 import vip.mate.wiki.retrieval.SnippetExtractor;
 
 import java.util.*;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 /**
@@ -32,6 +38,7 @@ public class HybridRetriever {
     private final WikiEmbeddingService embeddingService;
     private final WikiProperties properties;
     private final WikiPageMapper pageMapper;
+    private final WikiRawMaterialMapper rawMaterialMapper;
 
     @Autowired(required = false)
     private WikiRelationService relationService;
@@ -42,12 +49,14 @@ public class HybridRetriever {
                             WikiChunkService chunkService,
                             WikiEmbeddingService embeddingService,
                             WikiProperties properties,
-                            WikiPageMapper pageMapper) {
+                            WikiPageMapper pageMapper,
+                            WikiRawMaterialMapper rawMaterialMapper) {
         this.pageService = pageService;
         this.chunkService = chunkService;
         this.embeddingService = embeddingService;
         this.properties = properties;
         this.pageMapper = pageMapper;
+        this.rawMaterialMapper = rawMaterialMapper;
     }
 
     public enum Mode { KEYWORD, SEMANTIC, HYBRID }
@@ -105,12 +114,17 @@ public class HybridRetriever {
         // RFC-032: Relation boost (1-hop expansion on top-3 seeds)
         fused = applyRelationBoost(fused, kbId, topK);
 
+        fused = applyMaterialBoost(fused, topK, query);
+
         // Batch-fetch page info (N+1 fix)
         List<Long> topIds = fused.stream().limit(topK).map(ri -> ri.pageId).toList();
         if (topIds.isEmpty()) return List.of();
 
         Map<Long, WikiPageLite> liteMap = pageMapper.selectBatchLite(topIds)
             .stream().collect(Collectors.toMap(WikiPageLite::id, p -> p));
+        Map<Long, WikiPageEntity> pageMap = pageMapper.selectBatchIds(topIds)
+                .stream().collect(Collectors.toMap(WikiPageEntity::getId, page -> page));
+        Map<Long, RawSearchRef> rawRefMap = loadRawSearchRefs(pageMap.values());
 
         // Build result with snippets
         List<PageSearchResult> results = new ArrayList<>();
@@ -129,6 +143,9 @@ public class HybridRetriever {
             }
 
             String reason = buildReason(lite, ri.matchedBy, query);
+            String routeTagReason = buildRouteTagReason(pageMap.get(ri.pageId), query);
+            String structureReason = buildStructureReason(pageMap.get(ri.pageId), query);
+            String materialReason = buildMaterialReason(pageMap.get(ri.pageId), rawRefMap, query);
             // RFC-051 §9.4: when the entry came from relation boost, override / append
             // the reason with the seed slug + dominant signals so callers can explain
             // why an out-of-search-corpus page surfaced.
@@ -136,6 +153,21 @@ public class HybridRetriever {
                 reason = (reason == null || reason.isBlank())
                         ? ri.relationReason()
                         : reason + " · " + ri.relationReason();
+            }
+            if (StringUtils.hasText(routeTagReason)) {
+                reason = (reason == null || reason.isBlank())
+                        ? routeTagReason
+                        : reason + " · " + routeTagReason;
+            }
+            if (StringUtils.hasText(structureReason)) {
+                reason = (reason == null || reason.isBlank())
+                        ? structureReason
+                        : reason + " · " + structureReason;
+            }
+            if (StringUtils.hasText(materialReason)) {
+                reason = (reason == null || reason.isBlank())
+                        ? materialReason
+                        : reason + " · " + materialReason;
             }
             results.add(new PageSearchResult(
                 lite.slug(), lite.title(), lite.summary(),
@@ -165,11 +197,17 @@ public class HybridRetriever {
 
         List<WikiChunkEntity> allChunks = chunkService.listByKbId(kbId);
 
+        Map<Long, RawSearchRef> rawRefMap = loadRawSearchRefs(allChunks.stream()
+            .map(WikiChunkEntity::getRawId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet()));
+
         return allChunks.stream()
                 .filter(c -> c.getEmbedding() != null)
                 .map(c -> {
                     float[] chunkVec = WikiEmbeddingService.bytesToFloats(c.getEmbedding());
                     float score = WikiEmbeddingService.cosine(queryVec, chunkVec);
+                score += materialBoost(rawRefMap.get(c.getRawId()), query, 0.8d);
                     String snippet = c.getContent().length() > 300
                             ? c.getContent().substring(0, 300) + "..."
                             : c.getContent();
@@ -250,6 +288,452 @@ public class HybridRetriever {
         }
 
         return ranked;
+    }
+
+    private List<RankedItem> applyMaterialBoost(List<RankedItem> hits, int topK, String query) {
+        if (hits.isEmpty()) {
+            return hits;
+        }
+        int candidateLimit = Math.min(hits.size(), Math.max(topK * 3, topK));
+        List<RankedItem> candidates = hits.stream().limit(candidateLimit).toList();
+        Map<Long, WikiPageEntity> pageMap = pageMapper.selectBatchIds(candidates.stream().map(RankedItem::pageId).toList())
+                .stream().collect(Collectors.toMap(WikiPageEntity::getId, page -> page));
+        Map<Long, RawSearchRef> rawRefMap = loadRawSearchRefs(pageMap.values());
+
+        List<RankedItem> reranked = new ArrayList<>();
+        for (RankedItem hit : candidates) {
+            WikiPageEntity page = pageMap.get(hit.pageId());
+            double routeBoost = page == null ? 0.0d : pageRouteTagBoost(page, query);
+            double structureBoost = page == null ? 0.0d : pageStructureBoost(page, query);
+            double materialBoost = page == null ? 0.0d : pageMaterialBoost(page, rawRefMap, query);
+            double boost = routeBoost + structureBoost + materialBoost;
+            List<String> matchedBy = hit.matchedBy();
+            if (routeBoost > 0.01d && !matchedBy.contains("route_tags")) {
+                List<String> extended = new ArrayList<>(matchedBy);
+                extended.add("route_tags");
+                matchedBy = extended.stream().distinct().toList();
+            }
+            if (structureBoost > 0.01d && !matchedBy.contains("page_structure")) {
+                List<String> extended = new ArrayList<>(matchedBy);
+                extended.add("page_structure");
+                matchedBy = extended.stream().distinct().toList();
+            }
+            if (boost > 0.01d && !matchedBy.contains("material_boost")) {
+                List<String> extended = new ArrayList<>(matchedBy);
+                extended.add("material_boost");
+                matchedBy = extended.stream().distinct().toList();
+            }
+            reranked.add(new RankedItem(hit.pageId(), hit.score() + boost, matchedBy, hit.relationReason()));
+        }
+
+        List<RankedItem> remainder = new ArrayList<>(hits.stream().skip(candidateLimit).toList());
+        List<RankedItem> combined = new ArrayList<>(reranked.size() + remainder.size());
+        combined.addAll(reranked.stream()
+                .sorted(Comparator.comparingDouble(RankedItem::score).reversed())
+                .toList());
+        combined.addAll(remainder);
+        return combined;
+    }
+
+    private Map<Long, RawSearchRef> loadRawSearchRefs(Collection<WikiPageEntity> pages) {
+        Set<Long> rawIds = new LinkedHashSet<>();
+        for (WikiPageEntity page : pages) {
+            rawIds.addAll(extractRawIds(page == null ? null : page.getSourceRawIds()));
+        }
+        return loadRawSearchRefs(rawIds);
+    }
+
+    private Map<Long, RawSearchRef> loadRawSearchRefs(Set<Long> rawIds) {
+        if (rawIds == null || rawIds.isEmpty()) {
+            return Map.of();
+        }
+        return rawMaterialMapper.selectBatchSearchRefs(rawIds).stream()
+                .collect(Collectors.toMap(RawSearchRef::id, ref -> ref));
+    }
+
+    private List<Long> extractRawIds(String sourceRawIds) {
+        if (!StringUtils.hasText(sourceRawIds)) {
+            return List.of();
+        }
+        List<Long> rawIds = new ArrayList<>();
+        for (String rawIdStr : sourceRawIds.replaceAll("[\\[\\]\\s]", "").split(",")) {
+            if (!StringUtils.hasText(rawIdStr)) {
+                continue;
+            }
+            try {
+                rawIds.add(Long.parseLong(rawIdStr.trim()));
+            } catch (NumberFormatException ignored) {
+                // ignore malformed ids
+            }
+        }
+        return rawIds;
+    }
+
+    private double pageMaterialBoost(WikiPageEntity page,
+                                     Map<Long, RawSearchRef> rawRefMap,
+                                     String query) {
+        double boost = 0.0d;
+        for (Long rawId : extractRawIds(page.getSourceRawIds())) {
+            boost += materialBoost(rawRefMap.get(rawId), query, 1.2d);
+        }
+        return Math.min(1.2d, boost);
+    }
+
+    private double pageRouteTagBoost(WikiPageEntity page, String query) {
+        if (page == null || !StringUtils.hasText(query)) {
+            return 0.0d;
+        }
+        int score = 0;
+        for (String routeTag : extractRouteTags(page.getRouteTagsJson())) {
+            score += scoreByQuery(routeTag, query);
+        }
+        return Math.min(0.8d, score * 0.015d);
+    }
+
+    private double pageStructureBoost(WikiPageEntity page, String query) {
+        if (page == null || !StringUtils.hasText(query)) {
+            return 0.0d;
+        }
+        int score = scoreByQuery(page.getPurposeHint(), query);
+        StructureMetadata metadata = parseStructureMetadata(page.getStructureMetadataJson());
+        if (metadata != null) {
+            score += scoreByQuery(metadata.sliceType(), query);
+            score += scoreByQuery(metadata.grade(), query);
+            score += scoreByQuery(metadata.volume(), query);
+            score += scoreByQuery(metadata.unit(), query);
+            score += scoreByQuery(metadata.chapter(), query);
+            score += scoreByQuery(metadata.classicName(), query);
+            score += scoreByQuery(metadata.source(), query);
+        }
+        return Math.min(0.9d, score * 0.018d);
+    }
+
+    private double materialBoost(RawSearchRef rawRef, String query, double maxBoost) {
+        if (rawRef == null || !StringUtils.hasText(query)) {
+            return 0.0d;
+        }
+        MaterialMetadata metadata = parseMaterialMetadata(rawRef.materialMetadataJson());
+        int typeBonus = preferredMaterialBonus(rawRef.materialType(), query);
+        int metadataScore = scoreByQuery(rawRef.title(), query)
+                + scoreByQuery(rawRef.materialMetadataJson(), query)
+                + scoreStructuredMetadata(metadata, query);
+        double boost = typeBonus * 0.05d + metadataScore * 0.01d;
+        return Math.min(maxBoost, boost);
+    }
+
+    private String buildMaterialReason(WikiPageEntity page,
+                                       Map<Long, RawSearchRef> rawRefMap,
+                                       String query) {
+        if (page == null) {
+            return null;
+        }
+        LinkedHashSet<String> labels = new LinkedHashSet<>();
+        for (Long rawId : extractRawIds(page.getSourceRawIds())) {
+            RawSearchRef rawRef = rawRefMap.get(rawId);
+            if (rawRef == null) {
+                continue;
+            }
+            MaterialMetadata metadata = parseMaterialMetadata(rawRef.materialMetadataJson());
+            if (preferredMaterialBonus(rawRef.materialType(), query) > 0
+                    || scoreByQuery(rawRef.materialMetadataJson(), query) > 0
+                    || scoreStructuredMetadata(metadata, query) > 0) {
+                labels.add(materialReasonLabel(rawRef.materialType(), metadata));
+            }
+            if (labels.size() >= 2) {
+                break;
+            }
+        }
+        if (labels.isEmpty()) {
+            return null;
+        }
+        return "Material match: " + String.join(" / ", labels);
+    }
+
+    private String buildRouteTagReason(WikiPageEntity page, String query) {
+        if (page == null || !StringUtils.hasText(page.getRouteTagsJson())) {
+            return null;
+        }
+        List<String> matchedTags = new ArrayList<>();
+        for (String tag : extractRouteTags(page.getRouteTagsJson())) {
+            if (scoreByQuery(tag, query) > 0 && !matchedTags.contains(tag)) {
+                matchedTags.add(tag);
+            }
+            if (matchedTags.size() >= 3) {
+                break;
+            }
+        }
+        if (matchedTags.isEmpty()) {
+            return null;
+        }
+        return "Route tags: " + String.join(" / ", matchedTags);
+    }
+
+    private String buildStructureReason(WikiPageEntity page, String query) {
+        if (page == null) {
+            return null;
+        }
+        LinkedHashSet<String> matched = new LinkedHashSet<>();
+        if (scoreByQuery(page.getPurposeHint(), query) > 0) {
+            matched.add(page.getPurposeHint());
+        }
+        StructureMetadata metadata = parseStructureMetadata(page.getStructureMetadataJson());
+        if (metadata != null) {
+            addMatchedStructure(matched, metadata.sliceType(), query);
+            addMatchedStructure(matched, metadata.grade(), query);
+            addMatchedStructure(matched, metadata.volume(), query);
+            addMatchedStructure(matched, metadata.unit(), query);
+            addMatchedStructure(matched, metadata.chapter(), query);
+            addMatchedStructure(matched, metadata.classicName(), query);
+        }
+        if (matched.isEmpty()) {
+            return null;
+        }
+        return "Page structure: " + matched.stream().limit(3).collect(Collectors.joining(" / "));
+    }
+
+    private void addMatchedStructure(LinkedHashSet<String> matched, String value, String query) {
+        if (StringUtils.hasText(value) && scoreByQuery(value, query) > 0) {
+            matched.add(value);
+        }
+    }
+
+    private int preferredMaterialBonus(String materialType, String query) {
+        String normalizedQuery = normalize(query);
+        if (!StringUtils.hasText(materialType) || !StringUtils.hasText(normalizedQuery)) {
+            return 0;
+        }
+        return switch (materialType) {
+            case "curriculum_standard" -> queryIntentBonus(normalizedQuery, "课标", "课程标准", "新课标", "标准", "素养", "能力要求") + 10;
+            case "textbook_latest" -> queryIntentBonus(normalizedQuery, "教材", "课文", "单元", "册", "七年级", "八年级", "九年级", "上册", "下册", "部编版") + 10;
+            case "classic_manuscript" -> queryIntentBonus(normalizedQuery, "名著", "西游记", "水浒传", "骆驼祥子", "朝花夕拾", "昆虫记", "经典常谈", "红星照耀中国", "海底两万里") + 10;
+            case "question_rule" -> queryIntentBonus(normalizedQuery, "题型", "要求", "规则", "命题", "分值", "比例") + 8;
+            case "sample_question" -> queryIntentBonus(normalizedQuery, "样题", "例题", "真题", "模拟题", "试卷") + 8;
+            case "answer_rubric" -> queryIntentBonus(normalizedQuery, "答案", "评分", "采分点", "评分标准", "参考答案") + 8;
+            default -> 0;
+        };
+    }
+
+    private String materialTypeLabel(String materialType) {
+        if (!StringUtils.hasText(materialType)) {
+            return "资料";
+        }
+        return switch (materialType) {
+            case "curriculum_standard" -> "课程标准";
+            case "textbook_latest" -> "最新教材";
+            case "classic_manuscript" -> "名著稿件";
+            case "question_rule" -> "题型要求";
+            case "sample_question" -> "样题";
+            case "answer_rubric" -> "答案与评分标准";
+            default -> materialType;
+        };
+    }
+
+    private String materialReasonLabel(String materialType, MaterialMetadata metadata) {
+        List<String> segments = new ArrayList<>();
+        segments.add(materialTypeLabel(materialType));
+        if (metadata != null) {
+            addReasonSegment(segments, metadata.grade());
+            addReasonSegment(segments, metadata.volume());
+            addReasonSegment(segments, metadata.unit());
+            addReasonSegment(segments, metadata.chapter());
+            addReasonSegment(segments, metadata.classicName());
+            addReasonSegment(segments, metadata.edition());
+        }
+        return String.join(" · ", segments.stream().limit(4).toList());
+    }
+
+    private void addReasonSegment(List<String> segments, String value) {
+        if (StringUtils.hasText(value) && !segments.contains(value)) {
+            segments.add(value);
+        }
+    }
+
+    private int scoreStructuredMetadata(MaterialMetadata metadata, String query) {
+        if (metadata == null) {
+            return 0;
+        }
+        int score = 0;
+        score += scoreByQuery(metadata.edition(), query);
+        score += scoreByQuery(metadata.source(), query);
+        score += scoreByQuery(metadata.grade(), query);
+        score += scoreByQuery(metadata.volume(), query);
+        score += scoreByQuery(metadata.unit(), query);
+        score += scoreByQuery(metadata.chapter(), query);
+        score += scoreByQuery(metadata.classicName(), query);
+        for (String routeTag : metadata.routeTags()) {
+            score += scoreByQuery(routeTag, query);
+        }
+        return score;
+    }
+
+    private MaterialMetadata parseMaterialMetadata(String materialMetadataJson) {
+        if (!JSONUtil.isTypeJSON(materialMetadataJson)) {
+            return null;
+        }
+        try {
+            JSONObject obj = JSONUtil.parseObj(materialMetadataJson);
+            return new MaterialMetadata(
+                    normalizedMetadataValue(obj.getStr("edition")),
+                    normalizedMetadataValue(obj.getStr("source")),
+                    normalizedMetadataValue(obj.getStr("grade")),
+                    normalizedMetadataValue(obj.getStr("volume")),
+                    normalizedMetadataValue(obj.getStr("unit")),
+                    normalizedMetadataValue(obj.getStr("chapter")),
+                    normalizedMetadataValue(obj.getStr("classicName")),
+                    extractRouteTags(obj.get("routeTags"))
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private StructureMetadata parseStructureMetadata(String structureMetadataJson) {
+        if (!JSONUtil.isTypeJSON(structureMetadataJson)) {
+            return null;
+        }
+        try {
+            JSONObject obj = JSONUtil.parseObj(structureMetadataJson);
+            return new StructureMetadata(
+                    normalizedMetadataValue(obj.getStr("sliceType")),
+                    normalizedMetadataValue(obj.getStr("grade")),
+                    normalizedMetadataValue(obj.getStr("volume")),
+                    normalizedMetadataValue(obj.getStr("unit")),
+                    normalizedMetadataValue(obj.getStr("chapter")),
+                    normalizedMetadataValue(obj.getStr("classicName")),
+                    normalizedMetadataValue(obj.getStr("source"))
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private List<String> extractRouteTags(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        LinkedHashSet<String> tags = new LinkedHashSet<>();
+        if (value instanceof JSONArray array) {
+            for (Object item : array) {
+                String normalized = normalizedMetadataValue(item == null ? null : String.valueOf(item));
+                if (normalized != null) {
+                    tags.add(normalized);
+                }
+            }
+        } else {
+            String text = value instanceof String ? (String) value : String.valueOf(value);
+            if (JSONUtil.isTypeJSONArray(text)) {
+                try {
+                    JSONArray array = JSONUtil.parseArray(text);
+                    for (Object item : array) {
+                        String normalized = normalizedMetadataValue(item == null ? null : String.valueOf(item));
+                        if (normalized != null) {
+                            tags.add(normalized);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // fall back to plain text split below
+                }
+            }
+            if (tags.isEmpty()) {
+                for (String item : text.split("[\\n,，;；|]")) {
+                    String normalized = normalizedMetadataValue(item);
+                    if (normalized != null) {
+                        tags.add(normalized);
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(tags);
+    }
+
+    private String normalizedMetadataValue(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private record MaterialMetadata(
+            String edition,
+            String source,
+            String grade,
+            String volume,
+            String unit,
+            String chapter,
+            String classicName,
+            List<String> routeTags
+    ) {
+    }
+
+            private record StructureMetadata(
+                String sliceType,
+                String grade,
+                String volume,
+                String unit,
+                String chapter,
+                String classicName,
+                String source
+            ) {
+            }
+
+    private int scoreByQuery(String candidate, String userQuery) {
+        String normalizedCandidate = normalize(candidate);
+        String normalizedQuery = normalize(userQuery);
+        if (!StringUtils.hasText(normalizedCandidate) || !StringUtils.hasText(normalizedQuery)) {
+            return 0;
+        }
+        int score = 0;
+        if (normalizedCandidate.contains(normalizedQuery) || normalizedQuery.contains(normalizedCandidate)) {
+            score += 18;
+        }
+        for (String token : tokenize(normalizedQuery)) {
+            if (token.length() >= 2 && normalizedCandidate.contains(token)) {
+                score += Math.min(8, Math.max(2, token.length()));
+            }
+        }
+        return score;
+    }
+
+    private int queryIntentBonus(String normalizedQuery, String... keywords) {
+        if (!StringUtils.hasText(normalizedQuery)) {
+            return 0;
+        }
+        int score = 0;
+        for (String keyword : keywords) {
+            if (StringUtils.hasText(keyword) && normalizedQuery.contains(normalize(keyword))) {
+                score += 5;
+            }
+        }
+        return score;
+    }
+
+    private List<String> tokenize(String normalizedQuery) {
+        if (!StringUtils.hasText(normalizedQuery)) {
+            return List.of();
+        }
+        List<String> tokens = new ArrayList<>();
+        for (String token : normalizedQuery.split("\\s+")) {
+            if (token.length() >= 2) {
+                tokens.add(token);
+            }
+        }
+        if (tokens.isEmpty()) {
+            tokens.add(normalizedQuery);
+        }
+        return tokens;
+    }
+
+    private String normalize(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+                .replace('\n', ' ')
+                .replace('\r', ' ')
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .trim();
     }
 
     /** RRF fusion: score = Σ 1/(k + rank_i) */
@@ -349,6 +833,10 @@ public class HybridRetriever {
 
     private String buildReason(WikiPageLite lite, List<String> matchedBy, String query) {
         if (matchedBy.contains("relation_boost")) return "Structurally related to top search results";
+        if (matchedBy.contains("page_structure") && matchedBy.contains("route_tags")) return "Page structure and route tag match";
+        if (matchedBy.contains("page_structure")) return "Page structure match";
+        if (matchedBy.contains("route_tags") && matchedBy.contains("title")) return "Title and route tag match";
+        if (matchedBy.contains("route_tags")) return "Route tag match";
         if (matchedBy.contains("title") && matchedBy.contains("semantic")) return "Title and semantic match";
         if (matchedBy.contains("title")) return "Title match";
         if (matchedBy.contains("semantic")) return "Semantic similarity";

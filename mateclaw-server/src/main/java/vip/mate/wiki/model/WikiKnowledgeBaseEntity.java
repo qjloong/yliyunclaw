@@ -26,6 +26,12 @@ public class WikiKnowledgeBaseEntity {
     /** 描述 */
     private String description;
 
+    /** 知识库类型：general / business */
+    private String kbKind;
+
+    /** 业务画像 ID，例如 education.exam.junior_chinese */
+    private String domainProfileId;
+
     /** 关联的 Agent ID（可选） */
     private Long agentId;
 

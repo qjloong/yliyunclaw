@@ -25,7 +25,7 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
     @Select("SELECT id, kb_id, slug, title, summary, source_raw_ids, last_updated_by, page_type " +
             "FROM mate_wiki_page " +
             "WHERE kb_id = #{kbId} AND deleted = 0 AND archived = 0 " +
-            "AND (LOWER(title) LIKE #{pattern} OR LOWER(summary) LIKE #{pattern} " +
+            "AND (LOWER(title) LIKE #{pattern} OR LOWER(summary) LIKE #{pattern} OR LOWER(route_tags_json) LIKE #{pattern} OR LOWER(structure_metadata_json) LIKE #{pattern} " +
             "     OR LOWER(content) LIKE #{pattern}) " +
             "ORDER BY title LIMIT 20")
     List<WikiPageEntity> searchByKeyword(@Param("kbId") Long kbId, @Param("pattern") String pattern);
@@ -60,7 +60,7 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
      */
     @Select("SELECT id FROM mate_wiki_page " +
             "WHERE kb_id = #{kbId} AND deleted = 0 AND archived = 0 " +
-            "AND (LOWER(title) LIKE #{kw} OR LOWER(summary) LIKE #{kw}) " +
+            "AND (LOWER(title) LIKE #{kw} OR LOWER(summary) LIKE #{kw} OR LOWER(route_tags_json) LIKE #{kw} OR LOWER(structure_metadata_json) LIKE #{kw}) " +
             "LIMIT #{limit}")
     List<Long> searchFastIds(@Param("kbId") Long kbId,
                               @Param("kw") String kw,

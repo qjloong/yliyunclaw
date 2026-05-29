@@ -5,6 +5,38 @@
       <p class="config-desc">{{ t('wiki.configDesc') }}</p>
     </div>
 
+    <!-- KB Basic Info -->
+    <div v-if="store.currentKB" class="config-card">
+      <div class="config-card__head">
+        <div>
+          <div class="config-card__title">基本信息</div>
+          <div class="config-card__hint">当前知识库的名称、描述与业务属性</div>
+        </div>
+      </div>
+      <div class="kb-info-grid">
+        <div class="kb-info-row">
+          <span class="kb-info-label">名称</span>
+          <span class="kb-info-value">{{ store.currentKB.name }}</span>
+        </div>
+        <div v-if="store.currentKB.description" class="kb-info-row">
+          <span class="kb-info-label">描述</span>
+          <span class="kb-info-value">{{ store.currentKB.description }}</span>
+        </div>
+        <div class="kb-info-row">
+          <span class="kb-info-label">类型</span>
+          <span class="kb-info-value">{{ store.currentKB.kbKind === 'business' ? '业务知识库' : '通用知识库' }}</span>
+        </div>
+        <div v-if="store.currentKB.kbKind === 'business' && store.currentKB.domainProfileId" class="kb-info-row">
+          <span class="kb-info-label">业务画像</span>
+          <span class="kb-info-value">{{ store.currentKB.domainProfileId }}</span>
+        </div>
+        <div class="kb-info-row">
+          <span class="kb-info-label">统计</span>
+          <span class="kb-info-value">{{ store.currentKB.pageCount || 0 }} 页面 · {{ store.currentKB.rawCount || 0 }} 材料</span>
+        </div>
+      </div>
+    </div>
+
     <!-- ① Embedding model -->
     <div class="config-card">
       <div class="config-card__head">
@@ -471,6 +503,12 @@ loadProviderNames().then(() => {
 }
 .btn-save:hover { opacity: 0.88; }
 .btn-save:disabled { background: var(--mc-border); cursor: not-allowed; }
+
+/* KB basic info */
+.kb-info-grid { display: flex; flex-direction: column; gap: 6px; }
+.kb-info-row { display: flex; align-items: flex-start; gap: 10px; }
+.kb-info-label { font-size: 12px; font-weight: 600; color: var(--mc-text-secondary); min-width: 56px; flex-shrink: 0; }
+.kb-info-value { font-size: 12px; color: var(--mc-text-primary); line-height: 1.5; }
 
 /* Ingest mode radio group */
 .ingest-mode-row { display: flex; gap: 8px; flex-wrap: wrap; }

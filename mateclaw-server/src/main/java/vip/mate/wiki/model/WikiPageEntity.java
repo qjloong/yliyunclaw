@@ -42,6 +42,14 @@ public class WikiPageEntity {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String sourceRawIds;
 
+    /** 页面级路由标签（JSON 数组，来源于材料结构标签与页面类型） */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String routeTagsJson;
+
+    /** 页面级结构元数据（JSON，对 canonical source 切片的稳定语义缓存） */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String structureMetadataJson;
+
     /** RFC-047 P2: paired source lineage — JSON array of {rawId, rawTitle} objects. Canonical; dual-written with sourceRawIds. */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String sourceEntries;

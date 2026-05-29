@@ -11,6 +11,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import vip.mate.wiki.dto.*;
 import vip.mate.wiki.job.WikiProcessingJobService;
 import vip.mate.wiki.job.event.WikiJobCreatedEvent;
@@ -41,6 +42,7 @@ public class WikiTool {
     private final WikiKnowledgeBaseService kbService;
     private final WikiRawMaterialService rawService;
     private final HybridRetriever hybridRetriever;
+    private final WikiDomainProfileRegistryService domainProfileRegistryService;
     private final ObjectMapper objectMapper;
 
     @Autowired(required = false)
@@ -63,11 +65,13 @@ public class WikiTool {
                      WikiKnowledgeBaseService kbService,
                      WikiRawMaterialService rawService,
                      HybridRetriever hybridRetriever,
+                     WikiDomainProfileRegistryService domainProfileRegistryService,
                      ObjectMapper objectMapper) {
         this.pageService = pageService;
         this.kbService = kbService;
         this.rawService = rawService;
         this.hybridRetriever = hybridRetriever;
+        this.domainProfileRegistryService = domainProfileRegistryService;
         this.objectMapper = objectMapper;
     }
 
@@ -215,7 +219,7 @@ public class WikiTool {
         int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
         List<ScopedPageSearchResult> results = knowledgeBases.stream()
                 .flatMap(kb -> hybridRetriever.search(kb.id(), query, mode, k).stream()
-                        .map(result -> new ScopedPageSearchResult(kb.id(), kb.name(), result)))
+                .map(result -> new ScopedPageSearchResult(kb, result, boostPageScore(kb, result, query))))
                 .sorted(Comparator.comparingDouble(ScopedPageSearchResult::score).reversed())
                 .limit(k)
                 .toList();
@@ -229,12 +233,16 @@ public class WikiTool {
             arr.add(JSONUtil.createObj()
                     .set("kbId", r.kbId())
                     .set("kbName", r.kbName())
+                    .set("kbKind", r.kbKind())
+                    .set("domainProfileId", r.domainProfileId())
+                    .set("domainProfileDisplayName", r.domainProfileDisplayName())
                     .set("slug", r.result().slug())
                     .set("title", r.result().title())
                     .set("snippet", r.result().snippet() != null ? r.result().snippet() : r.result().summary())
                     .set("matchedBy", r.result().matchedBy())
                     .set("reason", r.result().reason() != null ? r.result().reason() : "")
-                    .set("score", String.format("%.4f", r.result().score())));
+                    .set("score", String.format("%.4f", r.score()))
+                    .set("retrievalScore", String.format("%.4f", r.result().score())));
         }
 
         return JSONUtil.createObj()
@@ -271,7 +279,7 @@ public class WikiTool {
         int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
         List<ScopedChunkHit> hits = knowledgeBases.stream()
             .flatMap(kb -> hybridRetriever.searchChunks(kb.id(), query, k).stream()
-                .map(hit -> new ScopedChunkHit(kb.id(), kb.name(), hit)))
+                .map(hit -> new ScopedChunkHit(kb, hit, boostChunkScore(kb, hit, query))))
             .sorted(Comparator.comparingDouble(ScopedChunkHit::score).reversed())
             .limit(k)
             .toList();
@@ -300,10 +308,14 @@ public class WikiTool {
             cn.hutool.json.JSONObject obj = JSONUtil.createObj()
                 .set("kbId", hit.kbId())
                 .set("kbName", hit.kbName())
+                .set("kbKind", hit.kbKind())
+                .set("domainProfileId", hit.domainProfileId())
+                .set("domainProfileDisplayName", hit.domainProfileDisplayName())
                 .set("chunkId", hit.chunkId())
                 .set("rawTitle", rawTitles.getOrDefault(hit.rawId(), "unknown"))
                 .set("snippet", hit.snippet())
-                .set("score", String.format("%.4f", hit.score()));
+                .set("score", String.format("%.4f", hit.score()))
+                .set("retrievalScore", String.format("%.4f", hit.rawScore()));
             // RFC-051 PR-1c: surface chunk metadata when available so the agent
             // can cite "page 12, section 'Setup / Linux'" rather than an opaque snippet.
             if (hit.pageNumber() != null) obj.set("pageNumber", hit.pageNumber());
@@ -680,7 +692,12 @@ public class WikiTool {
 
     private List<BoundKnowledgeBase> resolveKnowledgeBases(Long agentId) {
         return kbService.listByAgentId(agentId).stream()
-                .map(kb -> new BoundKnowledgeBase(kb.getId(), kb.getName()))
+            .map(kb -> new BoundKnowledgeBase(
+                kb.getId(),
+                kb.getName(),
+                kb.getKbKind(),
+                kb.getDomainProfileId(),
+                formatDomainProfileLabel(kb.getDomainProfileId())))
                 .toList();
     }
 
@@ -743,17 +760,122 @@ public class WikiTool {
         return JSONUtil.createObj().set("error", message).toString();
     }
 
-    private record BoundKnowledgeBase(Long id, String name) {}
+    private String formatDomainProfileLabel(String domainProfileId) {
+        if (!StringUtils.hasText(domainProfileId)) {
+            return null;
+        }
+        String displayName = domainProfileRegistryService.displayNameOrDefault(domainProfileId);
+        if (!StringUtils.hasText(displayName) || displayName.equals(domainProfileId.trim())) {
+            return domainProfileId.trim();
+        }
+        return displayName + " (" + domainProfileId.trim() + ")";
+    }
+
+    private double boostPageScore(BoundKnowledgeBase kb, PageSearchResult result, String query) {
+        int kbMetadataScore = scoreByQuery(kb.name(), query) + scoreByQuery(kb.domainProfileDisplayName(), query);
+        int profileScore = domainProfileRegistryService.matchScore(kb.domainProfileId(), query);
+        double boost = Math.min(0.9d, kbMetadataScore * 0.012d + profileScore * 0.018d);
+        if ("business".equalsIgnoreCase(kb.kbKind()) && profileScore > 0) {
+            boost += 0.1d;
+        }
+        return result.score() + boost;
+    }
+
+    private double boostChunkScore(BoundKnowledgeBase kb, HybridRetriever.ChunkHit hit, String query) {
+        int kbMetadataScore = scoreByQuery(kb.name(), query) + scoreByQuery(kb.domainProfileDisplayName(), query);
+        int profileScore = domainProfileRegistryService.matchScore(kb.domainProfileId(), query);
+        double boost = Math.min(0.75d, kbMetadataScore * 0.01d + profileScore * 0.015d);
+        if ("business".equalsIgnoreCase(kb.kbKind()) && profileScore > 0) {
+            boost += 0.08d;
+        }
+        return hit.score() + boost;
+    }
+
+    private int scoreByQuery(String candidate, String userQuery) {
+        String normalizedCandidate = normalize(candidate);
+        String normalizedQuery = normalize(userQuery);
+        if (!StringUtils.hasText(normalizedCandidate) || !StringUtils.hasText(normalizedQuery)) {
+            return 0;
+        }
+        int score = 0;
+        if (normalizedCandidate.contains(normalizedQuery) || normalizedQuery.contains(normalizedCandidate)) {
+            score += 18;
+        }
+        for (String token : normalizedQuery.split("\\s+")) {
+            if (token.length() >= 2 && normalizedCandidate.contains(token)) {
+                score += Math.min(8, Math.max(2, token.length()));
+            }
+        }
+        return score;
+    }
+
+    private String normalize(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+                .replace('\n', ' ')
+                .replace('\r', ' ')
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .trim();
+    }
+
+    private record BoundKnowledgeBase(Long id,
+                                      String name,
+                                      String kbKind,
+                                      String domainProfileId,
+                                      String domainProfileDisplayName) {}
 
     private record ResolvedWikiPage(Long kbId, String kbName, WikiPageEntity page) {}
 
-    private record ScopedPageSearchResult(Long kbId, String kbName, PageSearchResult result) {
+    private record ScopedPageSearchResult(BoundKnowledgeBase kb, PageSearchResult result, double boostedScore) {
+        private Long kbId() {
+            return kb.id();
+        }
+
+        private String kbName() {
+            return kb.name();
+        }
+
+        private String kbKind() {
+            return kb.kbKind();
+        }
+
+        private String domainProfileId() {
+            return kb.domainProfileId();
+        }
+
+        private String domainProfileDisplayName() {
+            return kb.domainProfileDisplayName();
+        }
+
         private double score() {
-            return result.score();
+            return boostedScore;
         }
     }
 
-    private record ScopedChunkHit(Long kbId, String kbName, HybridRetriever.ChunkHit hit) {
+    private record ScopedChunkHit(BoundKnowledgeBase kb, HybridRetriever.ChunkHit hit, double boostedScore) {
+        private Long kbId() {
+            return kb.id();
+        }
+
+        private String kbName() {
+            return kb.name();
+        }
+
+        private String kbKind() {
+            return kb.kbKind();
+        }
+
+        private String domainProfileId() {
+            return kb.domainProfileId();
+        }
+
+        private String domainProfileDisplayName() {
+            return kb.domainProfileDisplayName();
+        }
+
         private Long chunkId() {
             return hit.chunkId();
         }
@@ -766,7 +888,11 @@ public class WikiTool {
             return hit.snippet();
         }
 
-        private float score() {
+        private double score() {
+            return boostedScore;
+        }
+
+        private float rawScore() {
             return hit.score();
         }
 

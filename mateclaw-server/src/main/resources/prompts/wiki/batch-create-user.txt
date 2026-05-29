@@ -8,6 +8,8 @@
 
 {existing_pages}
 
+{material_structure_section}
+
 ## 待生成页面列表
 
 ```json

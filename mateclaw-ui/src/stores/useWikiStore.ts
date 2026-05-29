@@ -7,6 +7,8 @@ export interface WikiKB {
   name: string
   externalKey?: string | null
   description: string
+  kbKind?: string | null
+  domainProfileId?: string | null
   agentId: number | null
   creatorUserId?: number | null
   configContent: string
@@ -23,6 +25,8 @@ export interface WikiRawMaterial {
   kbId: number
   title: string
   sourceType: string
+  materialType?: string | null
+  materialMetadataJson?: string | null
   fileSize: number
   processingStatus: string
   lastProcessedAt: string | null
@@ -45,6 +49,8 @@ export interface WikiPage {
   summary: string
   outgoingLinks: string
   sourceRawIds: string
+  routeTagsJson?: string | null
+  structureMetadataJson?: string | null
   version: number
   lastUpdatedBy: string
   pageType?: string | null
@@ -55,6 +61,24 @@ export interface WikiPage {
   archived?: number | null
   createTime: string
   updateTime: string
+}
+
+export interface WikiDerivedView {
+  viewType: string
+  viewKey: string
+  title: string
+  subtitle?: string | null
+  sliceType?: string | null
+  grade?: string | null
+  volume?: string | null
+  unit?: string | null
+  chapter?: string | null
+  classicName?: string | null
+  source?: string | null
+  materialTypes: string[]
+  routeTags: string[]
+  pageCount: number
+  pages: WikiPage[]
 }
 
 /** RFC-051 PR-8: shared protection check used by viewer + list to gate delete UI. */
@@ -69,6 +93,7 @@ export const useWikiStore = defineStore('wiki', () => {
   const currentKB = ref<WikiKB | null>(null)
   const rawMaterials = ref<WikiRawMaterial[]>([])
   const pages = ref<WikiPage[]>([])
+  const derivedViews = ref<WikiDerivedView[]>([])
   const currentPage = ref<WikiPage | null>(null)
   const loading = ref(false)
 
@@ -94,7 +119,7 @@ export const useWikiStore = defineStore('wiki', () => {
     await Promise.all([fetchRawMaterials(id), fetchPages(id)])
   }
 
-  async function createKB(data: { name: string; description?: string; agentId?: number; externalKey?: string | null }) {
+  async function createKB(data: { name: string; description?: string; agentId?: number; externalKey?: string | null; kbKind?: string | null; domainProfileId?: string | null }) {
     const res: any = await wikiApi.createKB(data)
     const kb = res.data || res
     knowledgeBases.value.unshift(kb)
@@ -108,6 +133,7 @@ export const useWikiStore = defineStore('wiki', () => {
       currentKB.value = null
       rawMaterials.value = []
       pages.value = []
+      derivedViews.value = []
     }
   }
 
@@ -119,6 +145,13 @@ export const useWikiStore = defineStore('wiki', () => {
   async function fetchPages(kbId: number, rawId?: number | null) {
     const res: any = await wikiApi.listPages(kbId, rawId ?? undefined)
     pages.value = res.data || []
+    try {
+      const derivedRes: any = await wikiApi.listDerivedViews(kbId, rawId ?? undefined)
+      derivedViews.value = derivedRes.data || []
+    } catch (e) {
+      console.error('Failed to fetch derived views', e)
+      derivedViews.value = []
+    }
     if (!rawId) totalPageCount.value = pages.value.length
   }
 
@@ -137,8 +170,13 @@ export const useWikiStore = defineStore('wiki', () => {
     currentPage.value = res.data || res
   }
 
-  async function addRawText(kbId: number, title: string, content: string) {
-    const res: any = await wikiApi.addRawText(kbId, { title, content })
+  async function addRawText(kbId: number, title: string, content: string, options?: { materialType?: string | null; materialMetadataJson?: string | null }) {
+    const res: any = await wikiApi.addRawText(kbId, {
+      title,
+      content,
+      materialType: options?.materialType ?? null,
+      materialMetadataJson: options?.materialMetadataJson ?? null,
+    })
     const raw = res.data || res
     const existingIdx = rawMaterials.value.findIndex(r => r.id === raw.id)
     if (existingIdx >= 0) {
@@ -149,9 +187,11 @@ export const useWikiStore = defineStore('wiki', () => {
     return raw
   }
 
-  async function uploadRawFile(kbId: number, file: File, onProgress?: (pct: number) => void) {
+  async function uploadRawFile(kbId: number, file: File, onProgress?: (pct: number) => void, options?: { materialType?: string | null; materialMetadataJson?: string | null }) {
     const formData = new FormData()
     formData.append('file', file)
+    if (options?.materialType) formData.append('materialType', options.materialType)
+    if (options?.materialMetadataJson) formData.append('materialMetadataJson', options.materialMetadataJson)
     const res: any = await wikiApi.uploadRaw(kbId, formData, onProgress)
     const raw = res.data || res
     // Dedup: if backend returned an existing record, replace it in the list instead of adding a duplicate
@@ -177,6 +217,7 @@ export const useWikiStore = defineStore('wiki', () => {
     currentKB,
     rawMaterials,
     pages,
+    derivedViews,
     currentPage,
     loading,
     selectedRawId,

@@ -51,19 +51,31 @@
                 >
                   <div class="kb-item-header">
                     <div class="kb-item-name">{{ kb.name }}</div>
-                    <button
-                      class="kb-delete-btn"
-                      :title="t('wiki.deleteKB')"
-                      @click.stop="handleDeleteKB(kb)"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"/>
-                        <path d="M19 6l-1 14H6L5 6"/>
-                        <path d="M10 11v6"/>
-                        <path d="M14 11v6"/>
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                      </svg>
-                    </button>
+                    <div class="kb-item-actions">
+                      <button
+                        class="kb-edit-btn"
+                        :title="t('common.edit')"
+                        @click.stop="openEditKB(kb)"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button
+                        class="kb-delete-btn"
+                        :title="t('wiki.deleteKB')"
+                        @click.stop="handleDeleteKB(kb)"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="3 6 5 6 21 6"/>
+                          <path d="M19 6l-1 14H6L5 6"/>
+                          <path d="M10 11v6"/>
+                          <path d="M14 11v6"/>
+                          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <div class="kb-item-stats">
                     <span class="stat-chip">
@@ -75,6 +87,9 @@
                       {{ kb.rawCount }}
                     </span>
                     <span class="kb-status-dot" :class="kb.status" :title="t(`wiki.status.${kb.status}`)"></span>
+                  </div>
+                  <div v-if="kb.kbKind === 'business' && kb.domainProfileId" class="kb-business-tag">
+                    {{ domainProfileMap[kb.domainProfileId] || kb.domainProfileId }}
                   </div>
                   <div v-if="kbStats[kb.id]?.failedJobCount > 0" class="kb-warn">
                     ⚠ {{ t('wiki.stats.failedJobs', { count: kbStats[kb.id].failedJobCount }) }}
@@ -146,20 +161,23 @@
 
               <!-- Grouped page list -->
               <div class="page-list" v-if="!pageSearch" ref="pageListEl" @scroll="onPageListScroll">
-                <div v-for="group in groupedPages" :key="group.type" class="page-group">
+                <div v-for="group in activePageGroups" :key="group.key" class="page-group">
                   <button
                     class="group-header"
-                    @click="toggleGroup(group.type)"
+                    @click="toggleGroup(group.key)"
                   >
                     <svg
                       class="group-chevron"
-                      :class="{ expanded: !collapsedGroups.has(group.type) }"
+                      :class="{ expanded: !collapsedGroups.has(group.key) }"
                       width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                     ><polyline points="9 18 15 12 9 6"/></svg>
-                    <span class="group-label">{{ formatGroupLabel(group.type) }}</span>
+                    <span class="group-text">
+                      <span class="group-label">{{ group.title }}</span>
+                      <span v-if="group.subtitle" class="group-subtitle">{{ group.subtitle }}</span>
+                    </span>
                     <span class="group-count">{{ group.pages.length }}</span>
                   </button>
-                  <div v-if="!collapsedGroups.has(group.type)" class="group-items">
+                  <div v-if="!collapsedGroups.has(group.key)" class="group-items">
                     <div
                       v-for="page in paginatedGroupPages(group)" :key="page.slug"
                       class="page-item"
@@ -191,15 +209,15 @@
                     </div>
                     <!-- Load more within group (visible when more items exist) -->
                     <button
-                      v-if="(groupPageLimit[group.type] || PAGE_STEP) < group.pages.length"
+                      v-if="(groupPageLimit[group.key] || PAGE_STEP) < group.pages.length"
                       class="load-more-btn"
-                      @click.stop="loadMoreGroup(group.type)"
+                      @click.stop="loadMoreGroup(group.key)"
                     >
-                      {{ t('wiki.loadMore', { n: Math.min(PAGE_STEP, group.pages.length - (groupPageLimit[group.type] || PAGE_STEP)) }) }}
+                      {{ t('wiki.loadMore', { n: Math.min(PAGE_STEP, group.pages.length - (groupPageLimit[group.key] || PAGE_STEP)) }) }}
                     </button>
                   </div>
                 </div>
-                <div v-if="groupedPages.length === 0" class="empty-hint">{{ t('wiki.noPages') }}</div>
+                <div v-if="activePageGroups.length === 0" class="empty-hint">{{ t('wiki.noPages') }}</div>
 
                 <!-- RFC-051 PR-7 follow-up: archived pages drawer at the bottom of the list. -->
                 <div class="archived-section">
@@ -341,9 +359,62 @@
           <label>{{ t('wiki.kbDescription') }}</label>
           <textarea v-model="newKBDesc" class="form-input" rows="3" :placeholder="t('wiki.kbDescPlaceholder')"></textarea>
         </div>
+        <div class="form-group">
+          <label>知识库类型</label>
+          <select v-model="newKBKind" class="form-input">
+            <option value="general">通用知识库</option>
+            <option value="business">业务知识库</option>
+          </select>
+        </div>
+        <div v-if="newKBKind === 'business'" class="form-group">
+          <label>业务画像 ID</label>
+          <select v-model="newDomainProfileId" class="form-input">
+            <option value="">请选择业务画像</option>
+            <option v-for="profile in domainProfiles" :key="profile.id" :value="profile.id">
+              {{ profile.displayName }} · {{ profile.id }}
+            </option>
+          </select>
+          <div class="modal-hint">{{ selectedDomainProfileHint }}</div>
+        </div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="showCreateKB = false">{{ t('common.cancel') }}</button>
-          <button class="btn-primary" @click="handleCreateKB" :disabled="!newKBName.trim()">{{ t('common.create') }}</button>
+          <button class="btn-primary" @click="handleCreateKB" :disabled="!newKBName.trim() || (newKBKind === 'business' && !newDomainProfileId)">{{ t('common.create') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit KB Modal -->
+    <div v-if="showEditKB" class="modal-overlay" @click.self="showEditKB = false">
+      <div class="modal-content">
+        <h3 class="modal-title">编辑知识库</h3>
+        <div class="form-group">
+          <label>名称</label>
+          <input v-model="editKBName" type="text" class="form-input" placeholder="知识库名称" autofocus />
+        </div>
+        <div class="form-group">
+          <label>描述</label>
+          <textarea v-model="editKBDesc" class="form-input" rows="3" placeholder="知识库描述"></textarea>
+        </div>
+        <div class="form-group">
+          <label>知识库类型</label>
+          <select v-model="editKBKind" class="form-input">
+            <option value="general">通用知识库</option>
+            <option value="business">业务知识库</option>
+          </select>
+        </div>
+        <div v-if="editKBKind === 'business'" class="form-group">
+          <label>业务画像 ID</label>
+          <select v-model="editDomainProfileId" class="form-input">
+            <option value="">请选择业务画像</option>
+            <option v-for="profile in domainProfiles" :key="profile.id" :value="profile.id">
+              {{ profile.displayName }} · {{ profile.id }}
+            </option>
+          </select>
+          <div class="modal-hint">{{ editSelectedDomainProfileHint }}</div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showEditKB = false">{{ t('common.cancel') }}</button>
+          <button class="btn-primary" @click="handleEditKB" :disabled="!editKBName.trim() || (editKBKind === 'business' && !editDomainProfileId)">保存</button>
         </div>
       </div>
     </div>
@@ -357,6 +428,7 @@ import { ElMessage } from 'element-plus'
 import { useWikiStore, isProtectedPage, type WikiKB, type WikiPage } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import { mcConfirm } from '@/components/common/useConfirm'
+import type { WikiDomainProfileOption } from '@/types'
 import RawMaterialPanel from './components/RawMaterialPanel.vue'
 import WikiPageViewer from './components/WikiPageViewer.vue'
 import WikiConfig from './components/WikiConfig.vue'
@@ -393,8 +465,59 @@ watch(() => store.knowledgeBases.length, () => {
 const showCreateKB = ref(false)
 const newKBName = ref('')
 const newKBDesc = ref('')
+const newKBKind = ref<'general' | 'business'>('general')
+const newDomainProfileId = ref('')
+const domainProfiles = ref<WikiDomainProfileOption[]>([])
 const activeTab = ref('raw')
 const pageSearch = ref('')
+
+// Edit KB modal
+const showEditKB = ref(false)
+const editKBId = ref<number | null>(null)
+const editKBName = ref('')
+const editKBDesc = ref('')
+const editKBKind = ref<'general' | 'business'>('general')
+const editDomainProfileId = ref('')
+
+const domainProfileMap = computed(() => {
+  const map: Record<string, string> = {}
+  for (const p of domainProfiles.value) {
+    map[p.id] = p.displayName || p.id
+  }
+  return map
+})
+
+const selectedDomainProfileHint = computed(() => {
+  if (newKBKind.value !== 'business') {
+    return '通用知识库无需选择业务画像。'
+  }
+  const selected = domainProfiles.value.find(item => item.id === newDomainProfileId.value)
+  if (!selected) {
+    return '当前仅允许从受控注册表中选择业务画像。'
+  }
+  return selected.description || selected.id
+})
+
+const editSelectedDomainProfileHint = computed(() => {
+  if (editKBKind.value !== 'business') {
+    return '通用知识库无需选择业务画像。'
+  }
+  const selected = domainProfiles.value.find(item => item.id === editDomainProfileId.value)
+  if (!selected) {
+    return '当前仅允许从受控注册表中选择业务画像。'
+  }
+  return selected.description || selected.id
+})
+
+watch(newKBKind, (kind) => {
+  if (kind !== 'business') {
+    newDomainProfileId.value = ''
+    return
+  }
+  if (!newDomainProfileId.value && domainProfiles.value.length > 0) {
+    newDomainProfileId.value = domainProfiles.value[0].id
+  }
+})
 
 // Batch selection
 const batchMode = ref(false)
@@ -462,8 +585,8 @@ function loadMoreGroup(type: string) {
   groupPageLimit[type] = (groupPageLimit[type] || PAGE_STEP) + PAGE_STEP
 }
 
-function paginatedGroupPages(group: { type: string; pages: any[] }) {
-  const limit = groupPageLimit[group.type] || PAGE_STEP
+function paginatedGroupPages(group: { key: string; pages: WikiPage[] }) {
+  const limit = groupPageLimit[group.key] || PAGE_STEP
   return group.pages.slice(0, limit)
 }
 
@@ -478,10 +601,14 @@ function formatGroupLabel(type: string): string {
 // Type sort order
 const TYPE_ORDER = ['concept', 'technology', 'process', 'person', 'organization', 'product', 'place', 'event', 'term', 'other']
 
+const HIDDEN_PAGE_TYPES = new Set(['system', 'reference_seed'])
+
+const visiblePages = computed(() => store.pages.filter(p => !HIDDEN_PAGE_TYPES.has(p.pageType || '')))
+
 const filteredPages = computed(() => {
   const q = pageSearch.value.toLowerCase()
-  if (!q) return store.pages
-  return store.pages.filter(
+  if (!q) return visiblePages.value
+  return visiblePages.value.filter(
     (p) => p.title.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q)
   )
 })
@@ -490,7 +617,7 @@ const paginatedSearch = computed(() => filteredPages.value.slice(0, searchPageLi
 
 const groupedPages = computed(() => {
   const map = new Map<string, typeof store.pages>()
-  for (const page of store.pages) {
+  for (const page of visiblePages.value) {
     const type = (page.pageType || 'other').toLowerCase()
     if (!map.has(type)) map.set(type, [])
     map.get(type)!.push(page)
@@ -503,6 +630,25 @@ const groupedPages = computed(() => {
       return ia - ib
     })
     .map(([type, pages]) => ({ type, pages }))
+})
+
+const activePageGroups = computed(() => {
+  if (!pageSearch.value && store.derivedViews.length > 0) {
+    return store.derivedViews
+      .map((view) => ({
+        key: view.viewKey,
+        title: view.title,
+        subtitle: view.subtitle || '',
+        pages: view.pages.filter(p => !HIDDEN_PAGE_TYPES.has(p.pageType || '')),
+      }))
+      .filter(g => g.pages.length > 0)
+  }
+  return groupedPages.value.map((group) => ({
+    key: `type:${group.type}`,
+    title: formatGroupLabel(group.type),
+    subtitle: '',
+    pages: group.pages,
+  }))
 })
 
 // Reset pagination when KB changes
@@ -574,14 +720,69 @@ async function openPage(slug: string) {
   activeTab.value = 'pages'
 }
 
+async function fetchDomainProfiles() {
+  try {
+    const res: any = await wikiApi.listDomainProfiles()
+    domainProfiles.value = (res?.data || res || []) as WikiDomainProfileOption[]
+    if (newKBKind.value === 'business' && !newDomainProfileId.value && domainProfiles.value.length > 0) {
+      newDomainProfileId.value = domainProfiles.value[0].id
+    }
+  } catch (e) {
+    console.error('[Wiki] Failed to load domain profiles', e)
+    domainProfiles.value = []
+  }
+}
+
 async function handleCreateKB() {
+  if (newKBKind.value === 'business' && !newDomainProfileId.value) {
+    ElMessage.warning('业务知识库必须选择业务画像')
+    return
+  }
   await store.createKB({
     name: newKBName.value,
     description: newKBDesc.value,
+    kbKind: newKBKind.value,
+    domainProfileId: newDomainProfileId.value.trim() || null,
   })
   showCreateKB.value = false
   newKBName.value = ''
   newKBDesc.value = ''
+  newKBKind.value = 'general'
+  newDomainProfileId.value = ''
+}
+
+function openEditKB(kb: WikiKB) {
+  editKBId.value = kb.id
+  editKBName.value = kb.name || ''
+  editKBDesc.value = kb.description || ''
+  editKBKind.value = (kb.kbKind as 'general' | 'business') || 'general'
+  editDomainProfileId.value = kb.domainProfileId || ''
+  showEditKB.value = true
+}
+
+async function handleEditKB() {
+  if (!editKBId.value) return
+  if (editKBKind.value === 'business' && !editDomainProfileId.value) {
+    ElMessage.warning('业务知识库必须选择业务画像')
+    return
+  }
+  try {
+    await wikiApi.updateKB(editKBId.value, {
+      name: editKBName.value,
+      description: editKBDesc.value,
+      kbKind: editKBKind.value,
+      domainProfileId: editDomainProfileId.value.trim() || null,
+    })
+    ElMessage.success('知识库信息已更新')
+    showEditKB.value = false
+    await store.fetchKnowledgeBases()
+    if (store.currentKB?.id === editKBId.value) {
+      const updated = store.knowledgeBases.find(k => k.id === editKBId.value)
+      if (updated) store.currentKB = updated
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '更新失败')
+  }
 }
 
 async function handleDeleteKB(kb: WikiKB) {
@@ -615,10 +816,10 @@ function onPageListScroll() {
   if (!el) return
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
     // Find the first group that still has hidden pages and load more
-    for (const group of groupedPages.value) {
-      const limit = groupPageLimit[group.type] || PAGE_STEP
+    for (const group of activePageGroups.value) {
+      const limit = groupPageLimit[group.key] || PAGE_STEP
       if (limit < group.pages.length) {
-        loadMoreGroup(group.type)
+        loadMoreGroup(group.key)
         break
       }
     }
@@ -627,6 +828,7 @@ function onPageListScroll() {
 
 onMounted(() => {
   store.fetchKnowledgeBases()
+  fetchDomainProfiles()
 })
 </script>
 
@@ -640,6 +842,7 @@ onMounted(() => {
 .btn-primary:disabled { background: var(--mc-border); box-shadow: none; cursor: not-allowed; }
 .btn-secondary { padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 12px; font-size: 14px; cursor: pointer; transition: background 0.15s; }
 .btn-secondary:hover { background: var(--mc-bg-sunken); }
+.modal-hint { margin-top: 6px; font-size: 12px; color: var(--mc-text-tertiary); }
 
 /* Layout */
 .wiki-layout { display: flex; gap: 16px; flex: 1; min-height: 0; overflow: hidden; }
@@ -790,6 +993,7 @@ onMounted(() => {
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s;
   border: 1px solid var(--mc-border-light);
   background: color-mix(in srgb, var(--mc-bg-elevated) 78%, transparent);
+  flex-shrink: 0;
 }
 
 .kb-item::before {
@@ -833,6 +1037,8 @@ onMounted(() => {
 .kb-item-header { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .kb-item-name { font-size: 13px; font-weight: 700; color: var(--mc-text-primary); margin-bottom: 5px; line-height: 1.35; }
 .kb-item-header .kb-item-name { margin-bottom: 0; flex: 1; min-width: 0; }
+.kb-item-actions { display: flex; align-items: center; gap: 2px; }
+.kb-edit-btn,
 .kb-delete-btn {
   width: 22px;
   height: 22px;
@@ -847,8 +1053,15 @@ onMounted(() => {
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
 }
+.kb-item:hover .kb-edit-btn,
+.kb-item.active .kb-edit-btn,
 .kb-item:hover .kb-delete-btn,
 .kb-item.active .kb-delete-btn { opacity: 1; }
+.kb-edit-btn:hover {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.16);
+  color: var(--mc-primary);
+}
 .kb-delete-btn:hover {
   background: rgba(220, 38, 38, 0.08);
   border-color: rgba(220, 38, 38, 0.16);
@@ -887,6 +1100,7 @@ onMounted(() => {
 .kb-status-dot.processing { background: var(--mc-primary); animation: pulse 1.4s ease-in-out infinite; }
 .kb-status-dot.error { background: var(--mc-danger); }
 .kb-warn { font-size: 11px; color: var(--mc-danger); margin-top: 3px; }
+.kb-business-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 7px; background: rgba(217,119,87,0.12); border-radius: 6px; color: var(--mc-primary); font-size: 10px; font-weight: 600; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -932,7 +1146,20 @@ onMounted(() => {
 .group-header:hover { background: var(--mc-bg-muted); }
 .group-chevron { color: var(--mc-text-tertiary); transition: transform 0.18s; flex-shrink: 0; }
 .group-chevron.expanded { transform: rotate(90deg); }
-.group-label { font-size: 11px; font-weight: 600; color: var(--mc-text-secondary); flex: 1; }
+.group-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.group-label { font-size: 11px; font-weight: 600; color: var(--mc-text-secondary); }
+.group-subtitle {
+  font-size: 10px;
+  color: var(--mc-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .group-count {
   font-size: 10px;
   padding: 1px 5px;

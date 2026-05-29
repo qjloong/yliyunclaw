@@ -24,7 +24,9 @@ import vip.mate.wiki.model.WikiRawMaterialEntity;
 import vip.mate.wiki.sse.WikiProgressBus;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -692,6 +694,7 @@ public class WikiProcessingService {
                 .replace("{config}", configContent)
                 .replace("{document_map_section}", documentMapSection)
                 .replace("{existing_pages}", freshIndex)
+            .replace("{material_structure_section}", buildMaterialStructureSection(raw))
                 .replace("{raw_title}", rawTitle)
                 .replace("{raw_content}", textContent);
 
@@ -735,7 +738,10 @@ public class WikiProcessingService {
                         node.put("slug", meta.slug());
                         node.put("title", meta.title());
                         if (meta.summary() != null) node.put("summary", meta.summary());
-                        if (meta.purposeHint() != null) node.put("purposeHint", meta.purposeHint());
+                        String purposeHint = meta.purposeHint() != null && !meta.purposeHint().isBlank()
+                            ? meta.purposeHint()
+                            : derivePurposeHint(raw, meta.title(), meta.summary());
+                        if (purposeHint != null) node.put("purposeHint", purposeHint);
                         createMetas.add(node);
                     }
                     for (String slug : bound.update()) {
@@ -765,7 +771,7 @@ public class WikiProcessingService {
                     String slug = metaNode.path("slug").asText("");
                     String title = metaNode.path("title").asText("");
                     if (slug.isBlank() || title.isBlank()) continue;
-                    createMetas.add(metaNode);
+                    createMetas.add(normalizeCreateMeta(metaNode, raw));
                 }
             }
             JsonNode updateNode = routeJson.path("update");
@@ -787,6 +793,10 @@ public class WikiProcessingService {
             fallbackMeta.put("slug", overviewSlug);
             fallbackMeta.put("title", rawTitle + " 概述");
             fallbackMeta.put("summary", "来自「" + rawTitle + "」的综合概述，涵盖本章节的核心内容。");
+            String fallbackPurposeHint = derivePurposeHint(raw, fallbackMeta.path("title").asText(""), fallbackMeta.path("summary").asText(""));
+            if (fallbackPurposeHint != null) {
+                fallbackMeta.put("purposeHint", fallbackPurposeHint);
+            }
             createMetas.add(fallbackMeta);
             totalPlanned = 1;
             log.info("[Wiki] Chunk fallback: route returned empty for rawId={} chunkLen={}, injecting overview page '{}'",
@@ -933,6 +943,7 @@ public class WikiProcessingService {
                     .replace("{document_map_section}", docMapSection)
                     .replace("{existing_pages}", liveIndex.toString())
                     .replace("{pages_to_create}", metasJson.toString())
+                    .replace("{material_structure_section}", buildMaterialStructureSection(raw))
                     .replace("{raw_title}", raw.getTitle())
                     .replace("{raw_content}", chunkText);
             Prompt batchPrompt = new Prompt(List.of(
@@ -999,6 +1010,7 @@ public class WikiProcessingService {
                 String content = pageJson.path("content").asText("");
                 String pageSummary = pageJson.path("summary").asText("");
                 String pageType = pageJson.path("page_type").asText("");
+                String purposeHint = resolvePurposeHint(subBatch, slug, pp.slug());
                 if (content.isBlank()) {
                     log.info("[Wiki] BatchCreate: blank content for slug='{}', retrying individually", slug);
                     final String blankSlug = slug;
@@ -1027,7 +1039,7 @@ public class WikiProcessingService {
                 boolean wasCreated = false;
                 boolean ok = false;
                 try {
-                    wasCreated = savePageContent(kb, raw, slug, title, content, pageSummary, pageType);
+                    wasCreated = savePageContent(kb, raw, slug, title, content, pageSummary, pageType, purposeHint);
                     if (wasCreated) {
                         created.incrementAndGet();
                         totalCreated++;
@@ -1092,9 +1104,11 @@ public class WikiProcessingService {
         String createUser = createUserTemplate
                 .replace("{config}", configContent)
                 .replace("{existing_pages}", existingPagesIndex)
+            .replace("{material_structure_section}", buildMaterialStructureSection(raw))
                 .replace("{page_slug}", slug)
                 .replace("{page_title}", title)
                 .replace("{page_summary}", summary)
+            .replace("{page_purpose_hint}", pageMeta.path("purposeHint").asText(""))
                 .replace("{raw_title}", raw.getTitle())
                 .replace("{raw_content}", chunkText);
         Prompt prompt = new Prompt(List.of(
@@ -1168,7 +1182,8 @@ public class WikiProcessingService {
                 }
                 String title = retryJson.path("title").asText(fallbackTitle);
                 String summary = retryJson.path("summary").asText(fallbackSummary);
-                boolean wasCreated = savePageContent(kb, raw, resolvedSlug, title, content, summary);
+                String purposeHint = retryMeta.path("purposeHint").asText(null);
+                boolean wasCreated = savePageContent(kb, raw, resolvedSlug, title, content, summary, null, purposeHint);
                 if (wasCreated) {
                     created.incrementAndGet();
                     String brief = summary.length() > 100 ? summary.substring(0, 100) : summary;
@@ -1209,12 +1224,18 @@ public class WikiProcessingService {
      */
     private boolean savePageContent(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw,
                                      String slug, String title, String content, String pageSummary) {
-        return savePageContent(kb, raw, slug, title, content, pageSummary, null);
+        return savePageContent(kb, raw, slug, title, content, pageSummary, null, null);
     }
 
     private boolean savePageContent(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw,
                                      String slug, String title, String content, String pageSummary,
                                      String pageType) {
+        return savePageContent(kb, raw, slug, title, content, pageSummary, pageType, null);
+    }
+
+    private boolean savePageContent(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw,
+                                     String slug, String title, String content, String pageSummary,
+                                     String pageType, String purposeHint) {
         Long kbId = kb.getId();
         Long rawId = raw.getId();
 
@@ -1227,7 +1248,7 @@ public class WikiProcessingService {
         WikiPageEntity existingByCanonical = pageService.findByCanonicalSlug(kbId, slug);
         if (existingByCanonical != null && !existingByCanonical.getSlug().equals(slug)) {
             String actualSlug = existingByCanonical.getSlug();
-            pageService.updatePageByAi(kbId, actualSlug, content, pageSummary, rawId);
+            pageService.updatePageByAi(kbId, actualSlug, content, pageSummary, rawId, purposeHint);
             pageService.mergeSourceLineage(existingByCanonical.getId(), rawId, raw.getTitle());
             log.info("[Wiki] Phase B create slug='{}' canonical-matches existing '{}', updated",
                     slug, actualSlug);
@@ -1243,7 +1264,7 @@ public class WikiProcessingService {
             if (!winnerSlug.equals(slug)) {
                 WikiPageEntity winner = pageService.getBySlug(kbId, winnerSlug);
                 if (winner != null) {
-                    pageService.updatePageByAi(kbId, winnerSlug, content, pageSummary, rawId);
+                    pageService.updatePageByAi(kbId, winnerSlug, content, pageSummary, rawId, purposeHint);
                     pageService.mergeSourceLineage(winner.getId(), rawId, raw.getTitle());
                     log.info("[Wiki] Phase B create slug='{}' lost slug-claim race to '{}', updated",
                             slug, winnerSlug);
@@ -1258,7 +1279,7 @@ public class WikiProcessingService {
         // Fallback 1: slug already in DB (route misclassified or prior run)
         WikiPageEntity existing = pageService.getBySlug(kbId, slug);
         if (existing != null) {
-            pageService.updatePageByAi(kbId, slug, content, pageSummary, rawId);
+            pageService.updatePageByAi(kbId, slug, content, pageSummary, rawId, purposeHint);
             pageService.mergeSourceLineage(existing.getId(), rawId, raw.getTitle());
             log.info("[Wiki] Phase B create page slug='{}' done (updated existing)", slug);
             return false;
@@ -1266,14 +1287,14 @@ public class WikiProcessingService {
 
         String sourceRawIds = "[" + rawId + "]";
         try {
-            WikiPageEntity created = pageService.createPage(kbId, slug, title, content, pageSummary, sourceRawIds, pageType);
+            WikiPageEntity created = pageService.createPage(kbId, slug, title, content, pageSummary, sourceRawIds, pageType, purposeHint);
             pageService.mergeSourceLineage(created.getId(), rawId, raw.getTitle());
             log.info("[Wiki] Phase B create page slug='{}' done (created)", slug);
             citationService.buildCitationsAsync(created.getId(), kbId);
             return true;
         } catch (org.springframework.dao.DuplicateKeyException e) {
             // Fallback 2: concurrent INSERT race — degrade to update
-            pageService.updatePageByAi(kbId, slug, content, pageSummary, rawId);
+            pageService.updatePageByAi(kbId, slug, content, pageSummary, rawId, purposeHint);
             log.info("[Wiki] Phase B create page slug='{}' lost INSERT race -> updated existing", slug);
             return false;
         }
@@ -1810,9 +1831,11 @@ public class WikiProcessingService {
         String createUser = createUserTemplate
                 .replace("{config}", configContent)
                 .replace("{existing_pages}", existingPagesIndex)
+            .replace("{material_structure_section}", buildMaterialStructureSection(raw))
                 .replace("{page_slug}", page.getSlug())
                 .replace("{page_title}", page.getTitle())
                 .replace("{page_summary}", page.getSummary() != null ? page.getSummary() : "")
+            .replace("{page_purpose_hint}", page.getPurposeHint() != null ? page.getPurposeHint() : "")
                 .replace("{raw_title}", raw.getTitle())
                 .replace("{raw_content}", textContent);
         Prompt prompt = new Prompt(List.of(
@@ -1828,9 +1851,144 @@ public class WikiProcessingService {
         String content = pageJson.path("content").asText("");
         String summary = pageJson.path("summary").asText("");
         if (!content.isBlank()) {
-            pageService.updatePageByAi(kb.getId(), page.getSlug(), content, summary, rawIds.get(0));
+            pageService.updatePageByAi(kb.getId(), page.getSlug(), content, summary, rawIds.get(0), page.getPurposeHint());
             log.info("[Wiki] Repaired page: {} (kbId={})", page.getSlug(), kb.getId());
         }
+    }
+
+    private JsonNode normalizeCreateMeta(JsonNode metaNode, WikiRawMaterialEntity raw) {
+        com.fasterxml.jackson.databind.node.ObjectNode normalized = objectMapper.createObjectNode();
+        normalized.put("slug", metaNode.path("slug").asText(""));
+        normalized.put("title", metaNode.path("title").asText(""));
+        if (!metaNode.path("summary").asText("").isBlank()) {
+            normalized.put("summary", metaNode.path("summary").asText(""));
+        }
+        String purposeHint = metaNode.path("purposeHint").asText("");
+        if (purposeHint.isBlank()) {
+            purposeHint = derivePurposeHint(raw, metaNode.path("title").asText(""), metaNode.path("summary").asText(""));
+        }
+        if (purposeHint != null && !purposeHint.isBlank()) {
+            normalized.put("purposeHint", purposeHint);
+        }
+        return normalized;
+    }
+
+    private String resolvePurposeHint(List<JsonNode> metas, String... slugs) {
+        if (metas == null || metas.isEmpty()) {
+            return null;
+        }
+        for (String slug : slugs) {
+            if (slug == null || slug.isBlank()) {
+                continue;
+            }
+            for (JsonNode meta : metas) {
+                if (slug.equals(meta.path("slug").asText(""))) {
+                    String purposeHint = meta.path("purposeHint").asText("");
+                    return purposeHint.isBlank() ? null : purposeHint;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String buildMaterialStructureSection(WikiRawMaterialEntity raw) {
+        if (raw == null || raw.getMaterialMetadataJson() == null || raw.getMaterialMetadataJson().isBlank()) {
+            return "";
+        }
+        try {
+            JsonNode metadata = objectMapper.readTree(raw.getMaterialMetadataJson());
+            LinkedHashSet<String> lines = new LinkedHashSet<>();
+            addMetadataLine(lines, "资料类型", materialTypeLabel(raw.getMaterialType()));
+            addMetadataLine(lines, "教材版本", metadata.path("edition").asText(""));
+            addMetadataLine(lines, "适用年级", metadata.path("grade").asText(""));
+            addMetadataLine(lines, "册别", metadata.path("volume").asText(""));
+            addMetadataLine(lines, "单元", metadata.path("unit").asText(""));
+            addMetadataLine(lines, "章节 / 课文", metadata.path("chapter").asText(""));
+            addMetadataLine(lines, "名著名称", metadata.path("classicName").asText(""));
+            addMetadataLine(lines, "专题 / 来源", metadata.path("source").asText(""));
+            if (metadata.path("routeTags").isArray()) {
+                List<String> routeTags = new ArrayList<>();
+                metadata.path("routeTags").forEach(tag -> {
+                    String value = tag.asText("");
+                    if (!value.isBlank() && !routeTags.contains(value)) {
+                        routeTags.add(value);
+                    }
+                });
+                if (!routeTags.isEmpty()) {
+                    lines.add("- 路由标签：" + String.join(" / ", routeTags));
+                }
+            }
+            if (lines.isEmpty()) {
+                return "";
+            }
+            String guidance = switch ((raw.getMaterialType() == null ? "general" : raw.getMaterialType()).toLowerCase(Locale.ROOT)) {
+                case "textbook_latest" -> "切分时优先保留教材层级：册别 → 单元 → 课文 / 章节。不要把整册教材揉成一个宽泛页面。";
+                case "curriculum_standard" -> "切分时优先保留课标中的任务群、能力要求、学习主题，不要伪造具体课文内容。";
+                case "classic_manuscript" -> "切分时优先保留名著中的章节、情节、人物与主题边界，避免跨章节混写。";
+                case "question_rule" -> "切分时优先围绕题型规则、模块要求和适用范围生成页面。";
+                case "sample_question" -> "切分时优先保留样题所属模块、单元、题型与题干来源边界。";
+                case "answer_rubric" -> "切分时优先保留评分标准、采分点和对应题型 / 模块边界。";
+                default -> "若材料存在明显结构层级，请保留层级边界，不要把多层主题混写成单页。";
+            };
+            return "## 材料结构提示\n\n"
+                    + String.join("\n", lines)
+                    + "\n\n- 切分页原则：" + guidance + "\n";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void addMetadataLine(LinkedHashSet<String> lines, String label, String value) {
+        if (value != null && !value.isBlank()) {
+            lines.add("- " + label + "：" + value.trim());
+        }
+    }
+
+    private String derivePurposeHint(WikiRawMaterialEntity raw, String title, String summary) {
+        String materialType = raw == null || raw.getMaterialType() == null ? "general" : raw.getMaterialType().toLowerCase(Locale.ROOT);
+        String text = (title == null ? "" : title) + " " + (summary == null ? "" : summary);
+        String normalized = text.toLowerCase(Locale.ROOT);
+        return switch (materialType) {
+            case "textbook_latest" -> {
+                if (containsAny(normalized, "单元", "unit")) yield "教材单元页：保留单元主题、课文边界与册别信息。";
+                if (containsAny(normalized, "第", "课", "章节", "课文", "chapter", "lesson")) yield "教材课文 / 章节页：围绕单篇课文或章节组织内容，避免跨课混写。";
+                yield "教材结构页：按教材层级组织内容，保留册别、单元与课文边界。";
+            }
+            case "curriculum_standard" -> "课标规则页：聚焦学习任务群、能力要求与课程标准约束。";
+            case "classic_manuscript" -> {
+                if (containsAny(normalized, "人物", "角色")) yield "名著人物页：围绕单个人物组织相关情节与主题。";
+                if (containsAny(normalized, "情节", "章节", "回目")) yield "名著情节 / 章节页：保持情节推进与章节边界。";
+                yield "名著主题页：围绕名著主题、人物或情节建立页面。";
+            }
+            case "question_rule" -> "题型规则页：聚焦题型要求、命题约束与适用范围。";
+            case "sample_question" -> "样题示例页：保留样题所属模块、题型和来源边界。";
+            case "answer_rubric" -> "评分标准页：聚焦答案要点、采分点与评分边界。";
+            default -> null;
+        };
+    }
+
+    private boolean containsAny(String text, String... terms) {
+        for (String term : terms) {
+            if (term != null && !term.isBlank() && text.contains(term.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String materialTypeLabel(String materialType) {
+        if (materialType == null || materialType.isBlank()) {
+            return "通用资料";
+        }
+        return switch (materialType) {
+            case "curriculum_standard" -> "课程标准";
+            case "textbook_latest" -> "最新教材";
+            case "classic_manuscript" -> "名著稿件";
+            case "question_rule" -> "题型要求";
+            case "sample_question" -> "样题";
+            case "answer_rubric" -> "答案与评分标准";
+            default -> materialType;
+        };
     }
 
     private List<Long> parseSourceRawIds(String json) {

@@ -7,6 +7,15 @@ export interface ApiResult<T = any> {
   data: T
 }
 
+export interface WikiDomainProfileOption {
+  id: string
+  displayName: string
+  description?: string | null
+  kbKind?: string | null
+  sourcePluginKey?: string | null
+  capabilityPackId?: string | null
+}
+
 // ==================== 用户 ====================
 export interface User {
   id: string | number
@@ -311,6 +320,9 @@ export interface ContextRouterKnowledgeBaseSummary {
   id?: string | number
   name: string
   externalKey?: string
+  kbKind?: string
+  domainProfileId?: string
+  domainProfileDisplayName?: string
   templateMatched: boolean
 }
 

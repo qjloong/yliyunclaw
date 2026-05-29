@@ -37,6 +37,13 @@ public class WikiRawMaterialEntity {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String extractedText;
 
+    /** 业务材料类型：general / curriculum_standard / textbook_latest / classic_manuscript ... */
+    private String materialType;
+
+    /** 业务材料扩展元数据 JSON */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String materialMetadataJson;
+
     /** 内容 SHA-256 哈希（用于去重和变更检测） */
     private String contentHash;
 

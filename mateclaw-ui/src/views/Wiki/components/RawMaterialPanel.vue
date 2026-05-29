@@ -2,7 +2,7 @@
   <div class="raw-panel">
     <!-- Upload + Add text row -->
     <div class="upload-row">
-      <select v-model="teacherMaterialType" class="teacher-material-type-select" :title="'Teacher 资料类型'">
+      <select v-if="store.currentKB?.kbKind === 'business'" v-model="teacherMaterialType" class="teacher-material-type-select" :title="'Teacher 资料类型'">
         <option v-for="item in teacherMaterialTypes" :key="item.value" :value="item.value">
           {{ item.label }}
         </option>
@@ -47,6 +47,57 @@
         </svg>
         {{ t('wiki.addText') }}
       </button>
+    </div>
+
+    <div v-if="showTeacherMetadataForm" class="teacher-metadata-panel">
+      <div class="teacher-metadata-header">
+        <div>
+          <div class="teacher-metadata-title">结构化资料标签</div>
+          <div class="teacher-metadata-subtitle">为教材、课标、样题、评分标准补充年级 / 册别 / 单元 / 章节 / 标签，便于后续路由与检索重排。</div>
+        </div>
+        <div v-if="materialMetadataPreview.length > 0" class="teacher-metadata-preview">
+          <span v-for="item in materialMetadataPreview" :key="item" class="teacher-metadata-chip">{{ item }}</span>
+        </div>
+      </div>
+      <div class="teacher-metadata-grid">
+        <div v-if="showEditionField" class="form-group compact">
+          <label>{{ editionFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.edition" type="text" class="form-input" :placeholder="editionFieldPlaceholder" />
+        </div>
+        <div v-if="showSourceField" class="form-group compact">
+          <label>{{ sourceFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.source" type="text" class="form-input" :placeholder="sourceFieldPlaceholder" />
+        </div>
+        <div v-if="showGradeField" class="form-group compact">
+          <label>{{ gradeFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.grade" type="text" class="form-input" :placeholder="gradeFieldPlaceholder" />
+        </div>
+        <div v-if="showVolumeField" class="form-group compact">
+          <label>{{ volumeFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.volume" type="text" class="form-input" :placeholder="volumeFieldPlaceholder" />
+        </div>
+        <div v-if="showUnitField" class="form-group compact">
+          <label>{{ unitFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.unit" type="text" class="form-input" :placeholder="unitFieldPlaceholder" />
+        </div>
+        <div v-if="showChapterField" class="form-group compact">
+          <label>{{ chapterFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.chapter" type="text" class="form-input" :placeholder="chapterFieldPlaceholder" />
+        </div>
+        <div v-if="showClassicField" class="form-group compact teacher-metadata-span-2">
+          <label>{{ classicFieldLabel }}</label>
+          <input v-model="teacherMaterialMetadata.classicName" type="text" class="form-input" :placeholder="classicFieldPlaceholder" />
+        </div>
+        <div class="form-group compact teacher-metadata-span-2">
+          <label>路由标签</label>
+          <input
+            v-model="teacherMaterialMetadata.routeTagsInput"
+            type="text"
+            class="form-input"
+            placeholder="如：教材同步, 阅读理解, 七上, 第一单元"
+          />
+        </div>
+      </div>
     </div>
 
     <!-- Directory scan -->
@@ -140,6 +191,7 @@
         <div class="raw-item-row">
           <div class="raw-item-info">
             <span class="raw-item-title">{{ raw.title }}</span>
+            <span v-if="raw.materialType && raw.materialType !== 'general'" class="raw-item-business-type">{{ teacherMaterialLabel(raw.materialType) }}</span>
             <span class="raw-item-type">{{ raw.sourceType }}</span>
           </div>
           <div class="raw-item-meta">
@@ -195,6 +247,9 @@
         <div v-if="extractionPipelineHint(raw)" class="raw-item-hint">
           {{ extractionPipelineHint(raw) }}
         </div>
+        <div v-if="rawMetadataSummary(raw)" class="raw-item-hint raw-item-hint--metadata">
+          {{ rawMetadataSummary(raw) }}
+        </div>
         <!-- RFC-033: Job stage bar — show when job has progressed past 'queued' or reached terminal -->
         <JobStageBar
           v-if="rawJobs[raw.id] && (rawJobs[raw.id].stage !== 'queued' || rawJobs[raw.id].status !== 'queued')"
@@ -247,13 +302,20 @@
           <label>{{ t('wiki.materialTitle') }}</label>
           <input v-model="textTitle" type="text" class="form-input" />
         </div>
-        <div class="form-group">
+        <div v-if="store.currentKB?.kbKind === 'business'" class="form-group">
           <label>Teacher 资料类型</label>
           <select v-model="teacherMaterialType" class="form-input">
             <option v-for="item in teacherMaterialTypes" :key="item.value" :value="item.value">
               {{ item.label }}
             </option>
           </select>
+        </div>
+        <div v-if="showTeacherMetadataForm" class="teacher-metadata-inline-note">
+          <div class="teacher-metadata-inline-title">当前结构化标签</div>
+          <div v-if="materialMetadataPreview.length > 0" class="teacher-metadata-preview">
+            <span v-for="item in materialMetadataPreview" :key="`modal-${item}`" class="teacher-metadata-chip">{{ item }}</span>
+          </div>
+          <div v-else class="teacher-metadata-inline-empty">未填写结构化标签时，将仅保存资料类型。</div>
         </div>
         <div class="form-group">
           <label>{{ t('wiki.materialContent') }}</label>
@@ -276,6 +338,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { useWikiStore } from '@/stores/useWikiStore'
+import type { WikiRawMaterial } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import JobStageBar from './JobStageBar.vue'
 import type { WikiProcessingJob } from '@/composables/useWikiJobPoller'
@@ -414,6 +477,70 @@ const teacherMaterialTypes = [
 ]
 const teacherMaterialType = ref('general')
 
+interface TeacherMaterialMetadataForm {
+  edition: string
+  source: string
+  grade: string
+  volume: string
+  unit: string
+  chapter: string
+  classicName: string
+  routeTagsInput: string
+}
+
+const teacherMaterialMetadata = reactive<TeacherMaterialMetadataForm>({
+  edition: '',
+  source: '',
+  grade: '',
+  volume: '',
+  unit: '',
+  chapter: '',
+  classicName: '',
+  routeTagsInput: '',
+})
+
+const showTeacherMetadataForm = computed(() => teacherMaterialType.value !== 'general')
+const showEditionField = computed(() => teacherMaterialType.value !== 'general')
+const showSourceField = computed(() => teacherMaterialType.value !== 'general')
+const showGradeField = computed(() => ['curriculum_standard', 'textbook_latest', 'question_rule', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
+const showVolumeField = computed(() => ['textbook_latest', 'question_rule', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
+const showUnitField = computed(() => ['curriculum_standard', 'textbook_latest', 'question_rule', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
+const showChapterField = computed(() => ['textbook_latest', 'classic_manuscript', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
+const showClassicField = computed(() => teacherMaterialType.value === 'classic_manuscript')
+
+const editionFieldLabel = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '课标版本 / 年份' : '教材版本 / 版次')
+const editionFieldPlaceholder = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '如：2022版义务教育课标' : '如：部编版 / 统编版')
+const sourceFieldLabel = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '来源说明' : '适用来源 / 专题')
+const sourceFieldPlaceholder = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '如：整本书阅读任务群' : '如：现代文阅读 / 课内同步 / 期中复习')
+const gradeFieldLabel = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '适用学段 / 年级' : '适用年级')
+const gradeFieldPlaceholder = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '如：初中 / 七年级' : '如：七年级')
+const volumeFieldLabel = computed(() => teacherMaterialType.value === 'question_rule' ? '适用册别 / 学期' : '册别')
+const volumeFieldPlaceholder = computed(() => teacherMaterialType.value === 'question_rule' ? '如：七上 / 九下 / 一轮复习' : '如：上册 / 下册')
+const unitFieldLabel = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '主题 / 单元' : '单元 / 专题')
+const unitFieldPlaceholder = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '如：文学阅读与创意表达' : '如：第一单元 / 名著导读')
+const chapterFieldLabel = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '章节 / 篇目' : '课文 / 章节')
+const chapterFieldPlaceholder = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '如：孙悟空三打白骨精' : '如：《春》/ 第三课')
+const classicFieldLabel = computed(() => '名著名称')
+const classicFieldPlaceholder = computed(() => '如：西游记 / 朝花夕拾')
+
+const materialMetadataPreview = computed(() => {
+  const metadata = buildMaterialMetadataObject()
+  const preview: string[] = []
+  const pushValue = (value?: string) => {
+    if (value && !preview.includes(value)) preview.push(value)
+  }
+  pushValue(teacherMaterialLabel())
+  pushValue(asDisplayText(metadata.edition))
+  pushValue(asDisplayText(metadata.source))
+  pushValue(asDisplayText(metadata.grade))
+  pushValue(asDisplayText(metadata.volume))
+  pushValue(asDisplayText(metadata.unit))
+  pushValue(asDisplayText(metadata.chapter))
+  pushValue(asDisplayText(metadata.classicName))
+  ;(metadata.routeTags || []).slice(0, 4).forEach((tag: string) => pushValue(tag))
+  return preview
+})
+
 function teacherMaterialLabel(value = teacherMaterialType.value) {
   return teacherMaterialTypes.find(item => item.value === value)?.label || '通用资料'
 }
@@ -425,6 +552,98 @@ function prefixTeacherMaterialTitle(title: string) {
     return normalized
   }
   return `【${label}】${normalized}`
+}
+
+function normalizedMetadataValue(value?: string) {
+  const normalized = String(value || '').trim()
+  return normalized.length > 0 ? normalized : undefined
+}
+
+function parseRouteTags(input?: string) {
+  return Array.from(new Set(
+    String(input || '')
+      .split(/[\n,，;；|]/)
+      .map(item => item.trim())
+      .filter(Boolean)
+  ))
+}
+
+function asDisplayText(value: unknown) {
+  return typeof value === 'string' ? normalizedMetadataValue(value) : undefined
+}
+
+function buildMaterialMetadataObject() {
+  if (teacherMaterialType.value === 'general') {
+    return {} as Record<string, any>
+  }
+  const metadata: Record<string, any> = {
+    materialType: teacherMaterialType.value,
+  }
+  const push = (key: string, value?: string) => {
+    const normalized = normalizedMetadataValue(value)
+    if (normalized) metadata[key] = normalized
+  }
+  push('edition', teacherMaterialMetadata.edition)
+  push('source', teacherMaterialMetadata.source)
+  if (showGradeField.value) push('grade', teacherMaterialMetadata.grade)
+  if (showVolumeField.value) push('volume', teacherMaterialMetadata.volume)
+  if (showUnitField.value) push('unit', teacherMaterialMetadata.unit)
+  if (showChapterField.value) push('chapter', teacherMaterialMetadata.chapter)
+  if (showClassicField.value) push('classicName', teacherMaterialMetadata.classicName)
+  const routeTags = new Set<string>(parseRouteTags(teacherMaterialMetadata.routeTagsInput))
+  routeTags.add(teacherMaterialType.value)
+  ;['edition', 'source', 'grade', 'volume', 'unit', 'chapter', 'classicName'].forEach(key => {
+    const value = asDisplayText(metadata[key])
+    if (value) routeTags.add(value)
+  })
+  if (routeTags.size > 0) {
+    metadata.routeTags = Array.from(routeTags)
+  }
+  return metadata
+}
+
+function buildMaterialMetadataJson() {
+  const metadata = buildMaterialMetadataObject()
+  const keys = Object.keys(metadata)
+  if (keys.length <= 1 && metadata.materialType) {
+    return undefined
+  }
+  return JSON.stringify(metadata)
+}
+
+function parseMaterialMetadata(raw: WikiRawMaterial) {
+  const text = String(raw.materialMetadataJson || '').trim()
+  if (!text) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, any> : null
+  } catch {
+    return null
+  }
+}
+
+function rawMetadataSummary(raw: WikiRawMaterial) {
+  const metadata = parseMaterialMetadata(raw)
+  if (!metadata) {
+    return ''
+  }
+  const summary: string[] = []
+  const push = (value?: string) => {
+    if (value && !summary.includes(value)) summary.push(value)
+  }
+  push(asDisplayText(metadata.edition))
+  push(asDisplayText(metadata.source))
+  push(asDisplayText(metadata.grade))
+  push(asDisplayText(metadata.volume))
+  push(asDisplayText(metadata.unit))
+  push(asDisplayText(metadata.chapter))
+  push(asDisplayText(metadata.classicName))
+  if (Array.isArray(metadata.routeTags)) {
+    metadata.routeTags.slice(0, 2).forEach((tag: unknown) => push(asDisplayText(tag)))
+  }
+  return summary.join(' · ')
 }
 
 async function pollJobs() {
@@ -534,6 +753,9 @@ async function uploadFile(kbId: number, file: File) {
   try {
     await store.uploadRawFile(kbId, uploadFile, (pct) => {
       item.httpPct = pct
+    }, {
+      materialType: teacherMaterialType.value,
+      materialMetadataJson: buildMaterialMetadataJson(),
     })
     // Success: real item was added to store.rawMaterials, remove the optimistic placeholder
     removeUploadingFile(item.tempId)
@@ -568,7 +790,10 @@ async function handleDrop(event: DragEvent) {
 
 async function handleAddText() {
   if (!store.currentKB) return
-  await store.addRawText(store.currentKB.id, prefixTeacherMaterialTitle(textTitle.value), textContent.value)
+  await store.addRawText(store.currentKB.id, prefixTeacherMaterialTitle(textTitle.value), textContent.value, {
+    materialType: teacherMaterialType.value,
+    materialMetadataJson: buildMaterialMetadataJson(),
+  })
   showAddText.value = false
   textTitle.value = ''
   textContent.value = ''
@@ -741,6 +966,74 @@ function extractionPipelineHint(raw: { sourceType?: string; processingStatus?: s
 .upload-hint { font-size: 12px; color: var(--mc-text-tertiary); }
 .add-text-btn { flex-shrink: 0; }
 
+.teacher-metadata-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--mc-bg-elevated), var(--mc-bg-muted));
+}
+.teacher-metadata-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.teacher-metadata-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+}
+.teacher-metadata-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mc-text-tertiary);
+}
+.teacher-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.teacher-metadata-span-2 {
+  grid-column: span 2;
+}
+.teacher-metadata-preview {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.teacher-metadata-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(217,119,87,0.12);
+  color: var(--mc-primary);
+  font-size: 11px;
+  line-height: 1.2;
+}
+.teacher-metadata-inline-note {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px dashed var(--mc-border);
+  border-radius: 12px;
+  background: var(--mc-bg-muted);
+}
+.teacher-metadata-inline-title {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-secondary);
+}
+.teacher-metadata-inline-empty {
+  font-size: 12px;
+  color: var(--mc-text-tertiary);
+}
+
 /* Spinner animation for uploading state */
 .upload-spinner {
   flex-shrink: 0;
@@ -766,8 +1059,10 @@ function extractionPipelineHint(raw: { sourceType?: string; processingStatus?: s
 
 .raw-item-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .raw-item-title { font-weight: 500; color: var(--mc-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.raw-item-business-type { font-size: 10px; padding: 2px 6px; background: rgba(217,119,87,0.14); border-radius: 999px; color: var(--mc-primary); letter-spacing: 0.02em; }
 .raw-item-type { font-size: 10px; padding: 2px 6px; background: var(--mc-bg-sunken); border-radius: 4px; text-transform: uppercase; color: var(--mc-text-tertiary); letter-spacing: 0.02em; }
 .raw-item-hint { font-size: 11px; line-height: 1.5; color: var(--mc-text-tertiary); }
+.raw-item-hint--metadata { color: var(--mc-text-secondary); }
 .raw-item-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .raw-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .error-hint { font-size: 11px; color: var(--mc-danger); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -816,6 +1111,7 @@ function extractionPipelineHint(raw: { sourceType?: string; processingStatus?: s
 
 /* Form */
 .form-group { margin-bottom: 16px; }
+.form-group.compact { margin-bottom: 0; }
 .form-group label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: var(--mc-text-secondary); }
 .form-input { width: 100%; padding: 8px 12px; border: 1px solid var(--mc-border); border-radius: 8px; font-size: 14px; background: var(--mc-bg-sunken); color: var(--mc-text-primary); outline: none; font-family: inherit; }
 .form-input:focus { border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217,119,87,0.1); }
@@ -826,6 +1122,20 @@ function extractionPipelineHint(raw: { sourceType?: string; processingStatus?: s
   .upload-row,
   .dir-scan-row {
     flex-direction: column;
+  }
+
+  .teacher-metadata-header,
+  .teacher-metadata-grid {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .teacher-metadata-preview {
+    justify-content: flex-start;
+  }
+
+  .teacher-metadata-span-2 {
+    grid-column: auto;
   }
 
   .add-text-btn,

@@ -574,12 +574,13 @@ export const cronJobApi = {
 // ==================== Wiki Knowledge Base ====================
 export const wikiApi = {
   // Knowledge Base
+  listDomainProfiles: () => http.get('/wiki/domain-profiles'),
   listKBs: () => http.get('/wiki/knowledge-bases'),
   getKB: (id: number) => http.get(`/wiki/knowledge-bases/${id}`),
   listKBsByAgent: (agentId: number) => http.get(`/wiki/knowledge-bases/agent/${agentId}`),
-  createKB: (data: { name: string; description?: string; agentId?: number; externalKey?: string | null }) =>
+  createKB: (data: { name: string; description?: string; agentId?: number; externalKey?: string | null; kbKind?: string | null; domainProfileId?: string | null }) =>
     http.post('/wiki/knowledge-bases', data),
-  updateKB: (id: number, data: { name?: string; description?: string; agentId?: number; externalKey?: string | null; embeddingModelId?: string | number | null }) =>
+  updateKB: (id: number, data: { name?: string; description?: string; agentId?: number; externalKey?: string | null; embeddingModelId?: string | number | null; kbKind?: string | null; domainProfileId?: string | null }) =>
     http.put(`/wiki/knowledge-bases/${id}`, data),
   deleteKB: (id: number) => http.delete(`/wiki/knowledge-bases/${id}`),
   getConfig: (id: number) => http.get(`/wiki/knowledge-bases/${id}/config`),
@@ -593,7 +594,7 @@ export const wikiApi = {
 
   // Raw Materials
   listRaw: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/raw`),
-  addRawText: (kbId: number, data: { title: string; content: string }) =>
+  addRawText: (kbId: number, data: { title: string; content: string; materialType?: string | null; materialMetadataJson?: string | null }) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/text`, data),
   uploadRaw: (kbId: number, formData: FormData, onProgress?: (pct: number) => void) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/upload`, formData, {
@@ -614,6 +615,8 @@ export const wikiApi = {
   // Wiki Pages
   listPages: (kbId: number, rawId?: number) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages`, rawId != null ? { params: { rawId } } : undefined),
+  listDerivedViews: (kbId: number, rawId?: number) =>
+    http.get(`/wiki/knowledge-bases/${kbId}/derived-views`, rawId != null ? { params: { rawId } } : undefined),
   getPage: (kbId: number, slug: string) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}`),
   updatePage: (kbId: number, slug: string, content: string) =>

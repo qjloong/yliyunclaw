@@ -18,10 +18,13 @@ import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 import vip.mate.workspace.core.service.WorkspaceService;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.dto.WikiDomainProfileOption;
+import vip.mate.wiki.dto.WikiDerivedView;
 import vip.mate.wiki.event.WikiProcessingEvent;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
+import vip.mate.wiki.service.WikiDomainProfileRegistryService;
 import vip.mate.wiki.service.WikiDirectoryScanService;
 import vip.mate.wiki.service.WikiKnowledgeBaseService;
 import vip.mate.wiki.service.WikiPageService;
@@ -51,6 +54,7 @@ import java.util.Map;
 public class WikiController {
 
     private final WikiKnowledgeBaseService kbService;
+    private final WikiDomainProfileRegistryService domainProfileRegistryService;
     private final WikiRawMaterialService rawService;
     private final WikiPageService pageService;
     private final WikiProcessingService processingService;
@@ -62,6 +66,13 @@ public class WikiController {
     private final AuthService authService;
 
     // ==================== Knowledge Base ====================
+
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "获取受控业务画像列表")
+    @GetMapping("/domain-profiles")
+    public R<List<WikiDomainProfileOption>> listDomainProfiles() {
+        return R.ok(domainProfileRegistryService.listProfiles());
+    }
 
     @RequireWorkspaceRole("viewer")
     @Operation(summary = "获取所有知识库")
@@ -105,13 +116,19 @@ public class WikiController {
         String name = (String) body.get("name");
         String description = (String) body.get("description");
         String externalKey = body.get("externalKey") != null ? body.get("externalKey").toString() : null;
+        String kbKind = body.get("kbKind") != null ? body.get("kbKind").toString() : null;
+        String domainProfileId = body.get("domainProfileId") != null ? body.get("domainProfileId").toString() : null;
         Long agentId = body.get("agentId") != null ? Long.valueOf(body.get("agentId").toString()) : null;
+        if (!domainProfileRegistryService.isKnownProfile(domainProfileId)) {
+            return R.fail(400, "Unknown domain profile: " + domainProfileId);
+        }
         long wsId = workspaceId != null ? workspaceId : 1L;
         if (externalKey != null && !externalKey.isBlank()) {
             requireTemplateBindingPermission(wsId, auth);
         }
         UserEntity user = resolveCurrentUser(auth);
-        WikiKnowledgeBaseEntity kb = kbService.create(name, description, agentId, wsId, externalKey, user.getId());
+        WikiKnowledgeBaseEntity kb = kbService.create(name, description, agentId, wsId, externalKey,
+            user.getId(), kbKind, domainProfileId);
         return R.ok(kb);
     }
 
@@ -126,11 +143,17 @@ public class WikiController {
         String description = (String) body.get("description");
         Long agentId = body.get("agentId") != null ? Long.valueOf(body.get("agentId").toString()) : null;
         String externalKey = body.get("externalKey") != null ? body.get("externalKey").toString() : null;
+        String kbKind = body.get("kbKind") != null ? body.get("kbKind").toString() : null;
+        String domainProfileId = body.get("domainProfileId") != null ? body.get("domainProfileId").toString() : null;
+        if (!domainProfileRegistryService.isKnownProfile(domainProfileId)) {
+            return R.fail(400, "Unknown domain profile: " + domainProfileId);
+        }
         long wsId = workspaceId != null ? workspaceId : 1L;
         if (body.containsKey("externalKey")) {
             requireTemplateBindingPermission(wsId, auth);
         }
-        kbService.update(id, name, description, agentId, externalKey, body.containsKey("externalKey"));
+        kbService.update(id, name, description, agentId, externalKey, body.containsKey("externalKey"),
+            kbKind, body.containsKey("kbKind"), domainProfileId, body.containsKey("domainProfileId"));
         // RFC Embedding UI: 允许通过此接口绑定 / 解绑 embedding 模型
         if (body.containsKey("embeddingModelId")) {
             Object v = body.get("embeddingModelId");
@@ -221,6 +244,8 @@ public class WikiController {
             item.put("kbId", raw.getKbId());
             item.put("title", raw.getTitle());
             item.put("sourceType", raw.getSourceType());
+            item.put("materialType", raw.getMaterialType());
+            item.put("materialMetadataJson", raw.getMaterialMetadataJson());
             item.put("processingStatus", raw.getProcessingStatus());
             item.put("errorMessage", raw.getErrorMessage());
             item.put("progressPhase", raw.getProgressPhase());
@@ -244,7 +269,9 @@ public class WikiController {
         verifyKBWorkspace(kbId, workspaceId);
         String title = body.get("title");
         String content = body.get("content");
-        return R.ok(rawService.addText(kbId, title, content));
+        String materialType = body.get("materialType");
+        String materialMetadataJson = body.get("materialMetadataJson");
+        return R.ok(rawService.addText(kbId, title, content, materialType, materialMetadataJson));
     }
 
     @RequireWorkspaceRole("admin")
@@ -252,6 +279,8 @@ public class WikiController {
     @PostMapping("/knowledge-bases/{kbId}/raw/upload")
     public R<WikiRawMaterialEntity> uploadRaw(@PathVariable Long kbId,
                                                @RequestParam("file") MultipartFile file,
+                                               @RequestParam(value = "materialType", required = false) String materialType,
+                                               @RequestParam(value = "materialMetadataJson", required = false) String materialMetadataJson,
                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) throws IOException {
         verifyKBWorkspace(kbId, workspaceId);
         String originalName = file.getOriginalFilename();
@@ -270,7 +299,7 @@ public class WikiController {
         if ("text".equals(sourceType)) {
             // 文本文件直接读取内容
             String content = new String(file.getBytes(), StandardCharsets.UTF_8);
-            return R.ok(rawService.addText(kbId, originalName, content));
+            return R.ok(rawService.addText(kbId, originalName, content, materialType, materialMetadataJson));
         } else {
             // 二进制文件保存到磁盘（转绝对路径，避免 Tomcat 临时目录解析问题）
             Path uploadDir = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
@@ -278,7 +307,7 @@ public class WikiController {
             Path targetPath = uploadDir.resolve(System.currentTimeMillis() + "_" + originalName);
             file.transferTo(targetPath);
             return R.ok(rawService.addFile(kbId, originalName, sourceType,
-                    targetPath.toString(), file.getSize()));
+                    targetPath.toString(), file.getSize(), materialType, materialMetadataJson));
         }
     }
 
@@ -401,6 +430,16 @@ public class WikiController {
         verifyKBWorkspace(kbId, workspaceId);
         if (rawId != null) return R.ok(pageService.listBySourceRawId(kbId, rawId));
         return R.ok(pageService.listByKbId(kbId));
+    }
+
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "获取 Wiki canonical source 派生视图")
+    @GetMapping("/knowledge-bases/{kbId}/derived-views")
+    public R<List<WikiDerivedView>> listDerivedViews(@PathVariable Long kbId,
+                                                     @RequestParam(required = false) Long rawId,
+                                                     @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        return R.ok(pageService.listDerivedViews(kbId, rawId));
     }
 
     @RequireWorkspaceRole("viewer")

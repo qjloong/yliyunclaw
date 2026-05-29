@@ -33,6 +33,9 @@ public class ContextRouterSummary {
         private Long id;
         private String name;
         private String externalKey;
+        private String kbKind;
+        private String domainProfileId;
+        private String domainProfileDisplayName;
         private Boolean templateMatched;
     }
 

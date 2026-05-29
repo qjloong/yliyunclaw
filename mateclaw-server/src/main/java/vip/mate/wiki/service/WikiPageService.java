@@ -2,17 +2,28 @@ package vip.mate.wiki.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+import vip.mate.wiki.dto.RawSearchRef;
+import vip.mate.wiki.dto.WikiDerivedView;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiPageMapper;
+import vip.mate.wiki.repository.WikiRawMaterialMapper;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -30,8 +41,16 @@ public class WikiPageService {
 
     private final WikiPageMapper pageMapper;
     private final ObjectMapper objectMapper;
+    private final WikiRawMaterialMapper rawMaterialMapper;
 
     private static final Pattern WIKI_LINK_PATTERN = Pattern.compile("\\[\\[([^\\]]+)]]");
+        private static final List<String> DERIVED_VIEW_ORDER = List.of(
+            "textbook_sync",
+            "classic_focus",
+            "curriculum_view",
+            "assessment_view",
+            "slice_view"
+        );
 
     /** 页面摘要缓存：kbId → (data, expiresAt)。5 分钟 TTL，写操作失效。 */
     private record CachedSummaries(List<WikiPageEntity> data, long expiresAt) {
@@ -270,6 +289,16 @@ public class WikiPageService {
     @Transactional
     public WikiPageEntity createPage(Long kbId, String slug, String title, String content,
                                       String summary, String sourceRawIds, String pageType) {
+        return createPage(kbId, slug, title, content, summary, sourceRawIds, pageType, null);
+    }
+
+    /**
+     * Create a new wiki page with explicit pageType and optional purpose hint.
+     */
+    @Transactional
+    public WikiPageEntity createPage(Long kbId, String slug, String title, String content,
+                                      String summary, String sourceRawIds, String pageType,
+                                      String purposeHint) {
         WikiPageEntity entity = new WikiPageEntity();
         entity.setKbId(kbId);
         entity.setSlug(slug);
@@ -278,10 +307,15 @@ public class WikiPageService {
         entity.setSummary(summary);
         entity.setOutgoingLinks(extractLinksAsJson(content));
         entity.setSourceRawIds(sourceRawIds);
+        entity.setRouteTagsJson(buildRouteTagsJson(title, pageType, sourceRawIds));
+        entity.setStructureMetadataJson(buildStructureMetadataJson(title, pageType, purposeHint, sourceRawIds));
         entity.setVersion(1);
         entity.setLastUpdatedBy("ai");
         if (pageType != null && !pageType.isBlank()) {
             entity.setPageType(pageType.toLowerCase());
+        }
+        if (purposeHint != null && !purposeHint.isBlank()) {
+            entity.setPurposeHint(purposeHint.trim());
         }
         pageMapper.insert(entity);
         evictSummaryCache(kbId);
@@ -307,11 +341,43 @@ public class WikiPageService {
     }
 
     /**
+     * Build reusable canonical-source derived views from stable page slice metadata.
+     */
+    public List<WikiDerivedView> listDerivedViews(Long kbId, Long rawId) {
+        List<WikiPageEntity> sourcePages = rawId != null ? listBySourceRawId(kbId, rawId) : listByKbId(kbId);
+        Map<String, DerivedViewAccumulator> groups = new LinkedHashMap<>();
+        for (WikiPageEntity page : sourcePages) {
+            if (WikiScaffoldService.SYSTEM_PAGE_TYPE.equals(page.getPageType())) {
+                continue;
+            }
+            StructureMetadata metadata = parseStructureMetadata(page.getStructureMetadataJson());
+            DerivedViewDescriptor descriptor = describeDerivedView(page, metadata);
+            groups.computeIfAbsent(descriptor.viewKey(), key -> new DerivedViewAccumulator(descriptor))
+                    .add(page, metadata);
+        }
+        return groups.values().stream()
+                .sorted(Comparator
+                        .comparingInt((DerivedViewAccumulator acc) -> derivedViewOrder(acc.descriptor.viewType()))
+                        .thenComparing(acc -> acc.descriptor.title(), String.CASE_INSENSITIVE_ORDER))
+                .map(DerivedViewAccumulator::toView)
+                .toList();
+    }
+
+    /**
      * AI 更新页面内容（手动编辑的页面不覆盖内容，仅追加来源）
      */
     @Transactional
     public WikiPageEntity updatePageByAi(Long kbId, String slug, String content,
                                           String summary, Long newRawId) {
+        return updatePageByAi(kbId, slug, content, summary, newRawId, null);
+    }
+
+    /**
+     * AI update with optional purpose hint refresh.
+     */
+    @Transactional
+    public WikiPageEntity updatePageByAi(Long kbId, String slug, String content,
+                                         String summary, Long newRawId, String purposeHint) {
         WikiPageEntity existing = getBySlug(kbId, slug);
         if (existing == null) {
             log.warn("[Wiki] Page not found for AI update: kbId={}, slug={}", kbId, slug);
@@ -326,6 +392,11 @@ public class WikiPageService {
                 if (!rawIds.contains(newRawId)) {
                     rawIds.add(newRawId);
                     existing.setSourceRawIds(toJson(rawIds));
+                    existing.setRouteTagsJson(buildRouteTagsJson(existing.getTitle(), existing.getPageType(), existing.getSourceRawIds()));
+                    existing.setStructureMetadataJson(buildStructureMetadataJson(existing.getTitle(), existing.getPageType(), existing.getPurposeHint(), existing.getSourceRawIds()));
+                    if (purposeHint != null && !purposeHint.isBlank()) {
+                        existing.setPurposeHint(purposeHint.trim());
+                    }
                     pageMapper.updateById(existing);
                     evictSummaryCache(kbId);
                     return getBySlug(kbId, slug); // 从 DB 重新加载确保一致性
@@ -337,8 +408,12 @@ public class WikiPageService {
         existing.setContent(content);
         existing.setSummary(summary);
         existing.setOutgoingLinks(extractLinksAsJson(content));
+        existing.setRouteTagsJson(buildRouteTagsJson(existing.getTitle(), existing.getPageType(), existing.getSourceRawIds()));
         existing.setVersion(existing.getVersion() + 1);
         existing.setLastUpdatedBy("ai");
+        if (purposeHint != null && !purposeHint.isBlank()) {
+            existing.setPurposeHint(purposeHint.trim());
+        }
 
         // 追加新的 source raw id
         if (newRawId != null) {
@@ -348,6 +423,9 @@ public class WikiPageService {
                 existing.setSourceRawIds(toJson(rawIds));
             }
         }
+
+        existing.setRouteTagsJson(buildRouteTagsJson(existing.getTitle(), existing.getPageType(), existing.getSourceRawIds()));
+        existing.setStructureMetadataJson(buildStructureMetadataJson(existing.getTitle(), existing.getPageType(), existing.getPurposeHint(), existing.getSourceRawIds()));
 
         pageMapper.updateById(existing);
         evictSummaryCache(kbId);
@@ -386,6 +464,8 @@ public class WikiPageService {
         }
 
         if (!entryExists || !idExists) {
+            page.setRouteTagsJson(buildRouteTagsJson(page.getTitle(), page.getPageType(), page.getSourceRawIds()));
+            page.setStructureMetadataJson(buildStructureMetadataJson(page.getTitle(), page.getPageType(), page.getPurposeHint(), page.getSourceRawIds()));
             pageMapper.updateById(page);
             evictSummaryCache(page.getKbId());
         }
@@ -402,6 +482,8 @@ public class WikiPageService {
         }
         existing.setContent(content);
         existing.setOutgoingLinks(extractLinksAsJson(content));
+        existing.setRouteTagsJson(buildRouteTagsJson(existing.getTitle(), existing.getPageType(), existing.getSourceRawIds()));
+        existing.setStructureMetadataJson(buildStructureMetadataJson(existing.getTitle(), existing.getPageType(), existing.getPurposeHint(), existing.getSourceRawIds()));
         existing.setVersion(existing.getVersion() + 1);
         existing.setLastUpdatedBy("manual");
         // 同步更新摘要，防止与 content 漂移
@@ -640,6 +722,446 @@ public class WikiPageService {
             return objectMapper.writeValueAsString(obj);
         } catch (Exception e) {
             return "[]";
+        }
+    }
+
+    private String buildRouteTagsJson(String title, String pageType, String sourceRawIds) {
+        LinkedHashSet<String> routeTags = new LinkedHashSet<>();
+        appendRouteTag(routeTags, title);
+        appendPageTypeTag(routeTags, pageType);
+        for (RawSearchRef rawRef : loadRawSearchRefs(parseSourceRawIds(sourceRawIds))) {
+            appendMaterialTypeTags(routeTags, rawRef.materialType());
+            appendMetadataRouteTags(routeTags, rawRef.materialMetadataJson());
+        }
+        if (routeTags.isEmpty()) {
+            return null;
+        }
+        return toJson(new ArrayList<>(routeTags));
+    }
+
+    private StructureMetadata parseStructureMetadata(String structureMetadataJson) {
+        if (!StringUtils.hasText(structureMetadataJson)) {
+            return StructureMetadata.empty();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(structureMetadataJson);
+            return new StructureMetadata(
+                    textValue(node, "sliceType"),
+                    textValue(node, "grade"),
+                    textValue(node, "volume"),
+                    textValue(node, "unit"),
+                    textValue(node, "chapter"),
+                    textValue(node, "classicName"),
+                    textValue(node, "source"),
+                    readStringList(node.path("materialTypes")),
+                    readStringList(node.path("routeTags"))
+            );
+        } catch (Exception ignored) {
+            return StructureMetadata.empty();
+        }
+    }
+
+    private String textValue(JsonNode node, String fieldName) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return StringUtils.hasText(text) ? text.trim() : null;
+    }
+
+    private List<String> readStringList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        node.forEach(item -> {
+            String value = item.asText(null);
+            if (StringUtils.hasText(value)) {
+                values.add(value.trim());
+            }
+        });
+        return new ArrayList<>(values);
+    }
+
+    private DerivedViewDescriptor describeDerivedView(WikiPageEntity page, StructureMetadata metadata) {
+        if (StringUtils.hasText(metadata.classicName())) {
+            return new DerivedViewDescriptor(
+                    "classic_focus",
+                    "classic:" + normalizeKeyPart(metadata.classicName()),
+                    metadata.classicName(),
+                    joinNonBlank(" · ", metadata.source(), metadata.grade(), metadata.volume(), metadata.unit(), metadata.chapter()),
+                    metadata.sliceType(),
+                    metadata.grade(),
+                    metadata.volume(),
+                    metadata.unit(),
+                    metadata.chapter(),
+                    metadata.classicName(),
+                    metadata.source()
+            );
+        }
+        if (StringUtils.hasText(metadata.grade())
+                || StringUtils.hasText(metadata.volume())
+                || StringUtils.hasText(metadata.unit())
+                || StringUtils.hasText(metadata.chapter())) {
+            String anchor = joinNonBlank(" / ", metadata.unit(), metadata.chapter());
+            if (!StringUtils.hasText(anchor)) {
+                anchor = firstNonBlank(metadata.chapter(), metadata.unit(), metadata.volume(), metadata.grade(), page.getTitle());
+            }
+            return new DerivedViewDescriptor(
+                    "textbook_sync",
+                    "textbook:"
+                            + normalizeKeyPart(metadata.grade()) + ":"
+                            + normalizeKeyPart(metadata.volume()) + ":"
+                            + normalizeKeyPart(metadata.unit()) + ":"
+                            + normalizeKeyPart(metadata.chapter()),
+                    anchor,
+                    joinNonBlank(" · ", metadata.grade(), metadata.volume(), metadata.source()),
+                    metadata.sliceType(),
+                    metadata.grade(),
+                    metadata.volume(),
+                    metadata.unit(),
+                    metadata.chapter(),
+                    metadata.classicName(),
+                    metadata.source()
+            );
+        }
+        if (isCurriculumView(metadata)) {
+            String title = firstNonBlank(metadata.source(), "课程标准视图");
+            return new DerivedViewDescriptor(
+                    "curriculum_view",
+                    "curriculum:" + normalizeKeyPart(title) + ":" + normalizeKeyPart(metadata.grade()),
+                    title,
+                    joinNonBlank(" · ", metadata.grade(), metadata.volume()),
+                    metadata.sliceType(),
+                    metadata.grade(),
+                    metadata.volume(),
+                    metadata.unit(),
+                    metadata.chapter(),
+                    metadata.classicName(),
+                    metadata.source()
+            );
+        }
+        if (isAssessmentView(metadata)) {
+            String title = switch (firstNonBlank(metadata.sliceType(), "question_rule")) {
+                case "sample_question" -> "样题视图";
+                case "answer_rubric" -> "评分标准视图";
+                default -> "题型规则视图";
+            };
+            return new DerivedViewDescriptor(
+                    "assessment_view",
+                    "assessment:" + normalizeKeyPart(firstNonBlank(metadata.sliceType(), title)) + ":"
+                            + normalizeKeyPart(firstNonBlank(metadata.source(), metadata.classicName(), metadata.grade())),
+                    title,
+                    joinNonBlank(" · ", metadata.source(), metadata.classicName(), metadata.grade(), metadata.volume()),
+                    metadata.sliceType(),
+                    metadata.grade(),
+                    metadata.volume(),
+                    metadata.unit(),
+                    metadata.chapter(),
+                    metadata.classicName(),
+                    metadata.source()
+            );
+        }
+        String sliceLabel = switch (firstNonBlank(metadata.sliceType(), page.getPageType(), "other")) {
+            case "unit" -> "单元切片视图";
+            case "lesson_or_chapter" -> "课文章节视图";
+            case "character" -> "人物切片视图";
+            case "theme_or_plot" -> "主题情节视图";
+            default -> "结构切片视图";
+        };
+        return new DerivedViewDescriptor(
+                "slice_view",
+                "slice:" + normalizeKeyPart(firstNonBlank(metadata.sliceType(), page.getPageType(), "other")) + ":"
+                        + normalizeKeyPart(firstNonBlank(metadata.source(), metadata.grade(), metadata.classicName())),
+                sliceLabel,
+                joinNonBlank(" · ", metadata.source(), metadata.grade(), metadata.volume(), metadata.classicName()),
+                metadata.sliceType(),
+                metadata.grade(),
+                metadata.volume(),
+                metadata.unit(),
+                metadata.chapter(),
+                metadata.classicName(),
+                metadata.source()
+        );
+    }
+
+    private boolean isCurriculumView(StructureMetadata metadata) {
+        return "curriculum_requirement".equals(metadata.sliceType())
+                || metadata.materialTypes().contains("curriculum_standard");
+    }
+
+    private boolean isAssessmentView(StructureMetadata metadata) {
+        return List.of("question_rule", "sample_question", "answer_rubric").contains(metadata.sliceType())
+                || metadata.materialTypes().stream().anyMatch(type -> List.of("question_rule", "sample_question", "answer_rubric").contains(type));
+    }
+
+    private int derivedViewOrder(String viewType) {
+        int index = DERIVED_VIEW_ORDER.indexOf(viewType);
+        return index >= 0 ? index : DERIVED_VIEW_ORDER.size();
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String joinNonBlank(String delimiter, String... values) {
+        return java.util.Arrays.stream(values)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .distinct()
+                .collect(Collectors.joining(delimiter));
+    }
+
+    private String normalizeKeyPart(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "_";
+        }
+        return value.trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s/\\\\:：|]+", "-");
+    }
+
+    private String buildStructureMetadataJson(String title, String pageType, String purposeHint, String sourceRawIds) {
+        com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
+        appendStructureValue(node, "title", title);
+        appendStructureValue(node, "pageType", pageType == null ? null : pageType.toLowerCase(Locale.ROOT));
+        appendStructureValue(node, "purposeHint", purposeHint);
+
+        LinkedHashSet<String> materialTypes = new LinkedHashSet<>();
+        LinkedHashSet<String> routeTags = new LinkedHashSet<>();
+        for (RawSearchRef rawRef : loadRawSearchRefs(parseSourceRawIds(sourceRawIds))) {
+            appendRouteTag(routeTags, rawRef.title());
+            if (StringUtils.hasText(rawRef.materialType())) {
+                materialTypes.add(rawRef.materialType());
+            }
+            mergeStructureMetadata(node, routeTags, rawRef.materialMetadataJson());
+        }
+
+        if (!materialTypes.isEmpty()) {
+            node.set("materialTypes", objectMapper.valueToTree(new ArrayList<>(materialTypes)));
+        }
+        String sliceType = deriveSliceType(title, purposeHint, materialTypes);
+        appendStructureValue(node, "sliceType", sliceType);
+        if (!routeTags.isEmpty()) {
+            node.set("routeTags", objectMapper.valueToTree(new ArrayList<>(routeTags)));
+        }
+        return node.isEmpty() ? null : toJson(node);
+    }
+
+    private void mergeStructureMetadata(com.fasterxml.jackson.databind.node.ObjectNode node,
+                                        LinkedHashSet<String> routeTags,
+                                        String materialMetadataJson) {
+        if (!StringUtils.hasText(materialMetadataJson)) {
+            return;
+        }
+        try {
+            JsonNode metadata = objectMapper.readTree(materialMetadataJson);
+            copyStructureField(metadata, node, "edition");
+            copyStructureField(metadata, node, "source");
+            copyStructureField(metadata, node, "grade");
+            copyStructureField(metadata, node, "volume");
+            copyStructureField(metadata, node, "unit");
+            copyStructureField(metadata, node, "chapter");
+            copyStructureField(metadata, node, "classicName");
+            JsonNode routeTagsNode = metadata.path("routeTags");
+            if (routeTagsNode.isArray()) {
+                routeTagsNode.forEach(tag -> appendRouteTag(routeTags, tag.asText(null)));
+            }
+        } catch (Exception ignored) {
+            // ignore invalid metadata json
+        }
+    }
+
+    private void copyStructureField(JsonNode source,
+                                    com.fasterxml.jackson.databind.node.ObjectNode target,
+                                    String fieldName) {
+        if (!target.hasNonNull(fieldName)) {
+            appendStructureValue(target, fieldName, source.path(fieldName).asText(null));
+        }
+    }
+
+    private void appendStructureValue(com.fasterxml.jackson.databind.node.ObjectNode node, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            node.put(key, value.trim());
+        }
+    }
+
+    private String deriveSliceType(String title, String purposeHint, Collection<String> materialTypes) {
+        String normalized = (title == null ? "" : title) + " " + (purposeHint == null ? "" : purposeHint);
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        if (containsAny(lower, "单元", "unit")) {
+            return "unit";
+        }
+        if (containsAny(lower, "课文", "章节", "chapter", "lesson", "第") || containsAny(lower, "课", "回目")) {
+            return "lesson_or_chapter";
+        }
+        if (containsAny(lower, "人物", "角色", "character")) {
+            return "character";
+        }
+        if (containsAny(lower, "情节", "主题", "plot", "theme")) {
+            return "theme_or_plot";
+        }
+        if (materialTypes.contains("curriculum_standard")) {
+            return "curriculum_requirement";
+        }
+        if (materialTypes.contains("question_rule")) {
+            return "question_rule";
+        }
+        if (materialTypes.contains("sample_question")) {
+            return "sample_question";
+        }
+        if (materialTypes.contains("answer_rubric")) {
+            return "answer_rubric";
+        }
+        return null;
+    }
+
+    private boolean containsAny(String text, String... terms) {
+        for (String term : terms) {
+            if (StringUtils.hasText(term) && text.contains(term.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<RawSearchRef> loadRawSearchRefs(Collection<Long> rawIds) {
+        if (rawIds == null || rawIds.isEmpty()) {
+            return List.of();
+        }
+        return rawMaterialMapper.selectBatchSearchRefs(rawIds);
+    }
+
+    private void appendMetadataRouteTags(LinkedHashSet<String> routeTags, String materialMetadataJson) {
+        if (!StringUtils.hasText(materialMetadataJson)) {
+            return;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(materialMetadataJson);
+            appendRouteTag(routeTags, node.path("edition").asText(null));
+            appendRouteTag(routeTags, node.path("source").asText(null));
+            appendRouteTag(routeTags, node.path("grade").asText(null));
+            appendRouteTag(routeTags, node.path("volume").asText(null));
+            appendRouteTag(routeTags, node.path("unit").asText(null));
+            appendRouteTag(routeTags, node.path("chapter").asText(null));
+            appendRouteTag(routeTags, node.path("classicName").asText(null));
+            JsonNode routeTagsNode = node.path("routeTags");
+            if (routeTagsNode.isArray()) {
+                routeTagsNode.forEach(tag -> appendRouteTag(routeTags, tag.asText(null)));
+            }
+        } catch (Exception ignored) {
+            // ignore invalid metadata json
+        }
+    }
+
+    private void appendMaterialTypeTags(LinkedHashSet<String> routeTags, String materialType) {
+        if (!StringUtils.hasText(materialType)) {
+            return;
+        }
+        appendRouteTag(routeTags, switch (materialType) {
+            case "curriculum_standard" -> "课程标准";
+            case "textbook_latest" -> "最新教材";
+            case "classic_manuscript" -> "名著稿件";
+            case "question_rule" -> "题型要求";
+            case "sample_question" -> "样题";
+            case "answer_rubric" -> "答案与评分标准";
+            default -> materialType;
+        });
+    }
+
+    private void appendPageTypeTag(LinkedHashSet<String> routeTags, String pageType) {
+        if (!StringUtils.hasText(pageType)) {
+            return;
+        }
+        appendRouteTag(routeTags, switch (pageType.toLowerCase(Locale.ROOT)) {
+            case "source" -> "来源材料";
+            case "synthesis" -> "综合整理";
+            case "concept" -> "知识点";
+            default -> pageType;
+        });
+    }
+
+    private void appendRouteTag(LinkedHashSet<String> routeTags, String value) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        String normalized = value.trim();
+        if (!normalized.isEmpty()) {
+            routeTags.add(normalized);
+        }
+    }
+
+    private record StructureMetadata(String sliceType,
+                                     String grade,
+                                     String volume,
+                                     String unit,
+                                     String chapter,
+                                     String classicName,
+                                     String source,
+                                     List<String> materialTypes,
+                                     List<String> routeTags) {
+        private static StructureMetadata empty() {
+            return new StructureMetadata(null, null, null, null, null, null, null, List.of(), List.of());
+        }
+    }
+
+    private record DerivedViewDescriptor(String viewType,
+                                         String viewKey,
+                                         String title,
+                                         String subtitle,
+                                         String sliceType,
+                                         String grade,
+                                         String volume,
+                                         String unit,
+                                         String chapter,
+                                         String classicName,
+                                         String source) {
+    }
+
+    private static final class DerivedViewAccumulator {
+        private final DerivedViewDescriptor descriptor;
+        private final List<WikiPageEntity> pages = new ArrayList<>();
+        private final LinkedHashSet<String> materialTypes = new LinkedHashSet<>();
+        private final LinkedHashSet<String> routeTags = new LinkedHashSet<>();
+
+        private DerivedViewAccumulator(DerivedViewDescriptor descriptor) {
+            this.descriptor = descriptor;
+        }
+
+        private void add(WikiPageEntity page, StructureMetadata metadata) {
+            pages.add(page);
+            materialTypes.addAll(metadata.materialTypes());
+            routeTags.addAll(metadata.routeTags());
+        }
+
+        private WikiDerivedView toView() {
+            pages.sort(Comparator.comparing(WikiPageEntity::getTitle, String.CASE_INSENSITIVE_ORDER));
+            return new WikiDerivedView(
+                    descriptor.viewType(),
+                    descriptor.viewKey(),
+                    descriptor.title(),
+                    descriptor.subtitle(),
+                    descriptor.sliceType(),
+                    descriptor.grade(),
+                    descriptor.volume(),
+                    descriptor.unit(),
+                    descriptor.chapter(),
+                    descriptor.classicName(),
+                    descriptor.source(),
+                    new ArrayList<>(materialTypes),
+                    new ArrayList<>(routeTags),
+                    pages.size(),
+                    pages
+            );
         }
     }
 }

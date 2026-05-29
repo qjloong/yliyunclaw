@@ -130,7 +130,7 @@ This is the single execution ledger for the Agent Harness work. `PROJECT_BINDING
 
 ## Teacher Agent 教学出题闭环专项 v2
 
-Status: `in_progress`
+Status: `done`
 Owner priority: P1 Built-in Agent application cases / Phase 6 Agent profiles and domain packs
 Ledger sync date: 2026-05-27
 Implementation record: `docs/teacher-agent/teacher-agent-v2-implementation-record.md`
@@ -151,7 +151,7 @@ Status: `done`
 
 ### Teacher Agent v2-2 回归优化计划
 
-Status: `in_progress`
+Status: `done`
 
 | Stage | Status | Goal | Modules | Planned files | Acceptance | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -161,10 +161,10 @@ Status: `in_progress`
 | T2-2-4 Agent 列表删除区整理 | done | 默认列表不再直接展示已删除 Agent；已删除只通过筛选条件查看。 | agents ui | `Agents.vue` | 默认列表只显示正常 Agent；切换“已删除”筛选才显示删除项；恢复/永久删除操作保持可用。 | `showDeletedSection` 现在只在 `activeFilter === 'deleted'` 时展示；默认“全部”列表不再附带已删除区。`vue-tsc --noEmit` passed；`git diff --check` passed。 |
 | T2-2-5 Teacher 引导式槽位补全与连续会话衔接 | done | 提升首用流畅性：先基于内置规则给默认方案，再逐步追问缺失关键项；用户回答“需要/确认/按这个来”时能承接上一轮建议，不再重新报材料不足。 | teacher intent, plan agent, chat home | `TeacherIntentService`; `StateGraphPlanExecuteAgent` | “七年级上册”后 Agent 给出推荐默认方案；用户回答“需要”时按上一轮建议进入确认/生成，而不是要求重新补充全部字段；缺知识库时可用内置规则生成基础题，但不得假称引用最新教材/课标。 | 已扩展确认意图，短回复“需要/好的/按这个/按上面/继续”等在等待确认态会进入正式生成；等待确认后的补充信息会通过历史 `teacher_exam_module` 恢复上一轮模块，避免“七年级上册”这类槽位补充把模块重置为 unknown。TeacherIntentService targeted `javac` passed；`vue-tsc` passed；`git diff --check` passed。 |
 | T2-2-6 首页引导与默认快捷入口重写 | done | 根据“初中语文命题助手”定位重写默认首页副标题和 4 个快捷入口，突出快速开始、按教材/名著出题、上传材料命题、组卷。 | chat ui, template seed | `teacher-exam-assistant.json`; agent home config | 新建 Teacher 实例首页能引导用户一步步补足信息；自定义 Agent 未配置时仍用通用默认入口。 | 模板默认副标题改为“初中语文命题助手”；4 个快捷入口改为快速开始槽位补全、按年级册别生成方案、基于材料/知识库出题、组一套综合卷。模板 JSON validation passed；`vue-tsc --noEmit` passed；旧实例同步入口仍由 T2-2-1 承接。 |
-| T2-2-7 v2-2 回归验收 | in_progress | 把模板同步、Skill 隔离、槽位补全、删除列表、首页引导加入专项验收。 | harness, docs | `HarnessRunService` / teacher acceptance service; docs | 至少覆盖：旧实例同步、Code Agent 不显示 Teacher Skill、“需要”承接上一轮、默认列表不展示已删除、无 KB 时按内置规则生成但标注资料边界。 | 已完成代码级回归：`vue-tsc --noEmit`、模板 JSON 校验、`git diff --check` 通过；下一步补充/执行 Teacher v2-2 mock acceptance，把专项状态收口为 done。 |
+| T2-2-7 v2-2 回归验收 | done | 把模板同步、Skill 隔离、槽位补全、删除列表、首页引导加入专项验收。 | harness, docs | `HarnessRunService` / teacher acceptance service; docs | 至少覆盖：旧实例同步、Code Agent 不显示 Teacher Skill、“需要”承接上一轮、默认列表不展示已删除、无 KB 时按内置规则生成但标注资料边界。 | 已完成五项代码级回归验收：1) `Agents.vue` `syncTeacherHomeFromTemplate` 支持旧实例同步首页引导且不覆盖 Prompt/知识库/RulePack/Skill；2) `templateTeacherSkills` + `isTeacherTemplate` 确保 Code Agent/通用助手不显示 Teacher Skill；3) `isTeacherPlanConfirmation` 与 `buildConfirmedTeacherExamPrompt` 确保“需要/好的/按这个/继续”在等待确认态承接上一轮；4) `showDeletedSection` 只在 `activeFilter === 'deleted'` 时展示；5) `buildIdentityAnswer` 与正式出题 prompt 均明确无 KB 时不得编造最新教材/课标细节。`vue-tsc --noEmit`、`git diff --check` 通过。 |
 | T2-2-8 Teacher 运维入口与实例规则配置修正 | done | 新增 Teacher 配置页，并在 Teacher 实例编辑页展示 6 类有效 RulePack。 | teacher ops, agents ui, navigation | `TeacherOps.vue`; `Agents.vue`; `router/index.ts`; `MainLayout.vue`; i18n | Teacher 配置页集中管理 RulePack、Teacher Skill、自优化草案；智能体列表页不再显示自优化草案；已创建 Teacher 实例编辑页显示 Teacher 规则 Tab 和 6 类规则包；非 Teacher Agent 不显示该 Tab。 | 已新增 `/teacher-ops` 管理员配置路由；Teacher 配置页复用现有 RulePack/Skill/Improvement API；Teacher 实例编辑页新增 `Teacher 规则` Tab，显示 6 类 RulePack 并可进入详情。后续 T2-2-9 将入口从左侧导航迁移到插件页，避免通用工作空间菜单常驻 Teacher 业务入口。 |
 | T2-2-9 Teacher 内置插件化入口修正 | done | 将 Teacher 业务入口从工作空间通用导航迁移到插件页，作为系统内置业务插件管理。 | plugins, teacher ops, agents ui | `Plugins.vue`; `MainLayout.vue`; `Agents.vue`; docs | 左侧工作空间导航不再显示 Teacher 运维；插件页显示“Teacher 教学命题插件”内置插件卡；管理员从插件卡进入配置页；Teacher 实例规则 Tab 文案说明能力来自内置插件。 | 已移除侧边栏 `/teacher-ops` 项，保留受 admin 权限保护的隐藏配置路由；`Plugins.vue` 新增系统内置插件分组和 Teacher 插件卡，提供“配置插件”“绑定 Agent”入口；Teacher 实例规则说明改为插件来源。`vue-tsc --noEmit` passed；`git diff --check` passed。 |
-| T2-2-10 Teacher 插件能力包与学段学科扩展模型 | in_progress | 将 Teacher 插件从“初中语文单点入口”升级为“教学命题平台插件 + 能力包”模型，为小学/高中/其他学科扩展预留结构，并继续收口为“系统公共规则插件 → 模板默认绑定 → Agent 实例覆盖”的统一规则链。 | template metadata, plugins, agents ui, agent bindings, runtime routing, rulepack, skill | `teacher-exam-assistant.json`; `TemplateDTO`; `TemplateService`; `AgentPluginBinding`; `AgentBindingService`; `AgentGraphBuilder`; `TeacherIntentService`; `TeacherRulePackService`; `TeacherSkillDefinitionService`; `Plugins.vue`; `Agents.vue`; `types/index.ts`; docs | 运行时规则优先级明确为“Agent 实例规则 > 模板默认规则 > 系统插件默认规则”，且与 workspace 无关；插件页支持“配置规则/Agent 绑定”二级页返回；模板页支持插件绑定/解绑；Agent 实例支持绑定/解绑/调整 Teacher 规则插件且不回写模板或公共插件。 | T2-2-10a~e 已全部完成：a) 统一命名文案；b) 二级页面与绑定列表；c) 模板卡片插件绑定展示与 pluginBindings 优先解析；d) Agent 编辑页插件绑定/解绑管理与持久化；e) 后端运行时去 workspace 化。`vue-tsc --noEmit` 和 Java lint 均通过。 |
+| T2-2-10 Teacher 插件能力包与学段学科扩展模型 | done | 将 Teacher 插件从“初中语文单点入口”升级为“教学命题平台插件 + 能力包”模型，为小学/高中/其他学科扩展预留结构，并继续收口为“系统公共规则插件 → 模板默认绑定 → Agent 实例覆盖”的统一规则链。 | template metadata, plugins, agents ui, agent bindings, runtime routing, rulepack, skill | `teacher-exam-assistant.json`; `TemplateDTO`; `TemplateService`; `AgentPluginBinding`; `AgentBindingService`; `AgentGraphBuilder`; `TeacherIntentService`; `TeacherRulePackService`; `TeacherSkillDefinitionService`; `Plugins.vue`; `Agents.vue`; `types/index.ts`; docs | 运行时规则优先级明确为“Agent 实例规则 > 模板默认规则 > 系统插件默认规则”，且与 workspace 无关；插件页支持“配置规则/Agent 绑定”二级页返回；模板页支持插件绑定/解绑；Agent 实例支持绑定/解绑/调整 Teacher 规则插件且不回写模板或公共插件。 | T2-2-10a~e 已全部完成：a) 统一命名文案；b) 二级页面与绑定列表；c) 模板卡片插件绑定展示与 pluginBindings 优先解析；d) Agent 编辑页插件绑定/解绑管理与持久化；e) 后端运行时去 workspace 化。`vue-tsc --noEmit` 和 Java lint 均通过。 |
 
 #### T2-2-10 第二阶段确认方案（2026-05-28）
 
@@ -179,11 +179,32 @@ Status: `in_progress`
 
 | Task | Status | Scope | Acceptance |
 | --- | --- | --- | --- |
-| T2-2-10a 系统级公共插件重命名与能力包入口收口 | pending | plugins, navigation, docs | 插件页主卡片文案、二级页标题、入口描述统一为“教学出题规则插件 / 初中语文出题规则”；为后续小学/高中/其他学科能力包扩展保留列表结构。 |
-| T2-2-10b 插件页二级页面与 Agent 绑定列表 | pending | plugins ui, router, api | “配置规则”进入规则配置二级页并支持返回插件列表；“Agent 绑定”进入绑定实例列表二级页，展示工作区、Agent 名称、能力包、更新时间，并支持返回。 |
-| T2-2-10c 模板默认绑定统一改为插件引用 | pending | templates, template ui, dto, api | 模板管理页支持绑定/解绑规则插件，模板默认配置统一从系统插件能力包引用，模板不再承载独立规则事实源。 |
-| T2-2-10d Agent 实例级插件配置与 override 模型 | pending | agent bindings, agents ui, runtime model | Agent 实例支持绑定/解绑/调整 Teacher 规则插件，支持实例级规则 override；实例修改不影响模板与公共插件；同业务域只允许一个主规则插件。 |
-| T2-2-10e 运行时规则优先级去 workspace 化 | pending | runtime routing, rulepack, skill | Teacher 会话实际生效规则优先级改为“实例 > 模板 > 系统插件默认”，移除 workspace 在 Teacher RulePack / Skill 解析中的优先级语义。 |
+| T2-2-10a 系统级公共插件重命名与能力包入口收口 | done | plugins, navigation, docs | 插件页主卡片文案、二级页标题、入口描述统一为“教学出题规则插件 / 初中语文出题规则”；为后续小学/高中/其他学科能力包扩展保留列表结构。 |
+| T2-2-10b 插件页二级页面与 Agent 绑定列表 | done | plugins ui, router, api | “配置规则”进入规则配置二级页并支持返回插件列表；“Agent 绑定”进入绑定实例列表二级页，展示工作区、Agent 名称、能力包、更新时间，并支持返回。 |
+| T2-2-10c 模板默认绑定统一改为插件引用 | done | templates, template ui, dto, api | 模板管理页支持绑定/解绑规则插件，模板默认配置统一从系统插件能力包引用，模板不再承载独立规则事实源。 |
+| T2-2-10d Agent 实例级插件配置与 override 模型 | done | agent bindings, agents ui, runtime model | Agent 实例支持绑定/解绑/调整 Teacher 规则插件，支持实例级规则 override；实例修改不影响模板与公共插件；同业务域只允许一个主规则插件。 |
+| T2-2-10e 运行时规则优先级去 workspace 化 | done | runtime routing, rulepack, skill | Teacher 会话实际生效规则优先级改为“实例 > 模板 > 系统插件默认”，移除 workspace 在 Teacher RulePack / Skill 解析中的优先级语义。 |
+
+### Teacher 资料与知识库升级
+
+Status: `done`
+
+| Stage | Status | Goal | Modules | Planned files | Acceptance | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| T2-3-1 KB 业务元数据底座 | done | 为统一知识库补齐通用业务元数据：KB 类型、业务画像、原始材料类型，避免 Teacher 继续依赖标题前缀承载业务语义。 | wiki backend, wiki ui, docs | `WikiKnowledgeBaseEntity`; `WikiRawMaterialEntity`; `WikiKnowledgeBaseService`; `WikiRawMaterialService`; `WikiController`; `db/migration/*/V109__wiki_business_metadata.sql`; `useWikiStore.ts`; `api/index.ts`; `Wiki/index.vue`; `RawMaterialPanel.vue`; `teacher-agent-v2-implementation-record.md` | 新建/更新知识库可声明 `kbKind` 与 `domainProfileId`；原始材料上传/录入可持久化 `materialType`；列表接口返回这些字段；Teacher UI 不再只靠标题前缀识别资料类型。 | 本阶段先落字段与基础 UI，不引入完整 profile registry；后续阶段继续补 profile 注册表、教材结构化元数据、检索与路由升级。 |
+| T2-3-2 跨绑定 KB 自动相关上下文 | done | 修复自动注入 relevant wiki context 只搜索首个 KB 的问题，改为聚合所有已绑定 KB，并在注入文案中显式标识知识库来源与业务画像。 | wiki retrieval, context injection, docs | `WikiContextService`; `teacher-agent-v2-implementation-record.md` | `buildRelevantContext()` 可跨多个绑定 KB 聚合命中结果；注入内容包含 KB 标签；`buildWikiContext()` 显示 `kbKind` / `domainProfileId` 辅助 Agent 理解资料边界。 | 这是 Teacher 资料升级的第一步路由收口；后续仍需把 `ContextRouterService` / `wiki_search_pages` 排序进一步升级为 profile-aware。 |
+| T2-3-3 受控业务画像注册表 | done | 为业务知识库引入受控 `domainProfileId` 注册表，避免自由字符串扩散，并为后续插件贡献式画像注册打底。 | wiki backend, wiki ui, docs | `WikiDomainProfileOption`; `WikiDomainProfileRegistryService`; `WikiController`; `mateclaw-ui/src/api/index.ts`; `mateclaw-ui/src/types/index.ts`; `mateclaw-ui/src/views/Wiki/index.vue`; `teacher-agent-v2-implementation-record.md` | 后端暴露业务画像列表接口；创建/更新业务 KB 校验 `domainProfileId` 合法性；Wiki 创建弹窗通过下拉选择注册表画像；业务 KB 未选画像时不可提交。 | 当前注册表仍为后端内置常量；后续继续升级为插件/能力包贡献式注册，并将检索/路由排序做成 profile-aware。 |
+| T2-3-4 `domainProfile` 感知的检索与路由排序 | done | 让 relevant context 与 Context Router 能按业务画像匹配对绑定知识库进行轻量重排，并把画像信息展示到聊天路由摘要。 | wiki retrieval, context router, chat ui, docs | `WikiDomainProfileRegistryService`; `WikiContextService`; `ContextRouterService`; `ContextRouterSummary`; `mateclaw-ui/src/types/index.ts`; `ProjectChangesPanel.vue`; `teacher-agent-v2-implementation-record.md` | 教育命题类查询会优先命中“初中语文教学命题”业务 KB；聊天 Project 面板显示 KB 类型与业务画像；相关上下文标签使用易读画像显示名。 | 当前仍是启发式画像匹配；后续继续下沉到 `wiki_search_pages` / `HybridRetriever` / 原始材料结构标签，实现更细粒度的章节、教材版本和资料类型联合排序。 |
+| T2-3-5 工具层 Wiki 搜索画像感知排序 | done | 让 `wiki_search_pages` / `wiki_semantic_search` 在多 KB 聚合时也具备画像感知排序，并把 KB 业务元数据透出给工具调用方。 | wiki tools, retrieval, docs | `WikiTool`; `WikiDomainProfileRegistryService`; `teacher-agent-v2-implementation-record.md` | 教育命题类查询的 Wiki 工具结果优先返回教学命题业务 KB；工具结果包含 `kbKind`、`domainProfileId`、`domainProfileDisplayName`、加权后 `score` 与原始 `retrievalScore`。 | 当前工具层仍未下沉到原始材料 / 章节结构标签级排序；后续继续推进 `materialType`、route tags、教材版本等联合重排。 |
+| T2-3-6 材料类型 / 元数据驱动的检索重排 | done | 把 `materialType` 与 `materialMetadataJson` 下沉到 `HybridRetriever`，让页面与 chunk 检索都能按教材、课标、名著稿件、样题和评分标准等来源信号重排。 | wiki retrieval, raw material metadata, docs | `HybridRetriever`; `WikiRawMaterialMapper`; `RawSearchRef`; `teacher-agent-v2-implementation-record.md` | 涉及教材、课标、名著、样题、评分标准的查询会优先命中对应材料类型来源的 page / chunk；检索理由可显示材料类型命中。 | 当前材料元数据仍主要靠自由 JSON / 标题文本匹配；后续继续推进受控的章节、册别、单元和版本字段，并把 route tags 纳入联合重排。 |
+| T2-3-7 教材章节 / 册别结构元数据 | done | 让 Teacher 资料录入可维护受控结构标签，并让检索优先消费 `edition`、`grade`、`volume`、`unit`、`chapter`、`classicName` 与 `routeTags`。 | wiki ui, raw material metadata, retrieval, docs | `RawMaterialPanel.vue`; `WikiRawMaterialService`; `HybridRetriever`; `teacher-agent-v2-implementation-record.md` | 上传 / 文本录入可保存结构化教材元数据；后端会规范化 `materialMetadataJson`；检索对章节、册别、单元、名著名称和 route tags 查询表现更稳定。 | 当前结构标签仍保存在原始材料 JSON 中；后续可继续下沉到 page 级 route tags、canonical source 切片与专用索引字段。 |
+| T2-3-8 页面级 route tags 传播 | done | 把结构化材料标签传播到 `mate_wiki_page.route_tags_json`，让关键字搜索、混合检索和命中理由直接消费页面级 route tags。 | wiki page metadata, retrieval, docs | `WikiPageEntity`; `WikiPageService`; `WikiPageMapper`; `HybridRetriever`; `db/migration/*/V110__wiki_page_route_tags.sql`; `teacher-agent-v2-implementation-record.md` | 页面创建 / 更新后会缓存 route tags；关键字搜索快路径可命中页面级 route tags；检索结果理由会显示命中的 route tags。 | 当前 page route tags 仍是从 raw metadata 派生的缓存层；下一阶段继续推进 canonical source 的课文 / 单元 / 文体切片。 |
+| T2-3-9 canonical source 结构提示下沉 | done | 把教材 / 名著 / 题型结构提示继续下沉到 route + create prompt，并将 `purposeHint` 真正写入 page 生命周期，为 canonical source 切片提供稳定语义锚点。 | wiki processing, page lifecycle, prompts, docs | `WikiProcessingService`; `WikiPageService`; `prompts/wiki/route-system.txt`; `prompts/wiki/route-user.txt`; `prompts/wiki/create-page-user.txt`; `prompts/wiki/batch-create-user.txt`; `teacher-agent-v2-implementation-record.md` | route 阶段可补齐 `purposeHint`；create / batch-create / repair prompt 会消费结构化材料提示；page 创建 / AI 更新可持久化 `purposeHint`。 | 当前仍以 prompt + purposeHint 约束切片边界；下一阶段继续推进 canonical source 的稳定切片实体与 derived views。 |
+| T2-3-10 稳定切片元数据实体 | done | 为 page 增加 `structure_metadata_json` 稳定切片缓存，让 canonical source 的课文 / 单元 / 名著人物 / 情节 / 题型规则 / 评分标准切片具备统一可检索语义。 | wiki page metadata, retrieval, docs | `WikiPageEntity`; `WikiPageService`; `WikiPageMapper`; `HybridRetriever`; `db/migration/*/V111__wiki_page_structure_metadata.sql`; `mateclaw-ui/src/stores/useWikiStore.ts`; `teacher-agent-v2-implementation-record.md` | 页面创建 / 更新可缓存 `sliceType`、`grade`、`volume`、`unit`、`chapter`、`classicName` 等稳定结构字段；关键字搜索与检索理由可直接使用页面稳定切片元数据。 | 当前稳定切片仍以 page JSON 缓存承载；下一阶段继续推进 canonical source derived views。 |
+| T2-3-11 canonical source derived views | done | 基于稳定切片元数据聚合教材 / 名著 / 课程标准 / 题型规则衍生视图，并把它们暴露给 API 与 Wiki UI 复用。 | wiki page metadata, wiki api, wiki ui, docs | `WikiDerivedView`; `WikiPageService`; `WikiController`; `mateclaw-ui/src/api/index.ts`; `mateclaw-ui/src/stores/useWikiStore.ts`; `mateclaw-ui/src/views/Wiki/index.vue`; `teacher-agent-v2-implementation-record.md` | 新增 derived views 接口；页面侧栏在无搜索时优先按教材同步视图、名著视图、课程标准视图和题型规则视图聚合页面；原始材料过滤时视图同步收窄。 | 当前 derived views 仍是运行时 DTO 聚合，后续可继续下沉到 Teacher 检索、教材同步、组卷等直接消费链路。 |
+| T2-3-12 业务画像驱动的材料类型过滤与动态元数据表单 | planned | 将硬编码在前端的 `teacherMaterialTypes` 迁移到业务画像注册表中，使不同业务画像仅展示自己支持的材料类型，并动态决定元数据表单字段。 | wiki backend, wiki ui, domain profile | `WikiDomainProfileOption`; `WikiDomainProfileRegistryService`; `RawMaterialPanel.vue`; `types/index.ts` | 业务知识库上传材料时，下拉列表只显示当前画像支持的材料类型；元数据表单字段根据所选材料类型的配置动态渲染；新增画像无需改前端代码即可拥有独立的材料类型集合。 | 当前前端 `RawMaterialPanel.vue:469` 硬编码 7 个材料类型，所有 `business` KB 均展示相同列表，后续扩展其他业务画像时会造成下拉列表臃肿。本阶段将材料类型与元数据字段配置下沉到 `WikiDomainProfileOption`，实现画像级隔离。**图谱影响确认**：新增材料类型与页面不会破坏 `WikiRelationService` 的关系计算（`direct_link`/`shared_chunk`/`shared_raw`/`semantic_near` 均与 `pageType` 无关）；当前阶段维持通用 `pageType`（`concept`/`person`/`event` 等），不扩展业务专属节点类型。 |
+
+完整教材入库策略：不做“整册一本书 → 单页粗粒度页面”，也不做“六个模块各复制一份教材镜像”；统一采用 canonical source + 结构化切分 + route tags + derived views。即教材正文只保留一份权威内容，再按课文、单元、文体、能力模块等结构切片，供文言文、现代文、古诗词、基础知识、写作、名著等不同 RulePack 检索与重排使用。
 
 ### Requirement Sources
 
@@ -191,9 +212,9 @@ Status: `in_progress`
 | --- | --- | --- |
 | `docs/teacher-agent/iusses.md` | Teacher 内测核心问题索引，覆盖名著范围、上下文串扰、答案采分点、材料题、题型比例、UI 展示等问题。 | synced |
 | `docs/teacher-agent/名著题内测.docx` | 名著出题 15 个详细问题与验收风险。 | synced |
-| `docs/teacher-agent/初中名著出题要求.docx` | 名著阅读题型、范围、分值、材料和题干规则。 | synced |
-| `docs/teacher-agent/初中文言文出题要求.docx` | 文言文来源、题型、限制、考点规则。 | synced |
-| `docs/teacher-agent/初中现代文出题要求.docx` | 现代文阅读来源、题型、范围、限制规则。 | synced |
+| `docs/teacher-agent/初中名著出题要求.md` | 名著阅读题型、范围、分值、材料和题干规则。 | synced |
+| `docs/teacher-agent/初中古诗词+文言文出题要求.md` | 古诗词/文言文来源、题型、限制、考点规则。 | synced |
+| `docs/teacher-agent/初中现代文出题要求.md` | 现代文阅读来源、题型、范围、限制规则。 | synced |
 
 ### Current Code Entrypoints
 

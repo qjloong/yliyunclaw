@@ -6,11 +6,14 @@
 
 {existing_pages}
 
+{material_structure_section}
+
 ## 待生成页面的 metadata
 
 slug：`{page_slug}`
 标题：{page_title}
 摘要：{page_summary}
+页面角色提示：{page_purpose_hint}
 
 ## 原始材料
 

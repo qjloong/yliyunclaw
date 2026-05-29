@@ -12,6 +12,7 @@ import vip.mate.exception.MateClawException;
 import vip.mate.memory.search.SessionSearchResult;
 import vip.mate.memory.search.SessionSearchService;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
+import vip.mate.wiki.service.WikiDomainProfileRegistryService;
 import vip.mate.wiki.service.WikiKnowledgeBaseService;
 import vip.mate.workspace.core.model.ContextRouterSummary;
 import vip.mate.workspace.core.model.ProjectInsightSummary;
@@ -43,6 +44,7 @@ public class ContextRouterService {
     private final AgentMapper agentMapper;
     private final WorkspaceFileService workspaceFileService;
     private final WikiKnowledgeBaseService wikiKnowledgeBaseService;
+    private final WikiDomainProfileRegistryService domainProfileRegistryService;
     private final SessionSearchService sessionSearchService;
     private final ObjectMapper objectMapper;
     /** WP-4: typed/provenance-aware context assembly — augments summarize() with block provenance. */
@@ -222,6 +224,9 @@ public class ContextRouterService {
         item.setId(kb.getId());
         item.setName(kb.getName());
         item.setExternalKey(kb.getExternalKey());
+        item.setKbKind(kb.getKbKind());
+        item.setDomainProfileId(kb.getDomainProfileId());
+        item.setDomainProfileDisplayName(formatDomainProfileLabel(kb.getDomainProfileId()));
         item.setTemplateMatched(allowed.isEmpty()
                 || (StringUtils.hasText(kb.getExternalKey()) && allowed.contains(kb.getExternalKey())));
         return item;
@@ -393,11 +398,14 @@ public class ContextRouterService {
     private List<String> selectWikiHints(ContextRouterSummary summary, String userQuery) {
         List<ScoredHint> hints = new ArrayList<>();
         for (ContextRouterSummary.KnowledgeBaseSummary kb : summary.getKnowledgeBases()) {
-            String label = StringUtils.hasText(kb.getExternalKey())
-                    ? kb.getName() + " [" + kb.getExternalKey() + "]"
-                    : kb.getName();
+            String label = formatKnowledgeBaseHint(kb);
+            int profileScore = domainProfileRegistryService.matchScore(kb.getDomainProfileId(), userQuery);
             hints.add(new ScoredHint(label,
-                    18 + scoreByQuery(label, userQuery) + (Boolean.TRUE.equals(kb.getTemplateMatched()) ? 6 : 0)));
+                18
+                    + scoreByQuery(label, userQuery)
+                    + profileScore
+                    + (Boolean.TRUE.equals(kb.getTemplateMatched()) ? 6 : 0)
+                    + ("business".equalsIgnoreCase(kb.getKbKind()) && profileScore > 0 ? 8 : 0)));
         }
         if (hints.isEmpty() && summary.getTemplateKnowledgeKeys() != null) {
             return summary.getTemplateKnowledgeKeys().stream()
@@ -410,6 +418,34 @@ public class ContextRouterService {
                 .map(ScoredHint::value)
                 .limit(3)
                 .toList();
+    }
+
+    private String formatKnowledgeBaseHint(ContextRouterSummary.KnowledgeBaseSummary kb) {
+        List<String> parts = new ArrayList<>();
+        parts.add(kb.getName());
+        if (StringUtils.hasText(kb.getExternalKey())) {
+            parts.add("[" + kb.getExternalKey() + "]");
+        }
+        if (StringUtils.hasText(kb.getKbKind()) && !"general".equalsIgnoreCase(kb.getKbKind())) {
+            parts.add(kb.getKbKind());
+        }
+        if (StringUtils.hasText(kb.getDomainProfileDisplayName())) {
+            parts.add(kb.getDomainProfileDisplayName());
+        } else if (StringUtils.hasText(kb.getDomainProfileId())) {
+            parts.add(kb.getDomainProfileId());
+        }
+        return String.join(" · ", parts);
+    }
+
+    private String formatDomainProfileLabel(String domainProfileId) {
+        if (!StringUtils.hasText(domainProfileId)) {
+            return null;
+        }
+        String displayName = domainProfileRegistryService.displayNameOrDefault(domainProfileId);
+        if (!StringUtils.hasText(displayName) || displayName.equals(domainProfileId.trim())) {
+            return domainProfileId.trim();
+        }
+        return displayName + " (" + domainProfileId.trim() + ")";
     }
 
     private void addScoredHints(List<ScoredHint> hints,

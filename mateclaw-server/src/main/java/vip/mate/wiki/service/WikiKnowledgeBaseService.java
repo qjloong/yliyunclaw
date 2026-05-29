@@ -155,10 +155,19 @@ public class WikiKnowledgeBaseService {
     @Transactional
     public WikiKnowledgeBaseEntity create(String name, String description, Long agentId,
                                           Long workspaceId, String externalKey, Long creatorUserId) {
+        return create(name, description, agentId, workspaceId, externalKey, creatorUserId, null, null);
+    }
+
+    @Transactional
+    public WikiKnowledgeBaseEntity create(String name, String description, Long agentId,
+                                          Long workspaceId, String externalKey, Long creatorUserId,
+                                          String kbKind, String domainProfileId) {
         WikiKnowledgeBaseEntity entity = new WikiKnowledgeBaseEntity();
         entity.setName(name);
         entity.setExternalKey(externalKey);
         entity.setDescription(description);
+        entity.setKbKind(normalizeKbKind(kbKind));
+        entity.setDomainProfileId(normalizeProfileId(domainProfileId));
         entity.setAgentId(agentId);
         entity.setWorkspaceId(workspaceId);
         entity.setCreatorUserId(creatorUserId);
@@ -183,6 +192,14 @@ public class WikiKnowledgeBaseService {
     @Transactional
     public WikiKnowledgeBaseEntity update(Long id, String name, String description, Long agentId,
                                           String externalKey, boolean updateExternalKey) {
+        return update(id, name, description, agentId, externalKey, updateExternalKey, null, false, null, false);
+    }
+
+    @Transactional
+    public WikiKnowledgeBaseEntity update(Long id, String name, String description, Long agentId,
+                                          String externalKey, boolean updateExternalKey,
+                                          String kbKind, boolean updateKbKind,
+                                          String domainProfileId, boolean updateDomainProfileId) {
         WikiKnowledgeBaseEntity entity = kbMapper.selectById(id);
         if (entity == null) {
             throw new IllegalArgumentException("Knowledge base not found: " + id);
@@ -191,6 +208,8 @@ public class WikiKnowledgeBaseService {
         if (description != null) entity.setDescription(description);
         if (agentId != null) entity.setAgentId(agentId);
         if (updateExternalKey) entity.setExternalKey(externalKey);
+        if (updateKbKind) entity.setKbKind(normalizeKbKind(kbKind));
+        if (updateDomainProfileId) entity.setDomainProfileId(normalizeProfileId(domainProfileId));
         kbMapper.updateById(entity);
         return entity;
     }
@@ -289,5 +308,20 @@ public class WikiKnowledgeBaseService {
     public void delete(Long id) {
         kbMapper.deleteById(id);
         log.info("[Wiki] Knowledge base deleted: id={}", id);
+    }
+
+    private String normalizeKbKind(String kbKind) {
+        String normalized = kbKind == null ? "general" : kbKind.trim().toLowerCase();
+        if (!StringUtils.hasText(normalized)) {
+            return "general";
+        }
+        return switch (normalized) {
+            case "business" -> "business";
+            default -> "general";
+        };
+    }
+
+    private String normalizeProfileId(String domainProfileId) {
+        return StringUtils.hasText(domainProfileId) ? domainProfileId.trim() : null;
     }
 }

@@ -8,6 +8,8 @@
 
 {existing_pages}
 
+{material_structure_section}
+
 ## 待消化的原始材料
 
 标题：{raw_title}

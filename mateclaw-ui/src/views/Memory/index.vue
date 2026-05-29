@@ -280,7 +280,7 @@ function fmtTime(iso: string) {
 
 <style scoped>
 /* ========== Shell ========== */
-.memory-frame { max-width: 1200px; }
+.memory-frame {  }
 .memory-layout {
   display: flex;
   min-height: calc(100vh - 120px);
@@ -289,7 +289,7 @@ function fmtTime(iso: string) {
 
 /* ========== Left sidebar ========== */
 .memory-sidebar {
-  width: 340px;
+  width: 340px;`  `
   flex-shrink: 0;
   display: flex;
   flex-direction: column;

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import vip.mate.wiki.dto.RawSearchRef;
 import vip.mate.wiki.dto.RawTitleRef;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
 
@@ -25,4 +26,9 @@ public interface WikiRawMaterialMapper extends BaseMapper<WikiRawMaterialEntity>
             "WHERE id IN <foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach> " +
             "AND deleted = 0</script>")
     List<RawTitleRef> selectBatchTitles(@Param("ids") Collection<Long> ids);
+
+        @Select("<script>SELECT id, title, material_type AS materialType, material_metadata_json AS materialMetadataJson FROM mate_wiki_raw_material " +
+            "WHERE id IN <foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach> " +
+            "AND deleted = 0</script>")
+        List<RawSearchRef> selectBatchSearchRefs(@Param("ids") Collection<Long> ids);
 }

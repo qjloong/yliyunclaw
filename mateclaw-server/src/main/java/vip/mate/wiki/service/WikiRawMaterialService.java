@@ -1,5 +1,6 @@
 package vip.mate.wiki.service;
 
+import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -16,8 +17,11 @@ import vip.mate.wiki.repository.WikiRawMaterialMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -86,6 +90,15 @@ public class WikiRawMaterialService {
      */
     @Transactional
     public WikiRawMaterialEntity addText(Long kbId, String title, String content) {
+        return addText(kbId, title, content, null, null);
+    }
+
+    /**
+     * 添加文本类型的原始材料
+     */
+    @Transactional
+    public WikiRawMaterialEntity addText(Long kbId, String title, String content,
+                                         String materialType, String materialMetadataJson) {
         String hash = computeHash(content);
 
         // Dedup: reuse any existing row with the same hash in this KB (any status)
@@ -103,6 +116,9 @@ public class WikiRawMaterialService {
         entity.setTitle(title);
         entity.setSourceType("text");
         entity.setOriginalContent(content);
+        String normalizedMaterialType = normalizeMaterialType(materialType);
+        entity.setMaterialType(normalizedMaterialType);
+        entity.setMaterialMetadataJson(normalizeMaterialMetadataJson(normalizedMaterialType, materialMetadataJson));
         entity.setFileSize((long) content.getBytes(StandardCharsets.UTF_8).length);
         entity.setContentHash(hash);
         entity.setProcessingStatus("pending");
@@ -124,11 +140,24 @@ public class WikiRawMaterialService {
     @Transactional
     public WikiRawMaterialEntity addFile(Long kbId, String title, String sourceType,
                                           String sourcePath, long fileSize) {
+        return addFile(kbId, title, sourceType, sourcePath, fileSize, null, null);
+    }
+
+    /**
+     * 添加文件类型的原始材料（PDF/DOCX 等）
+     */
+    @Transactional
+    public WikiRawMaterialEntity addFile(Long kbId, String title, String sourceType,
+                                         String sourcePath, long fileSize,
+                                         String materialType, String materialMetadataJson) {
         WikiRawMaterialEntity entity = new WikiRawMaterialEntity();
         entity.setKbId(kbId);
         entity.setTitle(title);
         entity.setSourceType(sourceType);
         entity.setSourcePath(sourcePath);
+        String normalizedMaterialType = normalizeMaterialType(materialType);
+        entity.setMaterialType(normalizedMaterialType);
+        entity.setMaterialMetadataJson(normalizeMaterialMetadataJson(normalizedMaterialType, materialMetadataJson));
         entity.setFileSize(fileSize);
         entity.setProcessingStatus("pending");
 
@@ -435,5 +464,92 @@ public class WikiRawMaterialService {
             log.warn("[Wiki] Failed to compute byte hash: {}", e.getMessage());
             return null;
         }
+    }
+
+    private String normalizeMaterialType(String materialType) {
+        String normalized = materialType == null ? "general" : materialType.trim().toLowerCase();
+        return normalized.isBlank() ? "general" : normalized;
+    }
+
+    private String normalizeMaterialMetadataJson(String materialType, String materialMetadataJson) {
+        if (!JSONUtil.isTypeJSON(materialMetadataJson)) {
+            return null;
+        }
+        JSONObject source = JSONUtil.parseObj(materialMetadataJson);
+        JSONObject normalized = new JSONObject();
+        normalized.set("materialType", normalizeMaterialType(materialType));
+        copyTrimmed(source, normalized, "edition");
+        copyTrimmed(source, normalized, "source");
+        copyTrimmed(source, normalized, "grade");
+        copyTrimmed(source, normalized, "volume");
+        copyTrimmed(source, normalized, "unit");
+        copyTrimmed(source, normalized, "chapter");
+        copyTrimmed(source, normalized, "classicName");
+
+        LinkedHashSet<String> routeTags = new LinkedHashSet<>();
+        routeTags.add(normalizeMaterialType(materialType));
+        collectRouteTags(source.get("routeTags"), routeTags);
+        collectRouteTags(source.getStr("routeTagsInput"), routeTags);
+        addFieldValueTag(normalized, routeTags, "edition");
+        addFieldValueTag(normalized, routeTags, "source");
+        addFieldValueTag(normalized, routeTags, "grade");
+        addFieldValueTag(normalized, routeTags, "volume");
+        addFieldValueTag(normalized, routeTags, "unit");
+        addFieldValueTag(normalized, routeTags, "chapter");
+        addFieldValueTag(normalized, routeTags, "classicName");
+        if (!routeTags.isEmpty()) {
+            normalized.set("routeTags", new JSONArray(new ArrayList<>(routeTags)));
+        }
+        return normalized.size() <= 1 ? null : JSONUtil.toJsonStr(normalized);
+    }
+
+    private void copyTrimmed(JSONObject source, JSONObject target, String key) {
+        String value = normalizeMetadataValue(source.getStr(key));
+        if (value != null) {
+            target.set(key, value);
+        }
+    }
+
+    private void addFieldValueTag(JSONObject source, Set<String> routeTags, String key) {
+        String value = normalizeMetadataValue(source.getStr(key));
+        if (value != null) {
+            routeTags.add(value);
+        }
+    }
+
+    private void collectRouteTags(Object value, Set<String> routeTags) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof JSONArray array) {
+            for (Object item : array) {
+                String normalized = normalizeMetadataValue(item == null ? null : String.valueOf(item));
+                if (normalized != null) {
+                    routeTags.add(normalized);
+                }
+            }
+            return;
+        }
+        String text = value instanceof String ? (String) value : String.valueOf(value);
+        if (text == null) {
+            return;
+        }
+        for (String item : text.split("[\\n,，;；|]")) {
+            String normalized = normalizeMetadataValue(item);
+            if (normalized != null) {
+                routeTags.add(normalized);
+            }
+        }
+    }
+
+    private String normalizeMetadataValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.isBlank()) {
+            return null;
+        }
+        return normalized.toLowerCase(Locale.ROOT).startsWith("null") ? null : normalized;
     }
 }

@@ -14,8 +14,10 @@ import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -32,6 +34,7 @@ public class WikiContextService {
     private final WikiKnowledgeBaseService kbService;
     private final WikiPageService pageService;
     private final HybridRetriever hybridRetriever;
+    private final WikiDomainProfileRegistryService domainProfileRegistryService;
     private final WikiProperties properties;
     private final AgentMapper agentMapper;
     private final ObjectMapper objectMapper;
@@ -53,20 +56,20 @@ public class WikiContextService {
             return "";
         }
 
-        Long kbId = kbs.get(0).getId();
-        List<PageSearchResult> hits = hybridRetriever.search(kbId, userMessage, "hybrid", 5);
+        List<RelevantHit> hits = searchRelevantHits(kbs, userMessage, 6, 3);
         if (hits.isEmpty()) {
             return "";
         }
 
         StringBuilder sb = new StringBuilder("<wiki-relevant>\n");
-        sb.append("[Relevant wiki pages for this query. Use wiki_read_page(slug) for full content. " +
+        sb.append("[Relevant wiki pages across the Agent's bound knowledge bases. Use wiki_read_page(slug) for full content. " +
+                "If similarly named pages appear from different knowledge bases, prefer the knowledge-base label below to disambiguate. " +
                 "When using information from these pages in your answer, always cite the source page title, " +
                 "e.g. 「来源：[[页面标题]]」or「(来源：页面标题)」.]\n\n");
         int totalChars = 0;
         int maxChars = properties.getMaxContextChars();
 
-        for (PageSearchResult hit : hits) {
+        for (RelevantHit hit : hits) {
             String entry = buildContextEntry(hit);
             if (totalChars + entry.length() > maxChars) {
                 sb.append("- ... (use wiki_search_pages for more)\n");
@@ -79,15 +82,17 @@ public class WikiContextService {
         return sb.toString();
     }
 
-    private String buildContextEntry(PageSearchResult hit) {
+    private String buildContextEntry(RelevantHit hit) {
         StringBuilder entry = new StringBuilder();
-        entry.append("- **[[").append(hit.slug()).append("]]** ").append(hit.title()).append("\n");
-        String excerpt = hit.snippet() != null ? hit.snippet() : hit.summary();
+        PageSearchResult result = hit.result();
+        entry.append("- **[[").append(result.slug()).append("]]** ").append(result.title()).append("\n");
+        entry.append("  KB: ").append(formatKnowledgeBaseLabel(hit.kb())).append("\n");
+        String excerpt = result.snippet() != null ? result.snippet() : result.summary();
         if (excerpt != null) {
             entry.append("  ").append(excerpt).append("\n");
         }
-        if (hit.reason() != null && !hit.reason().isBlank()) {
-            entry.append("  Relevance: ").append(hit.reason()).append("\n");
+        if (result.reason() != null && !result.reason().isBlank()) {
+            entry.append("  Relevance: ").append(result.reason()).append("\n");
         }
         entry.append("\n");
         return entry.toString();
@@ -120,6 +125,10 @@ public class WikiContextService {
             if (pages.isEmpty()) continue;
 
             sb.append("### ").append(kb.getName());
+            String kbScope = formatKnowledgeBaseScope(kb);
+            if (StringUtils.hasText(kbScope)) {
+                sb.append(" [").append(kbScope).append("]");
+            }
             if (kb.getDescription() != null && !kb.getDescription().isBlank()) {
                 sb.append(" — ").append(kb.getDescription());
             }
@@ -203,5 +212,141 @@ public class WikiContextService {
             List<String> allowedKeys,
             boolean templateBound,
             String missingBindingNotice
+    ) {}
+
+    private List<RelevantHit> searchRelevantHits(List<WikiKnowledgeBaseEntity> kbs,
+                                                 String userMessage,
+                                                 int totalLimit,
+                                                 int perKbLimit) {
+        List<RelevantHit> merged = new ArrayList<>();
+        int effectivePerKbLimit = Math.max(1, perKbLimit);
+
+        for (WikiKnowledgeBaseEntity kb : kbs) {
+            List<PageSearchResult> kbHits = hybridRetriever.search(kb.getId(), userMessage, "hybrid", effectivePerKbLimit);
+            for (PageSearchResult hit : kbHits) {
+                merged.add(new RelevantHit(kb, hit, boostRelevantScore(kb, hit, userMessage)));
+            }
+        }
+
+        if (merged.isEmpty()) {
+            return List.of();
+        }
+
+        merged.sort(Comparator.comparingDouble(RelevantHit::score).reversed());
+        List<RelevantHit> deduped = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (RelevantHit hit : merged) {
+            String key = hit.kb().getId() + ":" + hit.result().slug();
+            if (!seen.add(key)) {
+                continue;
+            }
+            deduped.add(hit);
+            if (deduped.size() >= totalLimit) {
+                break;
+            }
+        }
+        return deduped;
+    }
+
+    private String formatKnowledgeBaseLabel(WikiKnowledgeBaseEntity kb) {
+        List<String> parts = new ArrayList<>();
+        parts.add(kb.getName());
+        if (StringUtils.hasText(kb.getExternalKey())) {
+            parts.add(kb.getExternalKey());
+        }
+        String profileLabel = formatDomainProfileLabel(kb.getDomainProfileId());
+        if (StringUtils.hasText(profileLabel)) {
+            parts.add(profileLabel);
+        }
+        return String.join(" · ", parts);
+    }
+
+    private String formatKnowledgeBaseScope(WikiKnowledgeBaseEntity kb) {
+        List<String> tags = new ArrayList<>();
+        if (StringUtils.hasText(kb.getKbKind()) && !"general".equalsIgnoreCase(kb.getKbKind())) {
+            tags.add(kb.getKbKind());
+        }
+        String profileLabel = formatDomainProfileLabel(kb.getDomainProfileId());
+        if (StringUtils.hasText(profileLabel)) {
+            tags.add(profileLabel);
+        }
+        return String.join(" · ", tags);
+    }
+
+    private String formatDomainProfileLabel(String domainProfileId) {
+        if (!StringUtils.hasText(domainProfileId)) {
+            return "";
+        }
+        String displayName = domainProfileRegistryService.displayNameOrDefault(domainProfileId);
+        if (!StringUtils.hasText(displayName) || displayName.equals(domainProfileId.trim())) {
+            return domainProfileId.trim();
+        }
+        return displayName + " (" + domainProfileId.trim() + ")";
+    }
+
+    private double boostRelevantScore(WikiKnowledgeBaseEntity kb,
+                                      PageSearchResult hit,
+                                      String userMessage) {
+        int kbMetadataScore = scoreByQuery(kb.getName(), userMessage)
+                + scoreByQuery(kb.getDescription(), userMessage)
+                + scoreByQuery(kb.getExternalKey(), userMessage);
+        int profileScore = domainProfileRegistryService.matchScore(kb.getDomainProfileId(), userMessage);
+        double boost = Math.min(0.9d, kbMetadataScore * 0.012d + profileScore * 0.018d);
+        if ("business".equalsIgnoreCase(kb.getKbKind()) && profileScore > 0) {
+            boost += 0.1d;
+        }
+        return hit.score() + boost;
+    }
+
+    private int scoreByQuery(String candidate, String userQuery) {
+        String normalizedCandidate = normalize(candidate);
+        String normalizedQuery = normalize(userQuery);
+        if (!StringUtils.hasText(normalizedCandidate) || !StringUtils.hasText(normalizedQuery)) {
+            return 0;
+        }
+        int score = 0;
+        if (normalizedCandidate.contains(normalizedQuery) || normalizedQuery.contains(normalizedCandidate)) {
+            score += 18;
+        }
+        for (String token : tokenize(normalizedQuery)) {
+            if (token.length() >= 2 && normalizedCandidate.contains(token)) {
+                score += Math.min(8, Math.max(2, token.length()));
+            }
+        }
+        return score;
+    }
+
+    private List<String> tokenize(String normalizedQuery) {
+        if (!StringUtils.hasText(normalizedQuery)) {
+            return List.of();
+        }
+        List<String> tokens = new ArrayList<>();
+        for (String token : normalizedQuery.split("\\s+")) {
+            if (token.length() >= 2) {
+                tokens.add(token);
+            }
+        }
+        if (tokens.isEmpty()) {
+            tokens.add(normalizedQuery);
+        }
+        return tokens;
+    }
+
+    private String normalize(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+                .replace('\n', ' ')
+                .replace('\r', ' ')
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .trim();
+    }
+
+    private record RelevantHit(
+            WikiKnowledgeBaseEntity kb,
+            PageSearchResult result,
+            double score
     ) {}
 }

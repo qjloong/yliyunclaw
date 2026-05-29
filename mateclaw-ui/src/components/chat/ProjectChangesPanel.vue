@@ -154,7 +154,7 @@
             <div class="context-router-list">
               <div v-for="kb in contextRouter.knowledgeBases" :key="`${kb.id || kb.name}-${kb.externalKey || ''}`" class="context-router-item">
                 <span class="context-router-item__title">{{ kb.name }}</span>
-                <span class="context-router-item__meta">{{ kb.externalKey || t('chat.contextRouterUnbound') }}</span>
+                <span class="context-router-item__meta">{{ formatContextKnowledgeBaseMeta(kb) }}</span>
               </div>
             </div>
           </div>
@@ -454,7 +454,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { isDesktopRuntime, openDesktopPath, revealDesktopPath } from '@/utils/desktop'
-import type { CheckpointCapability, ContextRouterSessionSummary, ContextRouterSummary, FileChangeRecord, GeneratedArtifactRecord, HarnessApproval, HarnessRun, HarnessStep, HarnessToolInvocation, Message, ProjectChangeRecord, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
+import type { CheckpointCapability, ContextRouterKnowledgeBaseSummary, ContextRouterSessionSummary, ContextRouterSummary, FileChangeRecord, GeneratedArtifactRecord, HarnessApproval, HarnessRun, HarnessStep, HarnessToolInvocation, Message, ProjectChangeRecord, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
 
 interface Props {
   messages: Message[]
@@ -873,6 +873,25 @@ function formatContextSessionMeta(session: ContextRouterSessionSummary) {
   const time = formatDateTime(session.lastActiveTime)
   if (time) {
     parts.push(time)
+  }
+  return parts.join(' · ')
+}
+
+function formatContextKnowledgeBaseMeta(kb: ContextRouterKnowledgeBaseSummary) {
+  const parts: string[] = []
+  if (kb.externalKey) {
+    parts.push(kb.externalKey)
+  }
+  if (kb.kbKind && kb.kbKind !== 'general') {
+    parts.push(kb.kbKind)
+  }
+  if (kb.domainProfileDisplayName) {
+    parts.push(kb.domainProfileDisplayName)
+  } else if (kb.domainProfileId) {
+    parts.push(kb.domainProfileId)
+  }
+  if (!parts.length) {
+    return t('chat.contextRouterUnbound')
   }
   return parts.join(' · ')
 }
