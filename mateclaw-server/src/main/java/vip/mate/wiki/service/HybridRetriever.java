@@ -11,6 +11,7 @@ import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.dto.PageSearchResult;
 import vip.mate.wiki.dto.RawSearchRef;
 import vip.mate.wiki.dto.RelatedPageResult;
+import vip.mate.wiki.dto.WikiIntentFilter;
 import vip.mate.wiki.dto.WikiPageLite;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiPageEntity;
@@ -86,6 +87,13 @@ public class HybridRetriever {
      * RFC-032: Enhanced search returning PageSearchResult with snippet and matchedBy metadata.
      */
     public List<PageSearchResult> search(Long kbId, String query, String modeStr, int topK) {
+        return search(kbId, query, modeStr, topK, null);
+    }
+
+    /**
+     * T2-4-3: Intent-aware search that boosts business-relevant materials.
+     */
+    public List<PageSearchResult> search(Long kbId, String query, String modeStr, int topK, WikiIntentFilter intentFilter) {
         Mode mode = parseMode(modeStr);
 
         List<RankedItem> semantic = List.of();
@@ -114,7 +122,8 @@ public class HybridRetriever {
         // RFC-032: Relation boost (1-hop expansion on top-3 seeds)
         fused = applyRelationBoost(fused, kbId, topK);
 
-        fused = applyMaterialBoost(fused, topK, query);
+        fused = applyMaterialBoost(fused, topK, query, intentFilter);
+
 
         // Batch-fetch page info (N+1 fix)
         List<Long> topIds = fused.stream().limit(topK).map(ri -> ri.pageId).toList();
@@ -190,6 +199,10 @@ public class HybridRetriever {
      * Chunk-level semantic search.
      */
     public List<ChunkHit> searchChunks(Long kbId, String query, int topK) {
+        return searchChunks(kbId, query, topK, null);
+    }
+
+    public List<ChunkHit> searchChunks(Long kbId, String query, int topK, WikiIntentFilter intentFilter) {
         if (!embeddingService.isAvailable()) return List.of();
 
         float[] queryVec = embeddingService.embedQuery(kbId, query);
@@ -202,12 +215,23 @@ public class HybridRetriever {
             .filter(Objects::nonNull)
             .collect(Collectors.toSet()));
 
+        List<String> preferredTypes = intentFilter != null && intentFilter.preferredMaterialTypes() != null
+                ? intentFilter.preferredMaterialTypes()
+                : List.of();
+
         return allChunks.stream()
                 .filter(c -> c.getEmbedding() != null)
                 .map(c -> {
                     float[] chunkVec = WikiEmbeddingService.bytesToFloats(c.getEmbedding());
                     float score = WikiEmbeddingService.cosine(queryVec, chunkVec);
-                score += materialBoost(rawRefMap.get(c.getRawId()), query, 0.8d);
+                    score += materialBoost(rawRefMap.get(c.getRawId()), query, 0.8d);
+                    // T2-4-3: Intent boost for chunk-level results
+                    if (!preferredTypes.isEmpty()) {
+                        RawSearchRef ref = rawRefMap.get(c.getRawId());
+                        if (ref != null && ref.materialType() != null && preferredTypes.contains(ref.materialType())) {
+                            score += 0.25f;
+                        }
+                    }
                     String snippet = c.getContent().length() > 300
                             ? c.getContent().substring(0, 300) + "..."
                             : c.getContent();
@@ -218,6 +242,7 @@ public class HybridRetriever {
                 .limit(topK)
                 .toList();
     }
+
 
     // ==================== Internal methods ====================
 
@@ -290,7 +315,7 @@ public class HybridRetriever {
         return ranked;
     }
 
-    private List<RankedItem> applyMaterialBoost(List<RankedItem> hits, int topK, String query) {
+    private List<RankedItem> applyMaterialBoost(List<RankedItem> hits, int topK, String query, WikiIntentFilter intentFilter) {
         if (hits.isEmpty()) {
             return hits;
         }
@@ -300,13 +325,23 @@ public class HybridRetriever {
                 .stream().collect(Collectors.toMap(WikiPageEntity::getId, page -> page));
         Map<Long, RawSearchRef> rawRefMap = loadRawSearchRefs(pageMap.values());
 
+        List<String> preferredTypes = intentFilter != null && intentFilter.preferredMaterialTypes() != null
+                ? intentFilter.preferredMaterialTypes()
+                : List.of();
+
         List<RankedItem> reranked = new ArrayList<>();
         for (RankedItem hit : candidates) {
             WikiPageEntity page = pageMap.get(hit.pageId());
             double routeBoost = page == null ? 0.0d : pageRouteTagBoost(page, query);
             double structureBoost = page == null ? 0.0d : pageStructureBoost(page, query);
             double materialBoost = page == null ? 0.0d : pageMaterialBoost(page, rawRefMap, query);
-            double boost = routeBoost + structureBoost + materialBoost;
+            // T2-4-3: Intent-based extra boost for preferred material types
+            double intentBoost = 0.0d;
+            if (!preferredTypes.isEmpty() && page != null) {
+                intentBoost = pageIntentBoost(page, rawRefMap, preferredTypes);
+            }
+            double boost = routeBoost + structureBoost + materialBoost + intentBoost;
+
             List<String> matchedBy = hit.matchedBy();
             if (routeBoost > 0.01d && !matchedBy.contains("route_tags")) {
                 List<String> extended = new ArrayList<>(matchedBy);
@@ -379,7 +414,25 @@ public class HybridRetriever {
         return Math.min(1.2d, boost);
     }
 
+    /**
+     * T2-4-3: Extra boost when page's source raw materials match intent-preferred types.
+     */
+    private double pageIntentBoost(WikiPageEntity page,
+                                    Map<Long, RawSearchRef> rawRefMap,
+                                    List<String> preferredMaterialTypes) {
+        double boost = 0.0d;
+        for (Long rawId : extractRawIds(page.getSourceRawIds())) {
+            RawSearchRef ref = rawRefMap.get(rawId);
+            if (ref != null && ref.materialType() != null
+                    && preferredMaterialTypes.contains(ref.materialType())) {
+                boost += 0.35d;
+            }
+        }
+        return Math.min(1.0d, boost);
+    }
+
     private double pageRouteTagBoost(WikiPageEntity page, String query) {
+
         if (page == null || !StringUtils.hasText(query)) {
             return 0.0d;
         }

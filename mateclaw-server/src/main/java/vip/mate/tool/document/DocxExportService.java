@@ -5,6 +5,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import vip.mate.agent.context.ChatOrigin;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -22,7 +23,7 @@ public class DocxExportService {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     private final MarkdownDocxRenderer renderer;
-    private final GeneratedFileDiskTokenService diskTokenService;
+    private final GeneratedDiskFileRegistry diskFileRegistry;
 
     public record ExportedDocx(String fileName,
                                String mimeType,
@@ -48,7 +49,8 @@ public class DocxExportService {
         String safeBaseName = sanitizeBaseName(filename);
         Path normalizedTarget = normalizeTargetPath(outputTarget, safeBaseName);
         if (normalizedTarget == null) {
-            normalizedTarget = buildDefaultOutputPath(Paths.get("."), safeBaseName).toAbsolutePath().normalize();
+            Path workingDir = resolveWorkingDirectory(ctx);
+            normalizedTarget = buildDefaultOutputPath(workingDir, safeBaseName, ChatOrigin.from(ctx)).toAbsolutePath().normalize();
         }
         String finalFileName = normalizedTarget != null && normalizedTarget.getFileName() != null
                 ? normalizedTarget.getFileName().toString()
@@ -65,13 +67,13 @@ public class DocxExportService {
         savedPath = normalizedTarget.toAbsolutePath().normalize().toString();
 
         var origin = vip.mate.agent.context.ChatOrigin.from(ctx);
-        String token = diskTokenService.issue(
+        String fileId = diskFileRegistry.register(
             normalizedTarget,
             origin.workspaceId(),
             origin.conversationId(),
             origin.workspaceBasePath());
         return new ExportedDocx(finalFileName, DOCX_MIME,
-                "/api/v1/files/generated/disk/" + token, savedPath);
+                "/api/v1/files/generated/disk/" + fileId, savedPath);
     }
 
     @Nullable
@@ -82,7 +84,7 @@ public class DocxExportService {
             return baseDir != null ? buildDefaultOutputPath(baseDir, filename) : null;
         }
         String raw = outputPath.trim();
-        Path candidate = Paths.get(raw);
+        Path candidate = resolveOutputAlias(baseDir, raw);
         if (!candidate.isAbsolute() && baseDir != null) {
             candidate = baseDir.resolve(candidate);
         }
@@ -95,8 +97,22 @@ public class DocxExportService {
 
     public Path buildDefaultOutputPath(Path baseDir, String filename) {
         String workspaceFolder = sanitizeBaseName(baseDir.getFileName() != null ? baseDir.getFileName().toString() : "workspace");
-        return ensureDocxExtension(baseDir.resolve("output").resolve(workspaceFolder).resolve(sanitizeBaseName(filename)),
+        return ensureDocxExtension(baseDir.resolve("output").resolve("workspace").resolve(workspaceFolder).resolve(sanitizeBaseName(filename)),
             sanitizeBaseName(filename));
+    }
+
+    public Path buildDefaultOutputPath(Path baseDir, String filename, ChatOrigin origin) {
+        String workspaceFolder = sanitizeBaseName(baseDir.getFileName() != null ? baseDir.getFileName().toString() : "workspace");
+        if (origin.workspaceId() != null) {
+            workspaceFolder = "workspace-" + origin.workspaceId();
+        }
+        String conversationFolder = sanitizeBaseName(origin.conversationId());
+        if (!StringUtils.hasText(conversationFolder) || "document".equals(conversationFolder)) {
+            conversationFolder = "session";
+        }
+        return ensureDocxExtension(baseDir.resolve("output").resolve("workspace")
+                        .resolve(workspaceFolder).resolve(conversationFolder).resolve(sanitizeBaseName(filename)),
+                sanitizeBaseName(filename));
     }
 
     public String sanitizeBaseName(String name) {
@@ -130,6 +146,25 @@ public class DocxExportService {
             return null;
         }
         return ensureDocxExtension(outputTarget, safeBaseName).toAbsolutePath().normalize();
+    }
+
+    private Path resolveWorkingDirectory(@Nullable ToolContext ctx) {
+        Path workingDir = vip.mate.tool.guard.WorkspacePathGuard.getWorkingDirectory(ctx);
+        if (workingDir != null) {
+            return workingDir;
+        }
+        return Paths.get(".").toAbsolutePath().normalize();
+    }
+
+    private Path resolveOutputAlias(@Nullable Path baseDir, String raw) {
+        String normalizedRaw = raw.replace('\\', '/');
+        if (baseDir != null && (normalizedRaw.equals("/output") || normalizedRaw.startsWith("/output/"))) {
+            return baseDir.resolve(normalizedRaw.substring(1));
+        }
+        if (baseDir != null && (normalizedRaw.equals("output") || normalizedRaw.startsWith("output/"))) {
+            return baseDir.resolve(normalizedRaw);
+        }
+        return Paths.get(raw);
     }
 
     private Path ensureDocxExtension(Path candidate, String safeBaseName) {

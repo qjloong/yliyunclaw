@@ -38,7 +38,12 @@ export interface WikiRawMaterial {
   progressDone: number
   // Page count derived from sourceRawIds (injected by listRaw endpoint)
   pageCount?: number
+  // T2-4-1: Auto-detection flags (transient, only present on upload/create response)
+  autoDetected?: boolean
+  autoDetectConfidence?: string | null
+  autoDetectReason?: string | null
 }
+
 
 export interface WikiPage {
   id: number

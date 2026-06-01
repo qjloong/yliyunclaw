@@ -19,14 +19,22 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class GeneratedFileDiskTokenService {
+    private static final char TOKEN_SEPARATOR = '~';
 
     private final ObjectMapper objectMapper;
 
     @Value("${mate.generated-files.token-secret:mateclaw-generated-file-secret}")
     private String tokenSecret;
 
-    @Value("${mate.generated-files.token-ttl-seconds:600}")
+    @Value("${mate.generated-files.token-ttl-seconds:604800}")
     private long tokenTtlSeconds;
+
+    public record DiskToken(Path path,
+                            Long workspaceId,
+                            String conversationId,
+                            String workspaceBasePath,
+                            long expiresAt) {
+    }
 
     public String issue(Path absolutePath) {
         return issue(absolutePath, null, null, null);
@@ -47,16 +55,20 @@ public class GeneratedFileDiskTokenService {
             byte[] payloadBytes = objectMapper.writeValueAsBytes(payload);
             String payloadPart = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadBytes);
             String signaturePart = sign(payloadPart);
-            return payloadPart + "." + signaturePart;
+            return payloadPart + TOKEN_SEPARATOR + signaturePart;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to issue generated file disk token", e);
         }
     }
 
     public Optional<Path> verifyAndResolve(String token) {
+        return verify(token).map(DiskToken::path);
+    }
+
+    public Optional<DiskToken> verify(String token) {
         try {
             if (token == null || token.isBlank()) return Optional.empty();
-            int sep = token.lastIndexOf('.');
+            int sep = findTokenSeparator(token);
             if (sep <= 0 || sep >= token.length() - 1) return Optional.empty();
 
             String payloadPart = token.substring(0, sep);
@@ -78,11 +90,28 @@ public class GeneratedFileDiskTokenService {
             if (System.currentTimeMillis() > exp) {
                 return Optional.empty();
             }
-            return Optional.of(Path.of(pathText).toAbsolutePath().normalize());
+            Long workspaceId = payload.get("workspaceId") instanceof Number n ? n.longValue() : null;
+            String conversationId = payload.get("conversationId") instanceof String cid ? cid : null;
+            String workspaceBasePath = payload.get("workspaceBasePath") instanceof String base ? base : null;
+            return Optional.of(new DiskToken(
+                    Path.of(pathText).toAbsolutePath().normalize(),
+                    workspaceId,
+                    conversationId,
+                    workspaceBasePath,
+                    exp));
         } catch (Exception e) {
             log.debug("Generated file token verify failed: {}", e.getMessage());
             return Optional.empty();
         }
+    }
+
+    private int findTokenSeparator(String token) {
+        int sep = token.lastIndexOf(TOKEN_SEPARATOR);
+        if (sep > 0) {
+            return sep;
+        }
+        // Backward compatibility for links issued before the path-safe token format.
+        return token.lastIndexOf('.');
     }
 
     private String sign(String payloadPart) throws Exception {

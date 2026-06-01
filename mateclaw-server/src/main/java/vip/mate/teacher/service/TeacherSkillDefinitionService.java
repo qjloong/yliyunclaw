@@ -36,7 +36,8 @@ public final class TeacherSkillDefinitionService {
             List.of(
                     "识别任务类型、业务模块、材料范围、题量、题型、难度和材料来源。",
                     "在 plan 模式下先输出命题方案并等待用户确认。",
-                    "确认后按 RulePack 生成结构化试题、参考答案、采分点、来源依据和内部审核。",
+                    "确认后按 RulePack 生成结构化试题、参考答案、采分点、来源依据和内部审核；answers/scoringRubric/sources 必须与 questions 的 questionNo 一一对应。",
+                    "正式题面不得暴露题型、考点、难度、能力层级或【基础·人物理解】这类内部控制标签。",
                     "若材料不足，先提示导入知识库、上传材料或明确授权读取，不编造原文细节。",
                     "将生成结果交给命题质量审核 Skill 做一致性复核。"
             ),

@@ -36,7 +36,7 @@ import java.nio.file.Paths;
 public class WriteFileTool {
 
     private final vip.mate.i18n.I18nService i18n;
-    private final vip.mate.tool.document.GeneratedFileDiskTokenService generatedFileDiskTokenService;
+    private final vip.mate.tool.document.GeneratedDiskFileRegistry generatedDiskFileRegistry;
 
     @Value("${mate.generated-files.output-dir:output}")
     private String outputDir;
@@ -64,7 +64,7 @@ public class WriteFileTool {
 
             Path path;
             try {
-                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath, ctx);
+                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(resolvePathAlias(filePath, ctx), ctx);
             } catch (IllegalArgumentException e) {
                 return errorResult(filePath, e.getMessage());
             }
@@ -109,13 +109,13 @@ public class WriteFileTool {
             Path normalizedPath = finalPath.toAbsolutePath().normalize();
             if (normalizedPath.startsWith(outputRoot)) {
                 ChatOrigin origin = ChatOrigin.from(ctx);
-                String diskToken = generatedFileDiskTokenService.issue(
+                String fileId = generatedDiskFileRegistry.register(
                         normalizedPath,
                         origin.workspaceId(),
                         origin.conversationId(),
                         origin.workspaceBasePath());
-                result.set("apiUrl", "/api/v1/files/generated/disk/" + diskToken);
-                log.info("[WriteFile] {} file: {} ({} bytes), issued disk token", existed ? "Overwritten" : "Created", finalPath, bytes.length);
+                result.set("apiUrl", "/api/v1/files/generated/disk/" + fileId);
+                log.info("[WriteFile] {} file: {} ({} bytes), registered generated disk file", existed ? "Overwritten" : "Created", finalPath, bytes.length);
             } else {
                 log.info("[WriteFile] {} file: {} ({} bytes), skip apiUrl because it is outside output root {}",
                     existed ? "Overwritten" : "Created", finalPath, bytes.length, outputRoot);
@@ -143,6 +143,24 @@ public class WriteFileTool {
         return base.resolve(outputDir).toAbsolutePath().normalize();
     }
 
+    private String resolvePathAlias(String rawPath, @Nullable ToolContext ctx) {
+        if (rawPath == null) return null;
+        Path workspaceDir = vip.mate.tool.guard.WorkspacePathGuard.getWorkingDirectory(ctx);
+        if (workspaceDir == null) return rawPath;
+        String normalized = rawPath.trim().replace('\\', '/');
+        if (normalized.equals("/output") || normalized.startsWith("/output/")) {
+            return workspaceDir.resolve(normalized.substring(1)).toString();
+        }
+        if (normalized.equals("output") || normalized.startsWith("output/")) {
+            return workspaceDir.resolve(normalized).toString();
+        }
+        Path candidate = Paths.get(rawPath);
+        if (!candidate.isAbsolute()) {
+            return workspaceDir.resolve(candidate).toString();
+        }
+        return rawPath;
+    }
+
     private Path remapWorkspaceOutputPath(Path originalPath, @Nullable ToolContext ctx) {
         Path outputRoot = resolveOutputRoot(ctx);
         Path normalized = originalPath.toAbsolutePath().normalize();
@@ -150,13 +168,27 @@ public class WriteFileTool {
             return normalized;
         }
         ChatOrigin origin = ChatOrigin.from(ctx);
-        String workspaceFolder = resolveWorkspaceFolder(origin);
+        Path scopedRoot = resolveScopedOutputRoot(outputRoot, origin);
         Path relative = outputRoot.relativize(normalized);
-        if (relative.getNameCount() > 0 && workspaceFolder.equalsIgnoreCase(relative.getName(0).toString())) {
+        Path scopedRelative;
+        if (normalized.startsWith(scopedRoot)) {
             return normalized;
         }
-        Path remapped = outputRoot.resolve(workspaceFolder).resolve(relative);
+        if (relative.getNameCount() > 0 && "workspace".equalsIgnoreCase(relative.getName(0).toString())) {
+            scopedRelative = relative.getFileName();
+        } else {
+            scopedRelative = relative;
+        }
+        Path remapped = scopedRoot.resolve(scopedRelative);
         return remapped.toAbsolutePath().normalize();
+    }
+
+    private Path resolveScopedOutputRoot(Path outputRoot, ChatOrigin origin) {
+        return outputRoot.resolve("workspace")
+                .resolve(resolveWorkspaceFolder(origin))
+                .resolve(resolveConversationFolder(origin))
+                .toAbsolutePath()
+                .normalize();
     }
 
     private String resolveWorkspaceFolder(ChatOrigin origin) {
@@ -178,6 +210,17 @@ public class WriteFileTool {
             return "workspace-" + origin.workspaceId();
         }
         return "workspace";
+    }
+
+    private String resolveConversationFolder(ChatOrigin origin) {
+        String conversationId = origin.conversationId();
+        if (conversationId != null && !conversationId.isBlank()) {
+            String folder = sanitizeFolderName(conversationId);
+            if (!folder.isBlank()) {
+                return folder;
+            }
+        }
+        return "session";
     }
 
     private String sanitizeFolderName(String name) {

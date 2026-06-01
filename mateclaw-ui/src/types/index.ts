@@ -7,6 +7,20 @@ export interface ApiResult<T = any> {
   data: T
 }
 
+export interface WikiDomainProfileMetadataField {
+  key: string
+  label: string
+  placeholder: string
+  visible?: boolean
+  order?: number
+}
+
+export interface WikiDomainProfileMaterialType {
+  value: string
+  label: string
+  fields: WikiDomainProfileMetadataField[]
+}
+
 export interface WikiDomainProfileOption {
   id: string
   displayName: string
@@ -14,6 +28,7 @@ export interface WikiDomainProfileOption {
   kbKind?: string | null
   sourcePluginKey?: string | null
   capabilityPackId?: string | null
+  materialTypes?: WikiDomainProfileMaterialType[] | null
 }
 
 // ==================== 用户 ====================

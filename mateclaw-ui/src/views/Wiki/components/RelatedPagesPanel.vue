@@ -59,6 +59,11 @@ function signalIcon(sig: string): string {
     case 'shared_raw': return '📂'
     case 'direct_link': return '↗'
     case 'semantic_near': return '◎'
+    case 'constrains': return '⌁'
+    case 'supports': return '✓'
+    case 'exemplifies': return '※'
+    case 'scores': return '≡'
+    case 'grounds': return '◇'
     default: return '•'
   }
 }

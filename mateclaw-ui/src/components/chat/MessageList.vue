@@ -70,6 +70,7 @@
             @toggle-thinking="(expanded) => $emit('toggle-thinking', msg, expanded)"
             @approve="(pendingId) => $emit('approve', pendingId)"
             @deny="(pendingId) => $emit('deny', pendingId)"
+            @open-project-panel="$emit('open-project-panel')"
           />
         </template>
       </template>
@@ -149,6 +150,7 @@ const emit = defineEmits<{
   approve: [pendingId: string]
   deny: [pendingId: string]
   'load-more': []
+  'open-project-panel': []
 }>()
 
 function suggestionTitle(suggestion: string | ChatHomeQuickStart) {

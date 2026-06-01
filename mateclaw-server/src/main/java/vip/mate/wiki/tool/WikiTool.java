@@ -43,7 +43,11 @@ public class WikiTool {
     private final WikiRawMaterialService rawService;
     private final HybridRetriever hybridRetriever;
     private final WikiDomainProfileRegistryService domainProfileRegistryService;
+    private final WikiIntentMaterialMapper intentMaterialMapper;
+    private final WikiMaterialCoverageService coverageService;
     private final ObjectMapper objectMapper;
+
+
 
     @Autowired(required = false)
     private WikiRelationService relationService;
@@ -66,14 +70,20 @@ public class WikiTool {
                      WikiRawMaterialService rawService,
                      HybridRetriever hybridRetriever,
                      WikiDomainProfileRegistryService domainProfileRegistryService,
+                     WikiIntentMaterialMapper intentMaterialMapper,
+                     WikiMaterialCoverageService coverageService,
                      ObjectMapper objectMapper) {
         this.pageService = pageService;
         this.kbService = kbService;
         this.rawService = rawService;
         this.hybridRetriever = hybridRetriever;
         this.domainProfileRegistryService = domainProfileRegistryService;
+        this.intentMaterialMapper = intentMaterialMapper;
+        this.coverageService = coverageService;
         this.objectMapper = objectMapper;
     }
+
+
 
     // ==================== RFC-032: Enhanced wiki_read_page ====================
 
@@ -200,12 +210,14 @@ public class WikiTool {
             Default topK=5 is sufficient for most queries.
             Each result includes "slug" and "title" — use wiki_read_page to get full content.
             When using wiki information in your answer, always cite the source page title.
+            If you are generating exam questions, pass the businessModule to prioritize relevant materials.
             """)
     public String wiki_search_pages(
             @ToolParam(description = "Agent ID") Long agentId,
             @ToolParam(description = "Search query") String query,
             @ToolParam(description = "Mode: keyword|semantic|hybrid (default: hybrid)", required = false) String mode,
-            @ToolParam(description = "Max results (default 5, max 20)", required = false) Integer topK) {
+            @ToolParam(description = "Max results (default 5, max 20)", required = false) Integer topK,
+            @ToolParam(description = "Business module for intent-aware boosting: classic_reading|classical_chinese|ancient_poetry|modern_reading|basic_knowledge|writing|paper_assembly", required = false) String businessModule) {
 
         if (query == null || query.isBlank()) {
             return error("query is required");
@@ -217,12 +229,14 @@ public class WikiTool {
         }
 
         int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
+        WikiIntentFilter intentFilter = buildIntentFilter(businessModule);
         List<ScopedPageSearchResult> results = knowledgeBases.stream()
-                .flatMap(kb -> hybridRetriever.search(kb.id(), query, mode, k).stream()
+                .flatMap(kb -> hybridRetriever.search(kb.id(), query, mode, k, intentFilter).stream()
                 .map(result -> new ScopedPageSearchResult(kb, result, boostPageScore(kb, result, query))))
                 .sorted(Comparator.comparingDouble(ScopedPageSearchResult::score).reversed())
                 .limit(k)
                 .toList();
+
 
         for (ScopedPageSearchResult r : results) {
             pageService.trackReference(r.kbId(), r.result().slug());
@@ -261,11 +275,13 @@ public class WikiTool {
             Returns raw text fragments closest to the query with similarity scores and source page title.
             Use when wiki_search_pages results are not specific enough.
             When using retrieved content in your answer, cite the source page title shown in each result.
+            If you are generating exam questions, pass the businessModule to prioritize relevant materials.
             """)
     public String wiki_semantic_search(
             @ToolParam(description = "Agent ID") Long agentId,
             @ToolParam(description = "Natural language query") String query,
-            @ToolParam(description = "Max results (default 5)", required = false) Integer topK) {
+            @ToolParam(description = "Max results (default 5)", required = false) Integer topK,
+            @ToolParam(description = "Business module for intent-aware boosting: classic_reading|classical_chinese|ancient_poetry|modern_reading|basic_knowledge|writing|paper_assembly", required = false) String businessModule) {
 
         if (query == null || query.isBlank()) {
             return error("query is required");
@@ -277,12 +293,14 @@ public class WikiTool {
         }
 
         int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
+        WikiIntentFilter intentFilter = buildIntentFilter(businessModule);
         List<ScopedChunkHit> hits = knowledgeBases.stream()
-            .flatMap(kb -> hybridRetriever.searchChunks(kb.id(), query, k).stream()
+            .flatMap(kb -> hybridRetriever.searchChunks(kb.id(), query, k, intentFilter).stream()
                 .map(hit -> new ScopedChunkHit(kb, hit, boostChunkScore(kb, hit, query))))
             .sorted(Comparator.comparingDouble(ScopedChunkHit::score).reversed())
             .limit(k)
             .toList();
+
 
         if (hits.isEmpty()) {
             return JSONUtil.createObj()
@@ -333,11 +351,52 @@ public class WikiTool {
                 .toString();
     }
 
+    // ==================== T2-4-7: Material coverage check ====================
+
+    @Tool(description = """
+            Check whether the agent's bound knowledge bases have sufficient material
+            for the requested business modules. Call this BEFORE generating exam questions
+            to avoid producing low-quality results due to missing source materials.
+            Returns coverage score (0.0-1.0) and missing indicators per module.
+            """)
+    public String wiki_check_material_coverage(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Required business modules, e.g. [classic_reading, classical_chinese, ancient_poetry]") List<String> requiredModules) {
+
+        if (requiredModules == null || requiredModules.isEmpty()) {
+            return error("requiredModules is required");
+        }
+
+        List<vip.mate.wiki.dto.WikiMaterialCoverageReport> reports = coverageService.checkCoverage(agentId, requiredModules);
+        JSONArray arr = new JSONArray();
+        double overallScore = 0.0;
+        boolean allCovered = true;
+        for (vip.mate.wiki.dto.WikiMaterialCoverageReport r : reports) {
+            overallScore += r.coverageScore();
+            if (r.coverageScore() < 0.5) allCovered = false;
+            arr.add(JSONUtil.createObj()
+                    .set("businessModule", r.businessModule())
+                    .set("pageCount", r.pageCount())
+                    .set("rawMaterialCount", r.rawMaterialCount())
+                    .set("coverageScore", r.coverageScore())
+                    .set("missingIndicators", r.missingIndicators()));
+        }
+        double avgScore = reports.isEmpty() ? 0.0 : overallScore / reports.size();
+
+        return JSONUtil.createObj()
+                .set("agentId", agentId)
+                .set("overallScore", String.format("%.2f", avgScore))
+                .set("allCovered", allCovered)
+                .set("reports", arr)
+                .toString();
+    }
+
     @Tool(description = """
             Trace the source raw materials for a wiki page.
             Returns file names, types, and paths of the original documents.
             """)
     public String wiki_trace_source(
+
             @ToolParam(description = "Agent ID") Long agentId,
             @ToolParam(description = "Page slug") String slug) {
 
@@ -760,7 +819,19 @@ public class WikiTool {
         return JSONUtil.createObj().set("error", message).toString();
     }
 
+    private WikiIntentFilter buildIntentFilter(String businessModule) {
+        if (businessModule == null || businessModule.isBlank()) {
+            return null;
+        }
+        List<String> preferredTypes = intentMaterialMapper.resolvePreferredTypes(businessModule);
+        if (preferredTypes.isEmpty()) {
+            return null;
+        }
+        return new WikiIntentFilter(businessModule, preferredTypes, null);
+    }
+
     private String formatDomainProfileLabel(String domainProfileId) {
+
         if (!StringUtils.hasText(domainProfileId)) {
             return null;
         }

@@ -26,7 +26,7 @@ public class HtmlExportService {
     public static final String HTML_MIME = "text/html;charset=utf-8";
     private static final DateTimeFormatter EXPORT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    private final GeneratedFileDiskTokenService diskTokenService;
+    private final GeneratedDiskFileRegistry diskFileRegistry;
 
     private final Parser parser = Parser.builder()
             .extensions(List.of(TablesExtension.create()))
@@ -55,7 +55,7 @@ public class HtmlExportService {
         Path normalizedTarget = normalizeTargetPath(outputTarget, safeBaseName);
         if (normalizedTarget == null) {
             Path workingDir = resolveWorkingDirectory(ctx);
-            normalizedTarget = buildDefaultOutputPath(workingDir, safeBaseName).toAbsolutePath().normalize();
+            normalizedTarget = buildDefaultOutputPath(workingDir, safeBaseName, ChatOrigin.from(ctx)).toAbsolutePath().normalize();
         }
         String finalFileName = normalizedTarget.getFileName() != null
                 ? normalizedTarget.getFileName().toString()
@@ -70,13 +70,13 @@ public class HtmlExportService {
         String savedPath = normalizedTarget.toAbsolutePath().normalize().toString();
 
         ChatOrigin origin = ChatOrigin.from(ctx);
-        String token = diskTokenService.issue(
+        String fileId = diskFileRegistry.register(
                 normalizedTarget,
                 origin.workspaceId(),
                 origin.conversationId(),
                 origin.workspaceBasePath());
         return new ExportedHtml(finalFileName, HTML_MIME,
-                "/api/v1/files/generated/disk/" + token, savedPath);
+                "/api/v1/files/generated/disk/" + fileId, savedPath);
     }
 
     @Nullable
@@ -87,7 +87,7 @@ public class HtmlExportService {
             return baseDir != null ? buildDefaultOutputPath(baseDir, filename) : null;
         }
         String raw = outputPath.trim();
-        Path candidate = Paths.get(raw);
+        Path candidate = resolveOutputAlias(baseDir, raw);
         if (!candidate.isAbsolute() && baseDir != null) {
             candidate = baseDir.resolve(candidate);
         }
@@ -100,8 +100,33 @@ public class HtmlExportService {
 
     public Path buildDefaultOutputPath(Path baseDir, String filename) {
         String workspaceFolder = sanitizeBaseName(baseDir.getFileName() != null ? baseDir.getFileName().toString() : "workspace");
-        return ensureHtmlExtension(baseDir.resolve("output").resolve(workspaceFolder).resolve(sanitizeBaseName(filename)),
+        return ensureHtmlExtension(baseDir.resolve("output").resolve("workspace").resolve(workspaceFolder).resolve(sanitizeBaseName(filename)),
                 sanitizeBaseName(filename));
+    }
+
+    public Path buildDefaultOutputPath(Path baseDir, String filename, ChatOrigin origin) {
+        String workspaceFolder = sanitizeBaseName(baseDir.getFileName() != null ? baseDir.getFileName().toString() : "workspace");
+        if (origin.workspaceId() != null) {
+            workspaceFolder = "workspace-" + origin.workspaceId();
+        }
+        String conversationFolder = sanitizeBaseName(origin.conversationId());
+        if (!StringUtils.hasText(conversationFolder) || "document".equals(conversationFolder)) {
+            conversationFolder = "session";
+        }
+        return ensureHtmlExtension(baseDir.resolve("output").resolve("workspace")
+                        .resolve(workspaceFolder).resolve(conversationFolder).resolve(sanitizeBaseName(filename)),
+                sanitizeBaseName(filename));
+    }
+
+    private Path resolveOutputAlias(@Nullable Path baseDir, String raw) {
+        String normalizedRaw = raw.replace('\\', '/');
+        if (baseDir != null && (normalizedRaw.equals("/output") || normalizedRaw.startsWith("/output/"))) {
+            return baseDir.resolve(normalizedRaw.substring(1));
+        }
+        if (baseDir != null && (normalizedRaw.equals("output") || normalizedRaw.startsWith("output/"))) {
+            return baseDir.resolve(normalizedRaw);
+        }
+        return Paths.get(raw);
     }
 
     public String sanitizeBaseName(String name) {

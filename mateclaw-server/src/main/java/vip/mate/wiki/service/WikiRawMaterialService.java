@@ -9,9 +9,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import vip.mate.tool.builtin.DocumentExtractTool;
 import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.event.WikiProcessingEvent;
+import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
 import vip.mate.wiki.repository.WikiRawMaterialMapper;
 
@@ -42,6 +44,11 @@ public class WikiRawMaterialService {
     private final DocumentExtractTool documentExtractTool;
     /** RFC-013：删除时级联清理 chunk */
     private final WikiChunkService chunkService;
+    /** T2-5-6：删除时级联清理独占页面 */
+    private final WikiPageService pageService;
+    /** T2-4-1：材料类型自动识别器（仅对业务 KB 触发） */
+    private final vip.mate.wiki.classifier.WikiMaterialTypeClassifier materialTypeClassifier;
+
 
     /**
      * RFC-012 follow-up #3：从 partial 状态触发的 reprocess 会在此 set 中打标，
@@ -111,17 +118,22 @@ public class WikiRawMaterialService {
             return handleDuplicate(existing);
         }
 
+        // T2-4-1: Auto-classify when materialType is not explicitly provided
+        MaterialTypeAutoResult autoResult = resolveMaterialTypeAuto(kbId, title, content, materialType, materialMetadataJson);
+        String normalizedMaterialType = normalizeMaterialType(autoResult.materialType());
+        String normalizedMetadataJson = normalizeMaterialMetadataJson(normalizedMaterialType, autoResult.materialMetadataJson());
+
         WikiRawMaterialEntity entity = new WikiRawMaterialEntity();
         entity.setKbId(kbId);
         entity.setTitle(title);
         entity.setSourceType("text");
         entity.setOriginalContent(content);
-        String normalizedMaterialType = normalizeMaterialType(materialType);
         entity.setMaterialType(normalizedMaterialType);
-        entity.setMaterialMetadataJson(normalizeMaterialMetadataJson(normalizedMaterialType, materialMetadataJson));
+        entity.setMaterialMetadataJson(normalizedMetadataJson);
         entity.setFileSize((long) content.getBytes(StandardCharsets.UTF_8).length);
         entity.setContentHash(hash);
         entity.setProcessingStatus("pending");
+        applyAutoDetectFlags(entity, autoResult, materialType);
         rawMapper.insert(entity);
 
         kbService.incrementRawCount(kbId);
@@ -130,9 +142,11 @@ public class WikiRawMaterialService {
             eventPublisher.publishEvent(new WikiProcessingEvent(this, entity.getId(), kbId));
         }
 
-        log.info("[Wiki] Raw material added: id={}, kbId={}, title={}", entity.getId(), kbId, title);
+        log.info("[Wiki] Raw material added: id={}, kbId={}, title={}, materialType={}",
+                entity.getId(), kbId, title, entity.getMaterialType());
         return entity;
     }
+
 
     /**
      * 添加文件类型的原始材料（PDF/DOCX 等）
@@ -150,18 +164,24 @@ public class WikiRawMaterialService {
     public WikiRawMaterialEntity addFile(Long kbId, String title, String sourceType,
                                          String sourcePath, long fileSize,
                                          String materialType, String materialMetadataJson) {
+        // T2-4-1: Auto-classify when materialType is not explicitly provided (file uploads use title-only rules)
+        MaterialTypeAutoResult autoResult = resolveMaterialTypeAuto(kbId, title, null, materialType, materialMetadataJson);
+        String normalizedMaterialType = normalizeMaterialType(autoResult.materialType());
+        String normalizedMetadataJson = normalizeMaterialMetadataJson(normalizedMaterialType, autoResult.materialMetadataJson());
+
         WikiRawMaterialEntity entity = new WikiRawMaterialEntity();
         entity.setKbId(kbId);
         entity.setTitle(title);
         entity.setSourceType(sourceType);
         entity.setSourcePath(sourcePath);
-        String normalizedMaterialType = normalizeMaterialType(materialType);
         entity.setMaterialType(normalizedMaterialType);
-        entity.setMaterialMetadataJson(normalizeMaterialMetadataJson(normalizedMaterialType, materialMetadataJson));
+        entity.setMaterialMetadataJson(normalizedMetadataJson);
         entity.setFileSize(fileSize);
         entity.setProcessingStatus("pending");
+        applyAutoDetectFlags(entity, autoResult, materialType);
 
         // Compute hash of original upload bytes (for dedup). RFC-051: hash raw bytes
+
         // directly — the previous `new String(bytes, UTF_8)` round-trip produced unstable
         // hashes for binary files (PDF/Office) because invalid UTF-8 sequences become
         // replacement characters, collapsing distinct files into the same hash.
@@ -281,6 +301,18 @@ public class WikiRawMaterialService {
     }
 
     /**
+     * T2-4-6: Update material metadata JSON (e.g., after extracting contentsIndex).
+     */
+    @Transactional
+    public void updateMaterialMetadataJson(Long id, String materialMetadataJson) {
+        WikiRawMaterialEntity entity = rawMapper.selectById(id);
+        if (entity == null) return;
+        entity.setMaterialMetadataJson(materialMetadataJson);
+        rawMapper.updateById(entity);
+    }
+
+
+    /**
      * 重新处理：重置状态为 pending 并发布事件。
      * <p>
      * 如果之前状态是 {@code partial}，把 rawId 加入 {@link #partialResumeIds}，
@@ -288,6 +320,16 @@ public class WikiRawMaterialService {
      */
     @Transactional
     public void reprocess(Long id) {
+        reprocess(id, false);
+    }
+
+    /**
+     * Reprocess a raw material. When {@code forceClean} is true, clear the
+     * generated pages, citations, relation cache rows and chunks that belong to
+     * this raw material before enqueueing the processing event.
+     */
+    @Transactional
+    public void reprocess(Long id, boolean forceClean) {
         WikiRawMaterialEntity entity = rawMapper.selectById(id);
         if (entity == null) {
             throw new IllegalArgumentException("Raw material not found: " + id);
@@ -301,15 +343,28 @@ public class WikiRawMaterialService {
         if (!"text".equalsIgnoreCase(entity.getSourceType())) {
             entity.setExtractedText(null);
         }
+        if (forceClean) {
+            try {
+                int affectedPages = pageService.purgeGeneratedBySourceRawId(entity.getKbId(), id);
+                log.info("[Wiki] Force reprocess cleaned {} wiki pages for raw={}", affectedPages, id);
+            } catch (Exception e) {
+                log.warn("[Wiki] Failed to purge wiki pages before force reprocess raw={}: {}", id, e.getMessage());
+            }
+            try {
+                chunkService.deleteByRawId(id);
+            } catch (Exception e) {
+                log.warn("[Wiki] Failed to delete chunks before force reprocess raw={}: {}", id, e.getMessage());
+            }
+        }
         entity.setProcessingStatus("pending");
         entity.setErrorMessage(null);
         rawMapper.updateById(entity);
 
-        if (wasPartial) {
+        if (wasPartial && !forceClean) {
             partialResumeIds.add(id);
             log.info("[Wiki] Raw material queued for PARTIAL RESUME: id={} (existing pages will be kept)", id);
         } else {
-            log.info("[Wiki] Raw material queued for reprocessing: id={}", id);
+            log.info("[Wiki] Raw material queued for reprocessing: id={}, forceClean={}", id, forceClean);
         }
         eventPublisher.publishEvent(new WikiProcessingEvent(this, entity.getId(), entity.getKbId()));
     }
@@ -326,6 +381,18 @@ public class WikiRawMaterialService {
 
     @Transactional
     public void delete(Long id) {
+        // T2-5-6: Cascade-delete exclusive wiki pages before deleting the raw material
+        WikiRawMaterialEntity raw = rawMapper.selectById(id);
+        if (raw != null) {
+            try {
+                if (pageService != null) {
+                    int deletedPages = pageService.deleteExclusiveBySourceRawId(raw.getKbId(), id);
+                    log.info("[Wiki] Cascade-deleted {} exclusive pages for raw={}", deletedPages, id);
+                }
+            } catch (Exception e) {
+                log.warn("[Wiki] Failed to cascade-delete pages for raw={}: {}", id, e.getMessage());
+            }
+        }
         rawMapper.deleteById(id);
         // RFC-013：级联清理 chunk，避免语义搜索命中孤儿 chunk
         try {
@@ -551,5 +618,93 @@ public class WikiRawMaterialService {
             return null;
         }
         return normalized.toLowerCase(Locale.ROOT).startsWith("null") ? null : normalized;
+    }
+
+    // ---------- T2-4-1: Auto classification helpers ----------
+
+    /**
+     * Resolves material type and metadata using automatic classification
+     * when the user has not explicitly provided them.
+     * <p>
+     * Only triggers for business KBs (domainProfileId != null).
+     * General KBs keep the user-provided or default values.
+     */
+    private MaterialTypeAutoResult resolveMaterialTypeAuto(Long kbId, String title, String textPreview,
+                                                            String explicitMaterialType, String explicitMetadataJson) {
+        // User explicitly provided material type: respect user choice
+        if (StringUtils.hasText(explicitMaterialType) && !"general".equalsIgnoreCase(explicitMaterialType.trim())) {
+            return new MaterialTypeAutoResult(explicitMaterialType, explicitMetadataJson);
+        }
+
+        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
+        if (kb == null || !StringUtils.hasText(kb.getDomainProfileId())) {
+            // General KB or missing KB: keep explicit or default to general
+            return new MaterialTypeAutoResult(explicitMaterialType, explicitMetadataJson);
+        }
+
+        try {
+            vip.mate.wiki.classifier.MaterialTypeClassifyResult result =
+                    materialTypeClassifier.classify(kb, title, textPreview);
+            if (result != null && !"general".equals(result.materialType())) {
+                log.info("[WikiRawMaterial] Auto-classified: kbId={}, title={}, type={}, confidence={}",
+                        kbId, title, result.materialType(), result.confidence());
+                // If user provided metadata but not type, merge auto-type with user metadata
+                String mergedMetadata = result.materialMetadataJson();
+                if (StringUtils.hasText(explicitMetadataJson) && JSONUtil.isTypeJSON(explicitMetadataJson)) {
+                    mergedMetadata = mergeMetadataJson(result.materialMetadataJson(), explicitMetadataJson);
+                }
+                return new MaterialTypeAutoResult(result.materialType(), mergedMetadata,
+                        result.confidence(), result.reason());
+            }
+        } catch (Exception e) {
+            log.warn("[WikiRawMaterial] Auto-classification failed for kbId={}, title={}: {}", kbId, title, e.getMessage());
+        }
+
+        return new MaterialTypeAutoResult(explicitMaterialType, explicitMetadataJson);
+    }
+
+
+    private String mergeMetadataJson(String autoMetadataJson, String userMetadataJson) {
+        if (!JSONUtil.isTypeJSON(autoMetadataJson)) return userMetadataJson;
+        if (!JSONUtil.isTypeJSON(userMetadataJson)) return autoMetadataJson;
+
+        JSONObject autoObj = JSONUtil.parseObj(autoMetadataJson);
+        JSONObject userObj = JSONUtil.parseObj(userMetadataJson);
+        // User fields override auto fields
+        for (String key : userObj.keySet()) {
+            String val = userObj.getStr(key);
+            if (StringUtils.hasText(val)) {
+                autoObj.set(key, val);
+            }
+        }
+        return JSONUtil.toJsonStr(autoObj);
+    }
+
+    /**
+     * Apply auto-detection transient flags to the entity for API response.
+     */
+    private void applyAutoDetectFlags(WikiRawMaterialEntity entity, MaterialTypeAutoResult autoResult,
+                                       String explicitMaterialType) {
+        boolean userProvidedType = StringUtils.hasText(explicitMaterialType)
+                && !"general".equalsIgnoreCase(explicitMaterialType.trim());
+        if (userProvidedType) {
+            return; // User explicitly chose type: not auto-detected
+        }
+        boolean autoTriggered = autoResult.materialType() != null
+                && !"general".equalsIgnoreCase(autoResult.materialType())
+                && !autoResult.materialType().equalsIgnoreCase(explicitMaterialType == null ? "" : explicitMaterialType);
+        if (autoTriggered) {
+            entity.setAutoDetected(true);
+            entity.setAutoDetectConfidence(autoResult.confidence());
+            entity.setAutoDetectReason(autoResult.reason());
+        }
+    }
+
+
+    private record MaterialTypeAutoResult(String materialType, String materialMetadataJson,
+                                           String confidence, String reason) {
+        MaterialTypeAutoResult(String materialType, String materialMetadataJson) {
+            this(materialType, materialMetadataJson, null, null);
+        }
     }
 }

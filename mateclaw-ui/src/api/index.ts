@@ -59,9 +59,23 @@ export async function fetchAuthenticatedBlob(fileUrl: string): Promise<Blob> {
   const token = getAuthToken()
   const headers: Record<string, string> = {}
   if (token) headers.Authorization = `Bearer ${token}`
-  const response = await fetch(fileUrl, { headers })
+  const response = await fetch(normalizeGeneratedFileUrl(fileUrl), { headers })
   if (!response.ok) throw new Error(`Fetch failed: ${response.status}`)
   return response.blob()
+}
+
+export function normalizeGeneratedFileUrl(fileUrl: string): string {
+  const raw = String(fileUrl || '').trim()
+  if (!raw) return raw
+  try {
+    const parsed = new URL(raw, window.location.origin)
+    if (parsed.pathname.startsWith('/api/v1/files/generated/')) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    }
+  } catch {
+    // Non-URL input falls through unchanged.
+  }
+  return raw
 }
 
 // ==================== Auth ====================
@@ -606,7 +620,7 @@ export const wikiApi = {
   deleteRaw: (kbId: number, rawId: number) =>
     http.delete(`/wiki/knowledge-bases/${kbId}/raw/${rawId}`),
   reprocessRaw: (kbId: number, rawId: number) =>
-    http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/reprocess`),
+    http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/reprocess`, null, { params: { force: true } }),
   downloadRaw: (kbId: number, rawId: number) =>
     http.get<Blob>(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/download`, {
       responseType: 'blob',

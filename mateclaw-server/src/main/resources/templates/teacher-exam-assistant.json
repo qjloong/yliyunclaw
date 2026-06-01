@@ -96,9 +96,94 @@
       "source_grounding_check",
       "sample_question_style_imitation",
       "session_document_augmentation"
-    ]
+    ],
+    "wikiDomainProfile": {
+      "id": "education.exam.junior_chinese",
+      "displayName": "初中语文教学命题",
+      "description": "适用于初中语文教材、课标、名著稿件、样题与评分标准等资料治理。",
+      "materialTypes": [
+        {
+          "id": "general",
+          "name": "通用资料",
+          "fields": []
+        },
+        {
+          "id": "curriculum_standard",
+          "name": "课程标准",
+          "fields": [
+            { "key": "edition", "label": "课标版本 / 年份", "placeholder": "如：2022版义务教育课标", "required": true, "sort": 1 },
+            { "key": "source", "label": "适用来源 / 专题", "placeholder": "如：现代文阅读 / 课内同步 / 期中复习", "required": true, "sort": 2 },
+            { "key": "grade", "label": "适用学段 / 年级", "placeholder": "如：初中 / 七年级", "required": true, "sort": 3 },
+            { "key": "unit", "label": "主题 / 单元", "placeholder": "如：文学阅读与创意表达", "required": true, "sort": 4 },
+            { "key": "routeTagsInput", "label": "路由标签", "placeholder": "如：教材同步, 阅读理解, 七上, 第一单元", "required": true, "sort": 5 }
+          ]
+        },
+        {
+          "id": "textbook_latest",
+          "name": "最新教材",
+          "fields": [
+            { "key": "edition", "label": "教材版本 / 版次", "placeholder": "如：部编版 / 统编版", "required": true, "sort": 1 },
+            { "key": "grade", "label": "适用年级", "placeholder": "如：七年级", "required": true, "sort": 2 },
+            { "key": "volume", "label": "册别", "placeholder": "如：上册 / 下册", "required": true, "sort": 3 },
+            { "key": "unit", "label": "单元 / 专题", "placeholder": "如：第一单元 / 名著导读", "required": true, "sort": 4 },
+            { "key": "chapter", "label": "课文 / 章节", "placeholder": "如：《春》/ 第三课", "required": true, "sort": 5 },
+            { "key": "routeTagsInput", "label": "路由标签", "placeholder": "如：教材同步, 阅读理解, 七上, 第一单元", "required": true, "sort": 6 }
+          ]
+        },
+        {
+          "id": "classic_manuscript",
+          "name": "名著稿件",
+          "fields": [
+            { "key": "source", "label": "来源说明", "placeholder": "如：整本书阅读任务群", "required": true, "sort": 1 },
+            { "key": "chapter", "label": "章节 / 篇目", "placeholder": "如：孙悟空三打白骨精", "required": true, "sort": 2 },
+            { "key": "classicName", "label": "名著名称", "placeholder": "如：西游记 / 朝花夕拾", "required": true, "sort": 3 },
+            { "key": "routeTagsInput", "label": "路由标签", "placeholder": "如：教材同步, 阅读理解, 七上, 第一单元", "required": true, "sort": 4 }
+          ]
+        },
+        {
+          "id": "question_rule",
+          "name": "题型要求",
+          "fields": [
+            { "key": "edition", "label": "教材版本 / 版次", "placeholder": "如：部编版 / 统编版", "required": true, "sort": 1 },
+            { "key": "source", "label": "适用来源 / 专题", "placeholder": "如：现代文阅读 / 课内同步 / 期中复习", "required": true, "sort": 2 },
+            { "key": "grade", "label": "适用年级", "placeholder": "如：七年级", "required": true, "sort": 3 },
+            { "key": "volume", "label": "适用册别 / 学期", "placeholder": "如：七上 / 九下 / 一轮复习", "required": true, "sort": 4 },
+            { "key": "unit", "label": "单元 / 专题", "placeholder": "如：第一单元 / 名著导读", "required": true, "sort": 5 },
+            { "key": "chapter", "label": "课文 / 章节", "placeholder": "如：《春》/ 第三课", "required": true, "sort": 6 },
+            { "key": "routeTagsInput", "label": "路由标签", "placeholder": "如：教材同步, 阅读理解, 七上, 第一单元", "required": true, "sort": 7 }
+          ]
+        },
+        {
+          "id": "sample_question",
+          "name": "样题",
+          "fields": [
+            { "key": "edition", "label": "教材版本 / 版次", "placeholder": "如：部编版 / 统编版", "required": true, "sort": 1 },
+            { "key": "source", "label": "适用来源 / 专题", "placeholder": "如：现代文阅读 / 课内同步 / 期中复习", "required": true, "sort": 2 },
+            { "key": "grade", "label": "适用年级", "placeholder": "如：七年级", "required": true, "sort": 3 },
+            { "key": "volume", "label": "册别", "placeholder": "如：上册 / 下册", "required": true, "sort": 4 },
+            { "key": "unit", "label": "单元 / 专题", "placeholder": "如：第一单元 / 名著导读", "required": true, "sort": 5 },
+            { "key": "chapter", "label": "课文 / 章节", "placeholder": "如：《春》/ 第三课", "required": true, "sort": 6 },
+            { "key": "routeTagsInput", "label": "路由标签", "placeholder": "如：教材同步, 阅读理解, 七上, 第一单元", "required": true, "sort": 7 }
+          ]
+        },
+        {
+          "id": "answer_rubric",
+          "name": "答案与评分标准",
+          "fields": [
+            { "key": "edition", "label": "教材版本 / 版次", "placeholder": "如：部编版 / 统编版", "required": true, "sort": 1 },
+            { "key": "source", "label": "适用来源 / 专题", "placeholder": "如：现代文阅读 / 课内同步 / 期中复习", "required": true, "sort": 2 },
+            { "key": "grade", "label": "适用年级", "placeholder": "如：七年级", "required": true, "sort": 3 },
+            { "key": "volume", "label": "册别", "placeholder": "如：上册 / 下册", "required": true, "sort": 4 },
+            { "key": "unit", "label": "单元 / 专题", "placeholder": "如：第一单元 / 名著导读", "required": true, "sort": 5 },
+            { "key": "chapter", "label": "课文 / 章节", "placeholder": "如：《春》/ 第三课", "required": true, "sort": 6 },
+            { "key": "routeTagsInput", "label": "路由标签", "placeholder": "如：教材同步, 阅读理解, 七上, 第一单元", "required": true, "sort": 7 }
+          ]
+        }
+      ]
+    }
   },
   "pluginBindings": [
+
     {
       "pluginKey": "builtin.teacher_exam",
       "enabled": true,

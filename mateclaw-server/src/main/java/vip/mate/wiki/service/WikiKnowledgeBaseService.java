@@ -5,14 +5,17 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
+import vip.mate.wiki.model.WikiRawMaterialEntity;
 import vip.mate.wiki.repository.WikiKnowledgeBaseMapper;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -28,6 +31,9 @@ public class WikiKnowledgeBaseService {
     private final WikiKnowledgeBaseMapper kbMapper;
     private final AgentMapper agentMapper;
     private final ObjectMapper objectMapper;
+    private final WikiPageService pageService;
+    private final ObjectProvider<WikiRawMaterialService> rawServiceProvider;
+    private final WikiChunkService chunkService;
 
     /**
      * RFC-051 PR-2: optional system-page scaffold (overview / log). Marked
@@ -306,8 +312,72 @@ public class WikiKnowledgeBaseService {
 
     @Transactional
     public void delete(Long id) {
+        // T2-5-6: Cascade-delete sub-resources before deleting the knowledge base
+        // Order: pages → raws (each raw cascades to its chunks) → remaining chunks → agent bindings → KB
+
+        try {
+            int pageCount = pageService.deleteByKbId(id);
+            log.info("[Wiki] Cascade-deleted {} pages for KB={}", pageCount, id);
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to cascade-delete pages for KB={}: {}", id, e.getMessage());
+        }
+
+        try {
+            WikiRawMaterialService rawService = rawServiceProvider.getObject();
+            List<WikiRawMaterialEntity> raws = rawService.listByKbId(id);
+            for (WikiRawMaterialEntity raw : raws) {
+                rawService.delete(raw.getId());
+            }
+            log.info("[Wiki] Cascade-deleted {} raw materials for KB={}", raws.size(), id);
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to cascade-delete raw materials for KB={}: {}", id, e.getMessage());
+        }
+
+        try {
+            chunkService.deleteByKbId(id);
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to cascade-delete chunks for KB={}: {}", id, e.getMessage());
+        }
+
+        try {
+            // Remove deleted KB from agent knowledge bindings to prevent dangling references
+            List<AgentEntity> agents = agentMapper.selectList(
+                    new LambdaQueryWrapper<AgentEntity>()
+                            .like(AgentEntity::getKnowledgeBaseIdsJson, id.toString()));
+            for (AgentEntity agent : agents) {
+                try {
+                    List<Long> kbIds = deserializeKbIds(agent.getKnowledgeBaseIdsJson());
+                    if (kbIds.remove(id)) {
+                        agent.setKnowledgeBaseIdsJson(toJson(kbIds));
+                        agentMapper.updateById(agent);
+                    }
+                } catch (Exception ignored) {
+                    log.warn("[Wiki] Failed to remove KB={} from agent={}", id, agent.getId());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to cascade-unbind agents for KB={}: {}", id, e.getMessage());
+        }
+
+        // Finally delete the KB itself (logical delete via @TableLogic)
         kbMapper.deleteById(id);
-        log.info("[Wiki] Knowledge base deleted: id={}", id);
+        log.info("[Wiki] Knowledge base fully deleted with cascades: id={}", id);
+    }
+
+    private List<Long> deserializeKbIds(String json) {
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<Long>>() {});
+        } catch (Exception ignored) {
+            return new java.util.ArrayList<>();
+        }
+    }
+
+    private String toJson(Object obj) {
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            return "[]";
+        }
     }
 
     private String normalizeKbKind(String kbKind) {

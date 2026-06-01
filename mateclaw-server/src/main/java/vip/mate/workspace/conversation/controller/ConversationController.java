@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.common.result.R;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.tool.document.DocxExportService;
@@ -248,16 +249,22 @@ public class ConversationController {
             Path projectDir = StringUtils.hasText(effectiveWorkingDirectory)
                     ? Paths.get(effectiveWorkingDirectory).toAbsolutePath().normalize()
                     : null;
-            Path target = docxExportService.resolveOutputPath(projectDir, asString(body.get("outputPath")), asString(body.get("filename")));
+            String outputPath = asString(body.get("outputPath"));
+            String filename = asString(body.get("filename"));
+            ChatOrigin origin = ChatOrigin.web(conversationId, username, workspaceId, effectiveWorkingDirectory);
+            Path target = StringUtils.hasText(outputPath)
+                    ? docxExportService.resolveOutputPath(projectDir, outputPath, filename)
+                    : (projectDir != null ? docxExportService.buildDefaultOutputPath(projectDir, filename, origin) : null);
             if (projectDir != null && target != null && !target.toAbsolutePath().normalize().startsWith(projectDir)) {
                 return R.fail("导出路径必须位于当前项目绑定目录内");
             }
 
             DocxExportService.ExportedDocx exported = docxExportService.exportMarkdown(
                     markdown,
-                    asString(body.get("filename")),
+                    filename,
                     asString(body.get("pageSize")),
-                    target);
+                    target,
+                    origin.toToolContext());
             return R.ok(Map.of(
                     "format", format,
                     "fileName", exported.fileName(),

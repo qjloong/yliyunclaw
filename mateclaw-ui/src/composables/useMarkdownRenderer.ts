@@ -58,6 +58,36 @@ const COLLAPSE_JSON_CHAR_THRESHOLD = 800
  */
 const SAFE_LINK_RE = /^(https?:|mailto:|#|\/|\.\/|\.\.\/)/i
 
+const GENERATED_FILE_HREF_RE = /\/api\/v1\/files\/generated\/(?:disk\/)?[^/?#]+(?:\/inline)?(?:[?#].*)?$/i
+const HTML_PREVIEW_HREF_RE = /(?:\.html?|\.xhtml)(?:[?#].*)?$/i
+
+function shouldOpenLinkInNewTab(href: string): boolean {
+  const trimmed = String(href || '').trim()
+  if (!trimmed) return false
+  if (GENERATED_FILE_HREF_RE.test(trimmed)) return true
+  try {
+    const parsed = new URL(trimmed, typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
+    return GENERATED_FILE_HREF_RE.test(parsed.pathname)
+      || HTML_PREVIEW_HREF_RE.test(parsed.pathname)
+  } catch {
+    return HTML_PREVIEW_HREF_RE.test(trimmed)
+  }
+}
+
+function decorateRenderedLinks(html: string): string {
+  if (!html || typeof document === 'undefined') return html
+  const container = document.createElement('div')
+  container.innerHTML = html
+  const anchors = container.querySelectorAll('a[href]')
+  anchors.forEach(anchor => {
+    const href = anchor.getAttribute('href') || ''
+    if (!shouldOpenLinkInNewTab(href)) return
+    anchor.setAttribute('target', '_blank')
+    anchor.setAttribute('rel', 'noopener noreferrer')
+  })
+  return container.innerHTML
+}
+
 // ---------------------------------------------------------------------------
 // LaTeX pre-processor
 // ---------------------------------------------------------------------------
@@ -271,8 +301,17 @@ const customRenderer = {
         extra = ' target="_blank" rel="noopener noreferrer"'
       }
     }
+    let safeHref = href
+    if (isGeneratedFileLink) {
+      try {
+        const url = new URL(href, typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
+        safeHref = `${url.pathname}${url.search}${url.hash}`
+      } catch {
+        safeHref = href
+      }
+    }
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
-    return `<a href="${escapeHtml(href)}"${titleAttr}${extra}>${innerHtml}</a>`
+    return `<a href="${escapeHtml(safeHref)}"${titleAttr}${extra}>${innerHtml}</a>`
   },
 }
 
@@ -347,7 +386,7 @@ export function useMarkdownRenderer() {
     )
     // 3. Marked → 4. DOMPurify.
     const rawHtml = markedInstance.parse(withWikiLinks) as string
-    const result = DOMPurify.sanitize(rawHtml, purifyConfig)
+    const result = decorateRenderedLinks(DOMPurify.sanitize(rawHtml, purifyConfig))
 
     // Evict oldest entry when at capacity (Map preserves insertion order).
     if (RENDER_CACHE.size >= RENDER_CACHE_CAP) {

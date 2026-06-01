@@ -1,6 +1,7 @@
 package vip.mate.wiki.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,8 +13,11 @@ import org.springframework.util.StringUtils;
 import vip.mate.wiki.dto.RawSearchRef;
 import vip.mate.wiki.dto.WikiDerivedView;
 import vip.mate.wiki.model.WikiPageEntity;
+import vip.mate.wiki.model.WikiRelationEntity;
+import vip.mate.wiki.repository.WikiPageCitationMapper;
 import vip.mate.wiki.repository.WikiPageMapper;
 import vip.mate.wiki.repository.WikiRawMaterialMapper;
+import vip.mate.wiki.repository.WikiRelationMapper;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -42,15 +46,28 @@ public class WikiPageService {
     private final WikiPageMapper pageMapper;
     private final ObjectMapper objectMapper;
     private final WikiRawMaterialMapper rawMaterialMapper;
+    private final WikiBusinessModuleDeriver businessModuleDeriver;
+    private final WikiMaterialProcessingRouter materialProcessingRouter;
+    private final WikiPageCitationMapper citationMapper;
+    private final WikiRelationMapper relationMapper;
+    private final WikiCitationService citationService;
+
 
     private static final Pattern WIKI_LINK_PATTERN = Pattern.compile("\\[\\[([^\\]]+)]]");
-        private static final List<String> DERIVED_VIEW_ORDER = List.of(
+    private static final List<String> DERIVED_VIEW_ORDER = List.of(
+            "textbook_unit",
+            "textbook_chapter",
             "textbook_sync",
-            "classic_focus",
             "curriculum_view",
+            "classic_chapter",
+            "classic_theme",
+            "classic_plot",
+            "classic_excerpt",
+            "classic_language",
+            "classic_focus",
             "assessment_view",
             "slice_view"
-        );
+    );
 
     /** 页面摘要缓存：kbId → (data, expiresAt)。5 分钟 TTL，写操作失效。 */
     private record CachedSummaries(List<WikiPageEntity> data, long expiresAt) {
@@ -562,7 +579,30 @@ public class WikiPageService {
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
                         .eq(WikiPageEntity::getSlug, slug));
+        cleanupPageGraph(existing.getId());
         evictSummaryCache(kbId);
+    }
+
+    /**
+     * T2-5-6: Cascade-delete all non-protected pages in a knowledge base.
+     */
+    @Transactional
+    public int deleteByKbId(Long kbId) {
+        List<WikiPageEntity> pages = listByKbId(kbId);
+        int deleted = 0;
+        for (WikiPageEntity page : pages) {
+            if (isProtected(page)) continue;
+            pageMapper.delete(
+                    new LambdaQueryWrapper<WikiPageEntity>()
+                            .eq(WikiPageEntity::getKbId, kbId)
+                            .eq(WikiPageEntity::getSlug, page.getSlug()));
+            deleted++;
+        }
+        if (deleted > 0) {
+            evictSummaryCache(kbId);
+        }
+        log.info("[Wiki] Cascade-deleted {} pages for KB={}", deleted, kbId);
+        return deleted;
     }
 
     /**
@@ -633,11 +673,81 @@ public class WikiPageService {
                     List<SourceEntry> entries = parseSourceEntries(page.getSourceEntries());
                     entries.removeIf(e -> e.rawId() == rawId);
                     page.setSourceEntries(toJson(entries));
+                    page.setRouteTagsJson(buildRouteTagsJson(page.getTitle(), page.getPageType(), page.getSourceRawIds()));
+                    page.setStructureMetadataJson(buildStructureMetadataJson(page.getTitle(), page.getPageType(), page.getPurposeHint(), page.getSourceRawIds()));
                     pageMapper.updateById(page);
+                    rebuildPageLineage(page);
                 }
             }
         }
+        if (deleted > 0) {
+            evictSummaryCache(kbId);
+        }
         return deleted;
+    }
+
+    /**
+     * Force reprocess cleanup for one raw material.
+     * <p>
+     * Unlike the normal partial-resume path, this removes every AI-generated
+     * page whose only source is the raw document, unlinks the raw from shared
+     * pages, and invalidates citation / relation cache rows for affected pages.
+     */
+    @Transactional
+    public int purgeGeneratedBySourceRawId(Long kbId, Long rawId) {
+        List<WikiPageEntity> allPages = listByKbId(kbId);
+        int affected = 0;
+        int deleted = 0;
+        int unlinked = 0;
+        for (WikiPageEntity page : allPages) {
+            if ("manual".equals(page.getLastUpdatedBy())) continue;
+            if (isProtected(page)) continue;
+            List<Long> sourceIds = parseSourceRawIds(page.getSourceRawIds());
+            if (!sourceIds.contains(rawId)) continue;
+
+            affected++;
+            if (sourceIds.size() == 1) {
+                pageMapper.delete(new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .eq(WikiPageEntity::getSlug, page.getSlug()));
+                cleanupPageGraph(page.getId());
+                deleted++;
+                continue;
+            }
+
+            sourceIds.remove(rawId);
+            page.setSourceRawIds(toJson(sourceIds));
+            List<SourceEntry> entries = parseSourceEntries(page.getSourceEntries());
+            entries.removeIf(e -> e.rawId() == rawId);
+            page.setSourceEntries(toJson(entries));
+            page.setRouteTagsJson(buildRouteTagsJson(page.getTitle(), page.getPageType(), page.getSourceRawIds()));
+            page.setStructureMetadataJson(buildStructureMetadataJson(page.getTitle(), page.getPageType(), page.getPurposeHint(), page.getSourceRawIds()));
+            pageMapper.updateById(page);
+            rebuildPageLineage(page);
+            unlinked++;
+        }
+        if (affected > 0) {
+            evictSummaryCache(kbId);
+        }
+        log.info("[Wiki] Purged raw lineage before reprocess: kbId={}, rawId={}, affected={}, deleted={}, unlinked={}",
+                kbId, rawId, affected, deleted, unlinked);
+        return affected;
+    }
+
+    private void cleanupPageGraph(Long pageId) {
+        if (pageId == null) return;
+        citationMapper.softDeleteByPageId(pageId);
+        relationMapper.update(null, new LambdaUpdateWrapper<WikiRelationEntity>()
+                .eq(WikiRelationEntity::getPageAId, pageId)
+                .or()
+                .eq(WikiRelationEntity::getPageBId, pageId)
+                .set(WikiRelationEntity::getDeleted, 1));
+    }
+
+    private void rebuildPageLineage(WikiPageEntity page) {
+        if (page == null || page.getId() == null) return;
+        cleanupPageGraph(page.getId());
+        citationService.buildCitations(page.getId(), page.getKbId());
     }
 
     public int countByKbId(Long kbId) {
@@ -747,6 +857,8 @@ public class WikiPageService {
             JsonNode node = objectMapper.readTree(structureMetadataJson);
             return new StructureMetadata(
                     textValue(node, "sliceType"),
+                    textValue(node, "businessViewType"),
+                    textValue(node, "canonicalEntityType"),
                     textValue(node, "grade"),
                     textValue(node, "volume"),
                     textValue(node, "unit"),
@@ -754,6 +866,8 @@ public class WikiPageService {
                     textValue(node, "classicName"),
                     textValue(node, "source"),
                     readStringList(node.path("materialTypes")),
+                    readStringList(node.path("rulePackModules")),
+                    readStringList(node.path("relationSemantics")),
                     readStringList(node.path("routeTags"))
             );
         } catch (Exception ignored) {
@@ -788,54 +902,14 @@ public class WikiPageService {
     }
 
     private DerivedViewDescriptor describeDerivedView(WikiPageEntity page, StructureMetadata metadata) {
-        if (StringUtils.hasText(metadata.classicName())) {
-            return new DerivedViewDescriptor(
-                    "classic_focus",
-                    "classic:" + normalizeKeyPart(metadata.classicName()),
-                    metadata.classicName(),
-                    joinNonBlank(" · ", metadata.source(), metadata.grade(), metadata.volume(), metadata.unit(), metadata.chapter()),
-                    metadata.sliceType(),
-                    metadata.grade(),
-                    metadata.volume(),
-                    metadata.unit(),
-                    metadata.chapter(),
-                    metadata.classicName(),
-                    metadata.source()
-            );
-        }
-        if (StringUtils.hasText(metadata.grade())
-                || StringUtils.hasText(metadata.volume())
-                || StringUtils.hasText(metadata.unit())
-                || StringUtils.hasText(metadata.chapter())) {
-            String anchor = joinNonBlank(" / ", metadata.unit(), metadata.chapter());
-            if (!StringUtils.hasText(anchor)) {
-                anchor = firstNonBlank(metadata.chapter(), metadata.unit(), metadata.volume(), metadata.grade(), page.getTitle());
-            }
-            return new DerivedViewDescriptor(
-                    "textbook_sync",
-                    "textbook:"
-                            + normalizeKeyPart(metadata.grade()) + ":"
-                            + normalizeKeyPart(metadata.volume()) + ":"
-                            + normalizeKeyPart(metadata.unit()) + ":"
-                            + normalizeKeyPart(metadata.chapter()),
-                    anchor,
-                    joinNonBlank(" · ", metadata.grade(), metadata.volume(), metadata.source()),
-                    metadata.sliceType(),
-                    metadata.grade(),
-                    metadata.volume(),
-                    metadata.unit(),
-                    metadata.chapter(),
-                    metadata.classicName(),
-                    metadata.source()
-            );
-        }
         if (isCurriculumView(metadata)) {
-            String title = firstNonBlank(metadata.source(), "课程标准视图");
+            String title = curriculumViewTitle(metadata);
             return new DerivedViewDescriptor(
                     "curriculum_view",
-                    "curriculum:" + normalizeKeyPart(title) + ":" + normalizeKeyPart(metadata.grade()),
+                    "curriculum:" + normalizeKeyPart(firstNonBlank(metadata.sliceType(), title)) + ":"
+                            + normalizeKeyPart(firstNonBlank(metadata.grade(), metadata.source())),
                     title,
-                    joinNonBlank(" · ", metadata.grade(), metadata.volume()),
+                    joinNonBlank(" · ", metadata.grade(), metadata.source()),
                     metadata.sliceType(),
                     metadata.grade(),
                     metadata.volume(),
@@ -846,11 +920,7 @@ public class WikiPageService {
             );
         }
         if (isAssessmentView(metadata)) {
-            String title = switch (firstNonBlank(metadata.sliceType(), "question_rule")) {
-                case "sample_question" -> "样题视图";
-                case "answer_rubric" -> "评分标准视图";
-                default -> "题型规则视图";
-            };
+            String title = assessmentViewTitle(metadata);
             return new DerivedViewDescriptor(
                     "assessment_view",
                     "assessment:" + normalizeKeyPart(firstNonBlank(metadata.sliceType(), title)) + ":"
@@ -866,12 +936,61 @@ public class WikiPageService {
                     metadata.source()
             );
         }
+        if (isTextbookView(metadata)) {
+            String sliceType = firstNonBlank(metadata.sliceType(), "knowledge_point");
+            String viewType = "unit_overview".equals(sliceType) ? "textbook_unit"
+                    : "chapter_slice".equals(sliceType) || "classical_slice".equals(sliceType)
+                    || "poetry_slice".equals(sliceType) || "writing_task".equals(sliceType)
+                    || "classic_guide".equals(sliceType) ? "textbook_chapter" : "textbook_sync";
+            String anchor = joinNonBlank(" / ", metadata.unit(), metadata.chapter());
+            if (!StringUtils.hasText(anchor)) {
+                anchor = firstNonBlank(metadata.chapter(), metadata.unit(), metadata.volume(), metadata.grade(), page.getTitle());
+            }
+            return new DerivedViewDescriptor(
+                    viewType,
+                    "textbook:" + normalizeKeyPart(sliceType) + ":"
+                            + normalizeKeyPart(metadata.grade()) + ":"
+                            + normalizeKeyPart(metadata.volume()) + ":"
+                            + normalizeKeyPart(metadata.unit()) + ":"
+                            + normalizeKeyPart(metadata.chapter()),
+                    textbookViewTitle(sliceType, anchor),
+                    joinNonBlank(" · ", metadata.grade(), metadata.volume(), metadata.source()),
+                    metadata.sliceType(),
+                    metadata.grade(),
+                    metadata.volume(),
+                    metadata.unit(),
+                    metadata.chapter(),
+                    metadata.classicName(),
+                    metadata.source()
+            );
+        }
+        if (isClassicView(metadata)) {
+            String sliceType = firstNonBlank(metadata.sliceType(), "chapter_slice");
+            String title = classicViewTitle(sliceType);
+            return new DerivedViewDescriptor(
+                    classicViewType(sliceType),
+                    "classic:" + normalizeKeyPart(sliceType) + ":"
+                            + normalizeKeyPart(firstNonBlank(metadata.classicName(), metadata.source(), metadata.grade())),
+                    title,
+                    joinNonBlank(" · ", metadata.source(), metadata.grade(), metadata.volume(), metadata.unit(), metadata.chapter()),
+                    metadata.sliceType(),
+                    metadata.grade(),
+                    metadata.volume(),
+                    metadata.unit(),
+                    metadata.chapter(),
+                    metadata.classicName(),
+                    metadata.source()
+            );
+        }
         String sliceLabel = switch (firstNonBlank(metadata.sliceType(), page.getPageType(), "other")) {
-            case "unit" -> "单元切片视图";
-            case "lesson_or_chapter" -> "课文章节视图";
-            case "character" -> "人物切片视图";
-            case "theme_or_plot" -> "主题情节视图";
-            default -> "结构切片视图";
+            case "unit_overview" -> "教材单元视图";
+            case "chapter_slice" -> "章节切片视图";
+            case "character" -> "人物与角色视图";
+            case "theme_slice" -> "主题视图";
+            case "plot_slice" -> "情节视图";
+            case "excerpt" -> "名段赏析视图";
+            case "language_slice" -> "语言特色视图";
+            default -> "未归类业务切片";
         };
         return new DerivedViewDescriptor(
                 "slice_view",
@@ -890,13 +1009,100 @@ public class WikiPageService {
     }
 
     private boolean isCurriculumView(StructureMetadata metadata) {
-        return "curriculum_requirement".equals(metadata.sliceType())
-                || metadata.materialTypes().contains("curriculum_standard");
+        return "curriculum".equals(metadata.businessViewType())
+                || "curriculum_requirement".equals(metadata.sliceType())
+                || (metadata.materialTypes() != null && metadata.materialTypes().contains("curriculum_standard"));
     }
 
     private boolean isAssessmentView(StructureMetadata metadata) {
-        return List.of("question_rule", "sample_question", "answer_rubric").contains(metadata.sliceType())
-                || metadata.materialTypes().stream().anyMatch(type -> List.of("question_rule", "sample_question", "answer_rubric").contains(type));
+        String sliceType = metadata.sliceType();
+        boolean sliceMatch = "question_rule".equals(sliceType)
+                || "sample_question".equals(sliceType)
+                || "answer_rubric".equals(sliceType);
+        List<String> materialTypes = metadata.materialTypes();
+        boolean materialMatch = materialTypes != null && materialTypes.stream().anyMatch(type ->
+                "question_rule".equals(type) || "sample_question".equals(type) || "answer_rubric".equals(type));
+        return "assessment_rule".equals(metadata.businessViewType())
+                || "sample_question".equals(metadata.businessViewType())
+                || "answer_rubric".equals(metadata.businessViewType())
+                || sliceMatch || materialMatch;
+    }
+
+    private boolean isTextbookView(StructureMetadata metadata) {
+        return "textbook".equals(metadata.businessViewType())
+                || (metadata.materialTypes() != null && metadata.materialTypes().contains("textbook_latest"));
+    }
+
+    private boolean isClassicView(StructureMetadata metadata) {
+        return "classic".equals(metadata.businessViewType())
+                || (metadata.materialTypes() != null && metadata.materialTypes().contains("classic_manuscript"));
+    }
+
+    private String curriculumViewTitle(StructureMetadata metadata) {
+        return switch (firstNonBlank(metadata.sliceType(), "overview")) {
+            case "core_competency" -> "课标核心素养视图";
+            case "overall_goal" -> "课标课程目标视图";
+            case "grade_target" -> "课标学段要求视图";
+            case "task_group" -> "课标学习任务群视图";
+            case "quality_description" -> "课标学业质量视图";
+            case "evaluation_advice" -> "课标评价建议视图";
+            case "teaching_advice" -> "课标教学建议视图";
+            case "appendix" -> "课标附录视图";
+            default -> "课标依据视图";
+        };
+    }
+
+    private String assessmentViewTitle(StructureMetadata metadata) {
+        return switch (firstNonBlank(metadata.sliceType(), metadata.businessViewType(), "question_rule")) {
+            case "difficulty_rule" -> "难度规则视图";
+            case "coverage_rule" -> "考点覆盖视图";
+            case "scoring_rule" -> "评分规则视图";
+            case "material_rule" -> "材料要求视图";
+            case "forbidden_rule" -> "禁止项规则视图";
+            case "question_item" -> "样题题目视图";
+            case "answer_item" -> "样题答案视图";
+            case "rubric_item" -> "样题采分点视图";
+            case "source_item" -> "样题来源视图";
+            case "analysis_item" -> "样题命题分析视图";
+            case "rubric_dimension" -> "评分维度视图";
+            case "grade_level" -> "等级描述视图";
+            case "score_bracket" -> "分值区间视图";
+            case "common_error" -> "常见错误视图";
+            default -> "题型规则视图";
+        };
+    }
+
+    private String textbookViewTitle(String sliceType, String anchor) {
+        String prefix = switch (firstNonBlank(sliceType, "knowledge_point")) {
+            case "unit_overview" -> "教材单元视图";
+            case "chapter_slice" -> "教材课文章节视图";
+            case "classical_slice" -> "教材文言文视图";
+            case "poetry_slice" -> "教材古诗词视图";
+            case "writing_task" -> "教材写作任务视图";
+            case "classic_guide" -> "教材名著导读视图";
+            default -> "教材知识点视图";
+        };
+        return StringUtils.hasText(anchor) ? prefix + "：" + anchor : prefix;
+    }
+
+    private String classicViewTitle(String sliceType) {
+        return switch (firstNonBlank(sliceType, "chapter_slice")) {
+            case "plot_slice" -> "名著情节视图";
+            case "theme_slice" -> "名著主题视图";
+            case "excerpt" -> "名段赏析视图";
+            case "language_slice" -> "语言特色视图";
+            default -> "名著章节视图";
+        };
+    }
+
+    private String classicViewType(String sliceType) {
+        return switch (firstNonBlank(sliceType, "chapter_slice")) {
+            case "plot_slice" -> "classic_plot";
+            case "theme_slice" -> "classic_theme";
+            case "excerpt" -> "classic_excerpt";
+            case "language_slice" -> "classic_language";
+            default -> "classic_chapter";
+        };
     }
 
     private int derivedViewOrder(String viewType) {
@@ -949,12 +1155,28 @@ public class WikiPageService {
         if (!materialTypes.isEmpty()) {
             node.set("materialTypes", objectMapper.valueToTree(new ArrayList<>(materialTypes)));
         }
-        String sliceType = deriveSliceType(title, purposeHint, materialTypes);
+        WikiMaterialProcessingRecipe recipe = materialProcessingRouter.primaryRecipe(materialTypes);
+        if (recipe != null) {
+            appendStructureValue(node, "businessViewType", recipe.businessViewType());
+            appendStructureValue(node, "canonicalEntityType", recipe.canonicalEntityType());
+            appendStructureValue(node, "processingGuidance", recipe.processingGuidance());
+            node.set("genericDimensions", objectMapper.valueToTree(recipe.genericDimensions()));
+            node.set("businessSliceTypes", objectMapper.valueToTree(recipe.businessSliceTypes()));
+            node.set("rulePackModules", objectMapper.valueToTree(recipe.rulePackModules()));
+            node.set("relationSemantics", objectMapper.valueToTree(recipe.relationSemantics()));
+        }
+        String sliceType = materialProcessingRouter.deriveSliceType(title, purposeHint, materialTypes);
         appendStructureValue(node, "sliceType", sliceType);
         if (!routeTags.isEmpty()) {
             node.set("routeTags", objectMapper.valueToTree(new ArrayList<>(routeTags)));
         }
+        // T2-4-5: Derive businessModules from title, purposeHint, and materialTypes
+        List<String> businessModules = businessModuleDeriver.derive(title, purposeHint, materialTypes);
+        if (!businessModules.isEmpty()) {
+            node.set("businessModules", objectMapper.valueToTree(businessModules));
+        }
         return node.isEmpty() ? null : toJson(node);
+
     }
 
     private void mergeStructureMetadata(com.fasterxml.jackson.databind.node.ObjectNode node,
@@ -993,45 +1215,6 @@ public class WikiPageService {
         if (StringUtils.hasText(value)) {
             node.put(key, value.trim());
         }
-    }
-
-    private String deriveSliceType(String title, String purposeHint, Collection<String> materialTypes) {
-        String normalized = (title == null ? "" : title) + " " + (purposeHint == null ? "" : purposeHint);
-        String lower = normalized.toLowerCase(Locale.ROOT);
-        if (containsAny(lower, "单元", "unit")) {
-            return "unit";
-        }
-        if (containsAny(lower, "课文", "章节", "chapter", "lesson", "第") || containsAny(lower, "课", "回目")) {
-            return "lesson_or_chapter";
-        }
-        if (containsAny(lower, "人物", "角色", "character")) {
-            return "character";
-        }
-        if (containsAny(lower, "情节", "主题", "plot", "theme")) {
-            return "theme_or_plot";
-        }
-        if (materialTypes.contains("curriculum_standard")) {
-            return "curriculum_requirement";
-        }
-        if (materialTypes.contains("question_rule")) {
-            return "question_rule";
-        }
-        if (materialTypes.contains("sample_question")) {
-            return "sample_question";
-        }
-        if (materialTypes.contains("answer_rubric")) {
-            return "answer_rubric";
-        }
-        return null;
-    }
-
-    private boolean containsAny(String text, String... terms) {
-        for (String term : terms) {
-            if (StringUtils.hasText(term) && text.contains(term.toLowerCase(Locale.ROOT))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private List<RawSearchRef> loadRawSearchRefs(Collection<Long> rawIds) {
@@ -1101,6 +1284,8 @@ public class WikiPageService {
     }
 
     private record StructureMetadata(String sliceType,
+                                     String businessViewType,
+                                     String canonicalEntityType,
                                      String grade,
                                      String volume,
                                      String unit,
@@ -1108,9 +1293,12 @@ public class WikiPageService {
                                      String classicName,
                                      String source,
                                      List<String> materialTypes,
+                                     List<String> rulePackModules,
+                                     List<String> relationSemantics,
                                      List<String> routeTags) {
         private static StructureMetadata empty() {
-            return new StructureMetadata(null, null, null, null, null, null, null, List.of(), List.of());
+            return new StructureMetadata(null, null, null, null, null, null, null, null, null,
+                    List.of(), List.of(), List.of(), List.of());
         }
     }
 

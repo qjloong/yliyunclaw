@@ -227,6 +227,7 @@
         @toggle-thinking="handleToggleThinking"
         @approve="handleApprove"
         @deny="handleDeny"
+        @open-project-panel="openProjectChangesPanel"
       >
         <!-- 自定义模型提示空状态 -->
         <template v-if="showModelPrompt" #empty>
@@ -847,13 +848,19 @@ function toggleConvPanel() {
 }
 
 async function toggleProjectChangesPanel() {
-  projectChangesPanelOpen.value = !projectChangesPanelOpen.value
   if (projectChangesPanelOpen.value) {
-    headerMenuOpen.value = false
-    await loadHarnessRun()
-    void loadProjectInsight()
-    void loadContextRouter()
+    projectChangesPanelOpen.value = false
+    return
   }
+  await openProjectChangesPanel()
+}
+
+async function openProjectChangesPanel() {
+  projectChangesPanelOpen.value = true
+  headerMenuOpen.value = false
+  await loadHarnessRun()
+  void loadProjectInsight()
+  void loadContextRouter()
 }
 
 async function syncDesktopProjectEvidence(force = false) {

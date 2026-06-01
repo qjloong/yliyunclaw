@@ -1,5 +1,7 @@
 package vip.mate.wiki.dto;
 
+import java.util.List;
+
 /**
  * Controlled domain profile option exposed to Wiki UI / APIs.
  */
@@ -9,6 +11,7 @@ public record WikiDomainProfileOption(
         String description,
         String kbKind,
         String sourcePluginKey,
-        String capabilityPackId
+        String capabilityPackId,
+        List<WikiDomainProfileMaterialType> materialTypes
 ) {
 }

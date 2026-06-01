@@ -8,11 +8,11 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 专项状态 | `in_progress` |
+| 专项状态 | `done` |
 | 总控台账 | `docs/agent-harness-implementation.md` |
 | 当前实施文件 | `docs/teacher-agent/teacher-agent-v2-implementation-record.md` |
 | 需求来源 | `docs/teacher-agent/iusses.md`、`docs/teacher-agent/名著题内测.docx`、`docs/teacher-agent/初中名著出题要求.docx`、`docs/teacher-agent/初中文言文出题要求.docx`、`docs/teacher-agent/初中现代文出题要求.docx` |
-| 当前优先级 | T2-3-11 canonical source derived views：从稳定切片元数据继续下沉到教材 / 题型衍生视图 |
+| 当前优先级 | T2-6 材料处理分类与业务视图收口已完成；后续重点是基于真实课标、完整教材、名著、题型要求、样题、评分标准材料做端到端回归。 |
 | 当前原则 | 不新增独立总计划；不以 prompt-only 方式继续堆规则；规则、状态、展示、验收必须闭环；Teacher 规则最终优先级遵循“实例 > 模板 > 系统插件默认” |
 
 ## 0.1 2026-05-28 方案确认补充
@@ -482,6 +482,7 @@
 | 2026-05-27 | 回归修复 5 | done | `MessageBubble.vue`; `ProjectChangesPanel.vue`; `useMarkdownRenderer.ts`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `get_errors` 复核显示 `useMarkdownRenderer.ts` 无新增问题；`MessageBubble.vue`/`ProjectChangesPanel.vue` 当前诊断仍为工程基线 alias/导出噪声。 | 修复“点击生成文件导致会话跳转”体验：聊天区对 generated 链接统一新页策略，HTML 报表直接新页预览；Project 面板在 Web 端提供下载按钮并阻断会话跳转，桌面端仍走本地打开/定位流程。 |
 | 2026-05-27 | T2.5-5 组卷编排 | done | `TeacherIntentService.java`; `TeacherRulePackService.java`; `StateGraphPlanExecuteAgent.java`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | 代码路径复核通过：`paper_assembly` 意图识别、六类 RulePack 注入和组卷约束保持生效；本轮前端类型检查 `vue-tsc --noEmit` passed。 | 新增 `paper_assembly` 业务模块识别：“组卷/一套卷/综合卷/模拟卷”等请求进入组卷编排；正式生成 prompt 注入初中语文 6 类 RulePack，要求主 Agent 拆分模块、生成结构化题块并合并卷面、答案、采分点和来源。第一版不做复杂 subagent UI。 |
 | 2026-05-27 | T2.5-6 HTML 报表模板与高级工具曝光 | done | `mateclaw-server/src/main/java/vip/mate/tool/document/HtmlExportService.java`; `mateclaw-server/src/main/resources/messages.properties`; `mateclaw-server/src/main/resources/messages_en.properties`; `mateclaw-server/src/main/resources/db/migration/h2/V107__register_html_render_tools.sql`; `mateclaw-server/src/main/resources/db/migration/mysql/V107__register_html_render_tools.sql`; `mateclaw-ui/src/views/Tools.vue`; `mateclaw-ui/src/i18n/locales/zh-CN.ts`; `mateclaw-ui/src/i18n/locales/en-US.ts`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md`; `docs/teacher-agent/iusses.md` | `Push-Location "d:\project\ai\mateclaw-dev\mateclaw-ui"; .\node_modules\.bin\vue-tsc.cmd --noEmit; Pop-Location` passed；`git -C "d:\project\ai\mateclaw-dev" diff --check` passed（仅现有 CRLF 警告）。 | 维持系统 HTML 导出为默认稳定链路，同时升级默认模板视觉样式；3 个 HTML 导出工具补齐中文产品名、中文描述、图标和 `bindable=true`，便于在 Agent 配置中按需手动绑定；后台工具列表优先显示 `displayName`，避免继续暴露原始方法名；“纯模型直写 HTML”仅保留为用户显式要求时的高级路径。 |
+| 2026-06-01 | T2.5-7 Generated file path and preview hardening | done | `GeneratedFileController.java`; `GeneratedFileDiskTokenService.java`; `DocxExportService.java`; `HtmlExportService.java`; `WriteFileTool.java`; `DocxRenderTool.java`; `HtmlRenderTool.java`; `ConversationController.java`; `MessageBubble.vue`; `ProjectChangesPanel.vue`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；相关 Java 文件 targeted `javac` passed；`git diff --check` passed（仅 CRLF warning）。 | 修复 Word 导出 disk token 404/访问根不一致、HTML 报表链接被错误绝对域名污染、`/output` 在 Windows 下写到盘根目录、Review 自动展开和中间 Markdown 文件干扰展示的问题。生成文件默认落到 `output/workspace/<workspace>/<conversation>/...`，前端统一把 generated file API URL 归一到当前站点，生成文件任务优先展示真实 HTML/DOCX 产物。 |
 | 2026-05-27 | v2-2 回归优化计划 | done | `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md`; `docs/teacher-agent/iusses.md` | 已完成问题归类与计划同步，待实施。 | 针对 `iusses.md` 的 v2-2 问题新增下一阶段任务：模板更新与旧实例同步边界、Teacher Skill/RulePack 可见性隔离、RulePack 配置从模板页迁移到 Agent 实例配置优先、自优化草案独立化、默认列表隐藏已删除 Agent、首用槽位补全和“需要/确认”连续会话承接、Teacher 首页引导重写与回归验收。 |
 | 2026-05-29 | T2-2-7 v2-2 回归验收 | done | `Agents.vue`; `TeacherIntentService.java`; `StateGraphPlanExecuteAgent.java`; `TeacherAcceptanceService.java`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；TeacherAcceptanceService / TeacherIntentService / StateGraphPlanExecuteAgent targeted `javac` passed；`git diff --check` passed（仅现有 CRLF warning）。 | 完成五项回归验收：①旧实例同步：`syncTeacherHomeFromTemplate` 仅同步 `homeSubtitle`/`homeQuickStarts`，不覆盖 Prompt/知识库/RulePack/Skill；②Skill 隔离：`templateTeacherSkills` 对非 Teacher 模板返回空，`isTeacherTemplate` 按 `templateId`/`profileId`/`capabilityPackId`/`pluginKey` 多维度识别；③连续会话承接：`isTeacherPlanConfirmation` 覆盖“需要/好的/按这个/继续”等短回复，等待确认态直接走 `buildConfirmedTeacherExamPrompt`，历史 `teacher_exam_module` 恢复模块避免重置；④删除列表隔离：`showDeletedSection` 仅在 `activeFilter === 'deleted'` 时渲染；⑤无 KB 资料边界：`buildIdentityAnswer` 明确告知无绑定知识库时不会凭空编造，`buildConfirmedTeacherExamPrompt` 要求最新教材/课标/稿件缺失时必须在试题和来源依据中标注替代路径。 |
 | 2026-05-27 | T2-2-2 / T2-2-5 | done | `mateclaw-ui/src/views/Agents.vue`; `mateclaw-server/src/main/java/vip/mate/teacher/service/TeacherIntentService.java`; `mateclaw-server/src/main/java/vip/mate/agent/graph/plan/StateGraphPlanExecuteAgent.java`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；TeacherIntentService / TeacherTurnContext targeted `javac` passed；`git diff --check` passed（仅 CRLF warning）。 | 修复非 Teacher 模板显示 Teacher Skill 的问题：非 Teacher 模板 `templateTeacherSkills` 直接返回空，模板卡片外层也加 `isTeacherTemplate`；Teacher 模板识别补充新的初中语文能力包。增强连续会话承接：等待确认态下“需要/好的/按这个/继续”等短回复视为确认；方案修订时从历史 `teacher_exam_module` 恢复业务模块，避免用户补充“七年级上册”后重置为 unknown。 |
@@ -491,5 +492,144 @@
 | 2026-05-27 | T2-2-9 Teacher 内置插件化入口修正 | done | `mateclaw-ui/src/views/Plugins.vue`; `mateclaw-ui/src/views/layout/MainLayout.vue`; `mateclaw-ui/src/views/Agents.vue`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；`git diff --check` passed（仅 CRLF warning）。 | 撤销左侧工作空间通用导航中的 Teacher 运维入口，避免没有 Teacher Agent 或教育业务的工作空间出现业务菜单。插件页新增“系统内置插件”分组和“Teacher 教学命题插件”卡片，集中展示 RulePack、Teacher Skill、自优化草案、Harness 验收能力，并提供“配置插件”“绑定 Agent”入口；`/teacher-ops` 保留为管理员隐藏配置路由。Teacher Agent 实例规则 Tab 保留，并明确规则来自系统内置 Teacher 教学命题插件。 |
 | 2026-05-28 | T2-2-10 Teacher 插件能力包与学段学科扩展模型 | done | `mateclaw-server/src/main/java/vip/mate/agent/binding/model/AgentPluginBinding.java`; `mateclaw-server/src/main/java/vip/mate/agent/binding/repository/AgentPluginBindingMapper.java`; `mateclaw-server/src/main/java/vip/mate/agent/binding/service/AgentBindingService.java`; `mateclaw-server/src/main/java/vip/mate/agent/binding/controller/AgentBindingController.java`; `mateclaw-server/src/main/java/vip/mate/agent/service/TemplateService.java`; `mateclaw-server/src/main/java/vip/mate/agent/AgentGraphBuilder.java`; `mateclaw-server/src/main/java/vip/mate/teacher/service/TeacherIntentService.java`; `mateclaw-server/src/main/resources/db/schema.sql`; `mateclaw-server/src/main/resources/db/schema-mysql.sql`; `mateclaw-server/src/main/resources/db/migration/h2/V108__agent_plugin_binding.sql`; `mateclaw-server/src/main/resources/db/migration/mysql/V108__agent_plugin_binding.sql`; `mateclaw-ui/src/api/index.ts`; `mateclaw-ui/src/views/Agents.vue`; `mateclaw-ui/src/views/ChatConsole.vue`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | 已完成：目标文件 `get_errors` 无新增 Java 报错；`vue-tsc --project mateclaw-ui/tsconfig.json --noEmit` passed；`git diff --check` passed（仅现有 CRLF warning）。当前环境未提供 `mvn` 命令，服务端整包编译留待本地/CI Maven 环境补跑。 | Teacher 插件模型从“模板元数据闭环”推进到“实例级真实绑定闭环”：新增 `mate_agent_plugin` 表和 H2/MySQL `V108` 迁移；模板应用时将 `pluginBindings` 写入 Agent 绑定；旧 Teacher 实例自动回填 `builtin.teacher_exam` + 能力包默认绑定；运行时 Teacher 判断优先按 `pluginKey + capabilityPackId` 识别，前端 Teacher UI 识别同步优先读取插件绑定元数据，仍保留旧字段兼容。 |
 | 2026-05-28 | T2-2-10a~e 第二阶段推进 | done | `TeacherOps.vue`; `PluginAgentBindings.vue`; `Plugins.vue`; `Agents.vue`; `TeacherRulePackService.java`; `StateGraphPlanExecuteAgent.java`; `TeacherImprovementDraftService.java`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `vue-tsc --noEmit` passed；Java lint 无新增报错；`git diff --check` passed（仅现有 CRLF warning）。 | T2-2-10a: 统一插件页/二级页/Agent Tab 文案为“教学出题规则插件 / 初中语文出题规则”。T2-2-10b: 确认二级页面与返回链路已完备。T2-2-10c: 模板卡片增加插件绑定展示，`templateRulePack`/`templateTeacherSkills` 优先从 `pluginBindings` 解析。T2-2-10d: Agent 编辑页 Teacher 规则 Tab 新增插件绑定/解绑卡片，`saveAgent` 通过 `agentBindingApi.setPlugins` 持久化，`teacherPluginBinding` 兼容新旧 pluginKey。T2-2-10e: `effectiveRulePack(id, workspaceId)` 去 workspace 化，运行时直接委托无 workspace 版本；`StateGraphPlanExecuteAgent` 与 `TeacherImprovementDraftService` 同步移除 workspaceId 参数。 |
-| 2026-05-29 | T2-3-12 业务画像驱动的材料类型过滤与动态元数据表单 | planned | `WikiDomainProfileOption`; `WikiDomainProfileRegistryService`; `RawMaterialPanel.vue`; `types/index.ts`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | 待实施 | 将前端硬编码的 `teacherMaterialTypes`（`RawMaterialPanel.vue:469`）迁移到业务画像注册表 `WikiDomainProfileOption` 中。每个画像声明自己支持的材料类型列表及每种类型对应的元数据字段；前端根据当前 KB 绑定的 `domainProfileId` 动态渲染材料类型下拉和元数据表单。实现画像级材料类型隔离，避免后续扩展其他业务时所有 `business` KB 共享同一份庞大下拉列表。**图谱影响确认**：新增材料类型/页面不会破坏 `WikiRelationService` 关系计算；当前阶段维持通用 `pageType`，不扩展业务专属图谱节点类型。 |
+| 2026-05-29 | T2-3-12 业务画像驱动的材料类型过滤与动态元数据表单 | done | `WikiDomainProfileMetadataField`; `WikiDomainProfileMaterialType`; `WikiDomainProfileOption`; `WikiDomainProfileRegistryService`; `RawMaterialPanel.vue`; `types/index.ts`; `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；Java lint 无新增错误；`git diff --check` passed。 | 将前端硬编码的 `teacherMaterialTypes`（`RawMaterialPanel.vue:469`）迁移到业务画像注册表 `WikiDomainProfileOption` 中。每个画像声明自己支持的材料类型列表及每种类型对应的元数据字段；前端根据当前 KB 绑定的 `domainProfileId` 动态渲染材料类型下拉和元数据表单。实现画像级材料类型隔离，避免后续扩展其他业务时所有 `business` KB 共享同一份庞大下拉列表。**图谱影响确认**：新增材料类型/页面不会破坏 `WikiRelationService` 关系计算；当前阶段维持通用 `pageType`，不扩展业务专属图谱节点类型。 |
 | — | 【后续优化】Wiki 图谱业务语义着色 | future | `WikiGraphView.vue`; `WikiGraphToolbar.vue`; `batch-create-system.txt`; `WikiPageService.java` | — | 当前图谱按通用 `pageType`（`concept`/`person`/`event` 等）着色，无法区分教材作者与名著人物、文体知识与课标要求等业务语义。后续若需在图谱可视化中按业务类型过滤/着色，可将 `purposeHint` 或新增 `businessPageType` 下沉到图谱节点，与通用 `pageType` 并存。 |
+
+## 7. 第三阶段：知识库智能化识别与精准检索优化（T2-4）
+
+> **核心约束**：知识库只有绑定了特定业务画像（`domainProfileId != null`）时，才按业务规则及分类自动识别和标记；通用知识库（`kbKind=general` 或 `domainProfileId` 为空）保持现有自由处理逻辑，不触发业务分类器和业务模块标记。
+
+### 阶段 T2-4-0：方案冻结与实施范围
+
+| 字段 | 内容 |
+| --- | --- |
+| 状态 | `done` |
+| 目标 | 按 P0→P1→P2 优先级推进知识库智能化识别、检索精准映射、材料覆盖预检与扩展架构。 |
+| 需求 | P0：材料类型自动识别 + 结构标签自动提取；出题意图到资料类型的精准映射。P1：页面级 `businessModules` 标签 + 教材内容索引；材料覆盖度预检工具；画像注册表插件化。P2（暂缓）：统一业务配置面板。 |
+| 后端修改 | `WikiMaterialTypeClassifier.java`; `WikiStructureExtractor.java`; `MaterialTypeClassifyResult.java`; `WikiBusinessModuleDeriver.java`; `WikiIntentMaterialMapper.java`; `WikiIntentFilter.java`; `WikiMaterialCoverageReport.java`; `WikiMaterialCoverageService.java`; `WikiDomainProfileLoader.java`; `WikiRawMaterialService.java`; `WikiProcessingService.java`; `WikiPageService.java`; `HybridRetriever.java`; `WikiTool.java`; `WikiDomainProfileRegistryService.java`; `TeacherIntentService.java`; `StateGraphPlanExecuteAgent.java`; `teacher-exam-assistant.json` |
+| 前端修改 | `RawMaterialPanel.vue`; `useWikiStore.ts` |
+| 文档修改 | `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` |
+| 验收测试 | `vue-tsc --noEmit` passed；Java 编译经 7 轮逐错修复后无新增错误；`teacher-exam-assistant.json` JSON 格式验证 passed。 |
+| 遗留问题 | ① 分类器 LLM 依赖默认 chat 模型；② `contentsIndex` 规则提取精度有限；③ 材料覆盖度仅统计数量未评估质量；④ 画像插件化仅扫描 classpath。 |
+
+## 8. 第四阶段：材料处理精度优化（T2-5）
+
+> **核心目标**：修复 Wiki 处理管线对不同材料类型的提取精度问题，补充删除/重处理的级联一致性，建立材料类型→提取维度→规则包的完整映射体系。
+
+### 阶段 T2-5-0：方案冻结与实施范围
+
+| 字段 | 内容 |
+| --- | --- |
+| 状态 | `done` |
+| 目标 | 按 P0→P1→P2 优先级优化材料处理精度、修复数据一致性、建立各材料类型专用提取维度。 |
+| 需求来源 | ① 名著资料人物切片不准、结构切片混乱、章节提取不完整；② 课标资料仅有简单摘要未细分；③ 删除/重处理联动缺失；④ 各类材料缺乏专用提取维度。 |
+| 核心原则 | 通用维度（entity/event/concept/summary）对所有类型保留；各 materialType 新增专用维度，通过 `WikiStructureExtractor` 规则提取 + `WikiProcessingService` prompt 精准引导 LLM 完成。 |
+| 后端修改 | `WikiStructureExtractor.java`; `WikiProcessingService.java`; `WikiRawMaterialService.java`; `WikiPageService.java`; `WikiKnowledgeBaseService.java`; `WikiController.java`; `WikiChunkService.java` |
+| 前端修改 | `RawMaterialPanel.vue` |
+| 文档修改 | `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` |
+
+### 第四阶段任务清单
+
+| Task | Status | Goal | Planned files | Acceptance |
+| --- | --- | --- | --- | --- |
+| T2-5-1 | `done` | **P0** `classic_manuscript` 名著材料处理精度优化：人物提取（字典热启动 + 规则自动抽取 + LLM确认） + 回目章节切分 + 名段提取。 | `WikiStructureExtractor.java`; `WikiProcessingService.java` | 上传名著后按回目/章节自动切页；人物切片通过三级策略提取（已知名著字典直接匹配，未知名著用规则 `XXX道/说/曰` 模式+高频实体自动抽取，低置信度时LLM确认），不再误提取非人物实体；《》标记段落自动生成名段赏析切片。 |
+| T2-5-2 | `done` | **P0** `curriculum_standard` 课标材料处理精度优化：按课标篇章结构强制切片（21个维度）。 | `WikiStructureExtractor.java`; `WikiProcessingService.java` | 课标上传后按课程目标/内容/学业质量/实施/附录五大篇章生成独立页面，每页对应该篇章的细分维度（如核心素养、学习任务群、学业质量描述等），不再生成简单全局摘要。 |
+| T2-5-3 | `done` | **P0** `question_rule` 题型要求处理精度优化：按题型/难度/考点/禁止项拆分。 | `WikiStructureExtractor.java`; `WikiProcessingService.java` | 题型要求上传后自动拆分为题型规则、难度规则、考点覆盖规则、禁止项等独立页面；每项与对应 RulePack 可交叉引用。 |
+| T2-5-4 | `done` | **P0** `sample_question` 样题处理精度优化：按题号独立成页，提取题干/答案/采分点/材料来源。 | `WikiStructureExtractor.java`; `WikiProcessingService.java` | 样题上传后每题独立成页，页面包含题号/题型/题干/答案/采分点/来源，可按题号批量引用。 |
+| T2-5-5 | `done` | **P0** `answer_rubric` 评分标准处理精度优化：按评分维度+等级分层。 | `WikiStructureExtractor.java`; `WikiProcessingService.java` | 评分标准上传后按维度拆分（内容/表达/结构），每个维度按等级（A/B/C/D）描述独立存储；常见错误分析作为附属页。 |
+| T2-5-6 | `done` | **P1** 删除级联补齐：删除 Raw 级联独占 Page；删除 KB 级联 raw/page/chunk/embedding。 | `WikiRawMaterialService.java`; `WikiPageService.java`; `WikiKnowledgeBaseService.java`; `WikiChunkService.java` | 删除原始材料后，仅被该 raw 引用的独占页面同步逻辑删除，非独占页面移除该 rawId 引用；删除知识库级联所有子资源。 |
+| T2-5-7 | `done` | **P1** 重处理修复：前端默认传 force=true；Controller 支持清 lastProcessedHash。 | `RawMaterialPanel.vue`; `WikiController.java` | 前端 re处理按钮默认走 force=true 路径；Controller 先清 lastProcessedHash 再触发异步处理，确保不会因 hash 不变短路。 |
+| T2-5-8 | `done` | **P1** 删除确认对话框：前端 RawMaterialPanel 增加二次确认。 | `RawMaterialPanel.vue` | 删除原始材料时弹出确认弹窗，告知将级联删除关联的 Wiki 页面。 |
+| T2-5-9 | `done` | **P2** `contentsIndex` 增强：规则提取失效时 LLM 降级补全。 | `WikiStructureExtractor.java` | 规则提取 chapters 为空的教材自动触发 LLM 补全；LLM 仅处理目录部分文本（<3000字符），不处理全文。 |
+| T2-5-10 | `done` | **P2** `textbook_latest` 教材章节与 businessModules 对齐。 | `WikiStructureExtractor.java`; `WikiBusinessModuleDeriver.java` | 教材章节目录提取的 `businessModules` 与页面元数据的 `businessModules` 保持一致，确保检索路由时不出现偏差。 |
+
+### 材料类型→提取维度完整映射（T2-5 阶段建成）
+
+| 材料类型 | 通用维度（保留） | 专用维度（新增） |
+|----------|----------------|-----------------|
+| `classic_manuscript` | entity / event / concept / summary | `chapter_slice`（回目章节）/ `character_slice`（人物词典匹配）/ `plot_slice`（情节拆分）/ `theme_slice`（主旨分析）/ `excerpt`（名段赏析）/ `language_slice`（语言风格） |
+| `curriculum_standard` | entity / concept / summary | `overview`（课程性质）/ `core_competency`（核心素养）/ `overall_goal`（总目标）/ `grade_target`（学段要求）/ `task_group_basic`（基础任务群）/ `task_group_dev_1~3`（发展任务群）/ `task_group_ext_1~2`（拓展任务群）/ `quality_description`（学业质量）/ `evaluation_advice`（评价建议）/ `teaching_advice`（教学建议）/ `appendix_poetry`（必背篇目）/ `appendix_books`（推荐书目） |
+| `question_rule` | concept / summary | `question_type_rule`（题型规则）/ `difficulty_rule`（难度规则）/ `coverage_rule`（考点覆盖）/ `scoring_rule`（评分标准）/ `material_rule`（材料要求）/ `forbidden_rule`（禁止项） |
+| `sample_question` | concept / summary | `question_item`（题号切页）/ `answer_item`（参考答案）/ `rubric_item`（采分点）/ `source_item`（材料来源）/ `analysis_item`（命题分析） |
+| `answer_rubric` | concept / summary | `rubric_dimension`（评分维度）/ `grade_level`（等级描述）/ `score_bracket`（分值映射）/ `common_error`（常见错误） |
+| `textbook_latest` | entity / event / concept / summary | `unit_overview`（单元导语）/ `chapter_slice`（课文章节）/ `knowledge_point`（知识点）/ `classical_slice`（文言文专项）/ `poetry_slice`（古诗词专项）/ `writing_task`（写作训练） |
+
+### 关键人物词典（WikiStructureExtractor 新增常量 — 热启动优化，非硬性限制）
+
+> **策略说明**：人物词典仅作为 **课标12部名著** 的 **O(1) 热启动优化**，不限制提取范围。对于词典未覆盖的名著（如红岩、儒林外史等扩展读物），自动降级为 **规则提取 + LLM 确认** 的通用人物名抽取链路。
+>
+> **三级提取策略**：
+> 1. **词典命中**（已知名著）→ 直接使用，成本最低
+> 2. **规则自动提取**（未知名著）→ 引述模式 `XXX道/说/曰/喝道/笑道` + 高频命名实体 + 共指消解，按出现频次 ≥3 次过滤
+> 3. **LLM确认兜底**（低置信度）→ 候选人物<3 个或规则置信度低时，将文本摘要发给 LLM 确认
+
+| 学段 | 名著 | 词典范围（热启动匹配） |
+|------|------|---------|
+| 七上 | 朝花夕拾 | 鲁迅 / 长妈妈 / 藤野先生 / 范爱农 / 父亲 / 衍太太 / 寿镜吾 |
+| 七上 | 西游记 | 孙悟空 / 猪八戒 / 唐僧 / 沙僧 / 如来 / 观音 / 白骨精 / 红孩儿 / 牛魔王 / 铁扇公主 / 玉皇大帝 / 太白金星 / 二郎神 / 哪吒 ...（约30人） |
+| 七下 | 骆驼祥子 | 祥子 / 虎妞 / 刘四爷 / 小福子 / 曹先生 / 高妈 / 二强子 |
+| 七下 | 海底两万里 | 尼摩船长 / 阿龙纳斯 / 康塞尔 / 尼德·兰 |
+| 八上 | 红星照耀中国 | 毛泽东 / 周恩来 / 朱德 / 彭德怀 / 贺龙 / 徐海东 / 斯诺 |
+| 八上 | 昆虫记 | 法布尔 / 蝉 / 蜜蜂 / 螳螂 / 蚂蚁 / 萤火虫 / 圣甲虫 / 蜘蛛 |
+| 八下 | 钢铁是怎样炼成的 | 保尔·柯察金 / 冬妮娅 / 朱赫来 / 丽达 / 达雅 / 谢廖沙 |
+| 八下 | 经典常谈 | 朱自清 / 孔子 / 孟子 / 老子 / 庄子 / 屈原 / 司马迁 / 班固 / 许慎 |
+| 九上 | 水浒传 | 宋江 / 林冲 / 武松 / 鲁智深 / 李逵 / 吴用 / 杨志 / 卢俊义 / 燕青 / 花荣 / 张顺 / 戴宗 / 孙二娘 ...（约30人） |
+| 九上 | 唐诗三百首 | 李白 / 杜甫 / 白居易 / 王维 / 孟浩然 / 王昌龄 / 李商隐 / 杜牧 / 苏轼 / 辛弃疾 / 李清照 / 陆游 |
+| 九下 | 简·爱 | 简·爱 / 罗切斯特 / 海伦·彭斯 / 圣约翰 / 里德太太 |
+| 九下 | 儒林外史 | **规则提取+LLM确认**（课标新增，词典暂未覆盖） |
+| **扩展** | 红岩 / 其他 | **规则提取+LLM确认**（非课标12部，走通用提取链路） |
+
+## 8.1 第五阶段：材料处理分类与业务视图收口（T2-6）
+
+> **核心目标**：在统一 Wiki/KB 架构内明确“通用 Wiki 抽取层 + Teacher 业务规则层”的边界。通用图谱继续承载人物、地点、事件、实体、概念、知识点等节点；Teacher 业务层只通过 recipe、`sliceType`、`businessViewType`、`businessModules`、RulePack 和关系语义影响材料处理、检索和视图展示。
+
+### 阶段 T2-6-0：台账同步与实施范围
+
+| 字段 | 内容 |
+| --- | --- |
+| 状态 | `in_progress` |
+| 目标 | 先同步总控台账和本实施记录，再开始代码落地，避免 T2-6 与已完成的 T2-3/T2-5 状态混淆。 |
+| 需求来源 | ① 上传《西游记》后单元/章节/结构视图边界混乱；② 课标和完整教材需要不同处理策略；③ 题型规则、样题、评分标准应服务 RulePack 和复核，不应替代事实材料；④ 图谱应保留通用模型，不另建 Teacher 封闭图谱。 |
+| 核心原则 | 不拆 Teacher 专属知识库；所有业务资料进入统一 Wiki 管线；用 `materialType` recipe 明确通用抽取、业务切片、Teacher RulePack 消费和关系语义。 |
+| 后端修改 | `WikiMaterialProcessingRecipe.java`; `WikiMaterialProcessingRouter.java`; `WikiPageService.java`; `WikiProcessingService.java`; `HybridRetriever.java`; `WikiTool.java`; `TeacherIntentService.java`; `WikiRelationService.java` |
+| 前端修改 | `Wiki/index.vue` / 图谱标签仅在需要时最小调整 |
+| 文档修改 | `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` |
+
+### 第五阶段任务清单
+
+| Task | Status | Goal | Planned files | Acceptance |
+| --- | --- | --- | --- | --- |
+| T2-6-1 | `done` | 增加材料处理 recipe/router，把六类核心 `materialType` 映射到通用实体类型、业务切片、RulePack 服务范围和关系语义。 | `WikiMaterialProcessingRecipe.java`; `WikiMaterialProcessingRouter.java`; `WikiPageService.java`; `WikiProcessingService.java` | 页面结构元数据写入 `businessViewType`、`canonicalEntityType`、`relationSemantics`、`rulePackModules` 等字段；课标、教材、名著、题型/样题/评分标准处理边界可解释。 |
+| T2-6-2 | `done` | 修正 derived views 分组和命名，不再把名著、课标、教材、题型资料混入默认“结构切片视图”。 | `WikiPageService.java`; `WikiDerivedView.java`; `Wiki/index.vue` | 名著不生成单元视图；完整教材才生成册别/单元/课文视图；课标生成课标条款/评价导向视图；低置信兜底显示“未归类业务切片”。 |
+| T2-6-3 | `done` | Teacher Agent 按业务模块和 RulePack 消费材料，题型规则/样题/评分标准作为规则与复核资料。 | `TeacherIntentService.java`; `WikiIntentMaterialMapper.java`; `HybridRetriever.java`; `WikiTool.java` | 名著、文言文、现代文、古诗词、基础知识、写作按对应 RulePack 检索；组卷可多 RulePack；课标只作命题依据，不替代文本事实。 |
+| T2-6-4 | `done` | 增强图谱关系语义，同时保持通用 Wiki 图谱模型。 | `WikiRelationService.java`; relation signal metadata; graph UI labels if needed | 图谱节点仍使用通用 page/entity 类型；Teacher 业务信息作为属性/权重；关系可表达 `constrains`、`supports`、`exemplifies`、`scores`、`grounds`。 |
+| T2-6-5 | `done` | 回归验证六类材料和 Teacher 出题链路。 | tests / targeted compile / JSON validation | `vue-tsc --noEmit` passed；scoped `git diff --check` passed；`WikiMaterialProcessingRecipe` / `WikiMaterialProcessingRouter` targeted javac passed；`WikiKnowledgeBaseService` 的 Agent 绑定字段与启动循环依赖已修复；当前相关 Java 定向编译通过。 |
+| T2-6-6 | `done` | 修复名著测试中的重复派生视图与强制重处理语义。 | `WikiPageService.java`; `WikiRawMaterialService.java`; `WikiController.java`; `RawMaterialPanel.vue` | 名著章节视图按材料/作品和 sliceType 合并；`force=true` 重新处理先清理该 raw 关联的 AI 页面、引用、关系缓存和分片，再重新入队；前端触发后刷新原材料、页面和派生视图。人工维护页和受保护页保留，章节/阶段抽取仍需要目录、置信度和人工校正继续提升。 |
+
+ |
+
+### 第三阶段任务清单
+
+| Task | Status | Goal | Planned files | Acceptance |
+| --- | --- | --- | --- | --- |
+| T2-4-1 | `done` | **P0** 实现材料类型自动识别器与结构提取器（后端分类器核心）。支持规则兜底 + LLM 轻量推断；仅对绑定了 `domainProfileId` 的业务 KB 触发。 | `WikiMaterialTypeClassifier.java`; `WikiStructureExtractor.java`; `MaterialTypeClassifyResult.java`; `WikiRawMaterialService.java` | 上传教材/课标/名著/样题时，系统能自动推断 `materialType` 和结构字段；通用 KB 不触发分类器；分类结果包含置信度（HIGH/MEDIUM/LOW）。 |
+| T2-4-2 | `done` | **P0** 改造上传管线：接入自动识别，前端展示识别结果与确认交互。 | `WikiRawMaterialService.java`; `WikiRawMaterialEntity.java`; `RawMaterialPanel.vue`; `useWikiStore.ts` | 业务 KB 上传资料后，后端自动调用分类器；返回结果携带 `autoDetected`/`autoDetectConfidence`/`autoDetectReason` 三个 transient 字段；前端列表为自动识别条目展示 "自动" 标记（HIGH=绿色/MEDIUM=黄色/LOW=红色）；LOW 置信度时业务类型标签同步高亮警示。 |
+| T2-4-3 | `done` | **P0** 增强检索层：出题意图映射到资料类型精准过滤与加权。 | `HybridRetriever.java`; `WikiIntentMaterialMapper.java`; `TeacherIntentService.java`; `WikiIntentFilter.java` | `HybridRetriever.search`/`searchChunks` 新增 `WikiIntentFilter` 重载；`pageIntentBoost` 为匹配意图优先材料类型的页面额外加分（+0.35/来源，上限1.0）；`TeacherIntentService` 提供 `mapBusinessModuleToPreferredMaterialTypes` 映射。 |
+| T2-4-4 | `done` | **P0** 扩展 WikiTool：支持意图上下文参数，Agent 调用时自动传递业务模块。 | `WikiTool.java`; `WikiIntentMaterialMapper.java`; `StateGraphPlanExecuteAgent.java` | `wiki_search_pages`/`wiki_semantic_search` 新增可选 `businessModule` 参数；`WikiTool` 注入 `WikiIntentMaterialMapper` 自动解析 preferred types；`StateGraphPlanExecuteAgent` 在正式出题 prompt 中明确要求 LLM 传递 `businessModule` 参数。 |
+| T2-4-5 | `done` | **P1** 扩展页面元数据：处理管线自动为教材页面打上 `businessModules` 标签。 | `WikiBusinessModuleDeriver.java`; `WikiPageService.java` | 新增 `WikiBusinessModuleDeriver` 组件，基于标题、purposeHint 和来源材料类型推导 `businessModules`；`buildStructureMetadataJson` 自动写入 `businessModules` 数组；默认支持初中语文 6 类模块推导规则；后续学科可通过 `registerDeriver` 扩展。 |
+| T2-4-6 | `done` | **P1** 教材内容索引：原材料增加 `contentsIndex`，支持混合内容精准路由。 | `WikiStructureExtractor.java`; `WikiProcessingService.java`; `WikiRawMaterialService.java` | `WikiStructureExtractor.extractContentsIndex` 基于规则从教材文本提取目录索引（单元→章节→businessModules）；`WikiProcessingService` 在 textbook_latest 处理完成后自动生成 contentsIndex 并保存到 `materialMetadataJson`；不拆分多条 raw material。 |
+| T2-4-7 | `done` | **P1** 新增材料覆盖度预检工具，Plan 阶段判断材料是否充足。 | `WikiMaterialCoverageService.java`; `WikiMaterialCoverageReport.java`; `WikiTool.java` | `wiki_check_material_coverage` 工具扫描 Agent 绑定的业务 KB 中各 `businessModule` 的页面数和原材料数；返回 0.0-1.0 覆盖度评分和缺失提示；Agent 可在正式出题前判断材料是否充足。 |
+| T2-4-8 | `done` | **P1** 画像注册表插件化：支持能力包 JSON 声明式贡献画像配置。 | `WikiDomainProfileRegistryService.java`; `WikiDomainProfileLoader.java`; `teacher-exam-assistant.json` | `WikiDomainProfileRegistryService` 新增 `registerProfile` 方法和内部可变 `registryProfiles` 列表；`WikiDomainProfileLoader` 在 `@PostConstruct` 时扫描 `classpath:templates/*.json` 和 `skills/**/template.json`，解析 `capabilityPack.wikiDomainProfile` 并注册；`teacher-exam-assistant.json` 已补充 `wikiDomainProfile` 完整声明作为样例。 |
+
+### 阶段 T2-4 执行总结
+
+| 字段 | 内容 |
+| --- | --- |
+| 状态 | `done` |
+| 目标 | 按 P0→P1 优先级推进知识库智能化识别、检索精准映射、材料覆盖预检与扩展架构。 |
+| 核心约束 | 知识库只有绑定了特定业务画像（`domainProfileId != null`）时，才按业务规则及分类自动识别和标记；通用 KB 保持现有自由处理逻辑。 |
+| 后端修改 | `WikiMaterialTypeClassifier.java`; `WikiStructureExtractor.java`; `MaterialTypeClassifyResult.java`; `WikiBusinessModuleDeriver.java`; `WikiIntentMaterialMapper.java`; `WikiIntentFilter.java`; `WikiMaterialCoverageReport.java`; `WikiMaterialCoverageService.java`; `WikiDomainProfileLoader.java`; `WikiRawMaterialService.java`; `WikiProcessingService.java`; `WikiPageService.java`; `HybridRetriever.java`; `WikiTool.java`; `WikiDomainProfileRegistryService.java`; `TeacherIntentService.java`; `StateGraphPlanExecuteAgent.java`; `teacher-exam-assistant.json` |
+| 前端修改 | `RawMaterialPanel.vue`; `useWikiStore.ts` |
+| 文档修改 | `docs/agent-harness-implementation.md`; `docs/teacher-agent/teacher-agent-v2-implementation-record.md` |
+| 验收测试 | `pnpm --dir mateclaw-ui exec vue-tsc --noEmit` passed；新增/修改 Java 文件 linter 无新增错误；`teacher-exam-assistant.json` PowerShell `ConvertFrom-Json` passed。 |
+| 遗留问题 | ① 分类器 LLM 路径依赖默认 chat 模型可用性；② `contentsIndex` 规则提取对复杂教材目录可能不够精准，后续可升级为 LLM 提取；③ `wiki_check_material_coverage` 当前仅统计页面/原材料数量，未评估内容质量；④ 画像注册表插件化目前只扫描 classpath，后续可扩展为扫描插件 jar / 数据库配置。 |

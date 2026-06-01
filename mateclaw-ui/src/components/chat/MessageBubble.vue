@@ -23,11 +23,32 @@
           <div class="segments-view">
             <!-- 计划步骤面板（始终显示在 segments 之上） -->
             <PlanStepsPanel v-if="planMeta" :plan="planMeta" :is-generating="isGenerating" />
-            <template v-for="seg in segments">
+            <template v-for="seg in displaySegments">
               <ThinkingSegment v-if="seg.type === 'thinking'" :key="seg.id" :segment="seg" />
               <ToolCallSegment v-if="seg.type === 'tool_call'" :key="seg.id" :segment="seg" />
               <ContentSegment v-if="seg.type === 'content'" :key="seg.id" :segment="seg" :show-cursor="showCursor && seg.status === 'running'" />
             </template>
+            <div v-if="generatedFileLinks.length" class="generated-file-links">
+              <div
+                v-for="file in generatedFileLinks"
+                :key="`segmented-${file.url}`"
+                class="generated-file-link"
+              >
+                <el-icon class="generated-file-link__icon"><Document /></el-icon>
+                <span class="generated-file-link__name">{{ file.name }}</span>
+                <button
+                  v-if="file.previewUrl"
+                  class="generated-file-link__action"
+                  type="button"
+                  @click.stop.prevent="previewGeneratedFile(file)"
+                >预览</button>
+                <button
+                  class="generated-file-link__action"
+                  type="button"
+                  @click.stop.prevent="downloadGeneratedFile(file)"
+                >下载</button>
+              </div>
+            </div>
           </div>
         </template>
 
@@ -223,20 +244,17 @@
               >
                 <el-icon class="generated-file-link__icon"><Document /></el-icon>
                 <span class="generated-file-link__name">{{ file.name }}</span>
-                <a
+                <button
                   v-if="file.previewUrl"
                   class="generated-file-link__action"
-                  :href="file.previewUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >预览</a>
-                <a
+                  type="button"
+                  @click.stop.prevent="previewGeneratedFile(file)"
+                >预览</button>
+                <button
                   class="generated-file-link__action"
-                  :href="file.url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  :download="file.name"
-                >下载</a>
+                  type="button"
+                  @click.stop.prevent="downloadGeneratedFile(file)"
+                >下载</button>
               </div>
             </div>
             <TypingCursor v-if="showCursor" :typing="isGenerating" />
@@ -294,17 +312,17 @@
 
           <Transition name="thinking-slide">
             <div v-if="reviewExpanded" class="review-content">
-              <div v-if="reviewSummary?.files?.length" class="review-block">
+              <div v-if="visibleReviewFiles.length" class="review-block">
                 <div class="review-block__title">{{ t('chat.reviewChangedFiles') }}</div>
                 <div class="review-file-list">
-                  <details v-for="file in reviewSummary.files" :key="`review-${file.path}`" class="review-file-row">
-                    <summary class="review-file-row__summary">
+                  <div v-for="file in visibleReviewFiles" :key="`review-${file.path}`" class="review-file-row review-file-row--actionable">
+                    <button class="review-file-row__summary review-file-row__summary--button" type="button" @click="openProjectPanelFromReview()">
                       <span class="review-file-item__badge" :class="`is-${file.changeType}`">
                         {{ getChangeTypeLabel(file.changeType) }}
                       </span>
                       <span class="review-file-row__path">{{ normalizeFilePath(file.path) }}</span>
                       <span class="review-file-row__meta-inline">{{ getReviewFileInlineMeta(file) }}</span>
-                    </summary>
+                    </button>
                     <div class="review-file-row__body">
                       <div class="review-file-item__meta">
                         <span>{{ getToolLabel(file.toolName) }}</span>
@@ -313,30 +331,23 @@
                       </div>
                       <div v-if="file.summary" class="review-file-item__summary">{{ file.summary }}</div>
                     </div>
-                  </details>
+                  </div>
                 </div>
               </div>
 
               <div v-if="generatedFileLinks.length" class="review-block">
                 <div class="review-block__title">本次生成文件</div>
                 <div class="review-file-list review-file-list--generated">
-                  <div v-for="file in generatedFileLinks" :key="`generated-${file.url}`" class="review-generated-row">
+                  <button
+                    v-for="file in generatedFileLinks"
+                    :key="`generated-${file.url}`"
+                    class="review-generated-row review-generated-row--button"
+                    type="button"
+                    @click="openProjectPanelFromReview()"
+                  >
                     <span class="review-generated-row__name">{{ file.name }}</span>
-                    <a
-                      v-if="file.previewUrl"
-                      class="review-generated-row__action"
-                      :href="file.previewUrl"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >预览</a>
-                    <a
-                      class="review-generated-row__action"
-                      :href="file.url"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      :download="file.name"
-                    >下载</a>
-                  </div>
+                    <span class="review-generated-row__action">查看 Project</span>
+                  </button>
                 </div>
               </div>
 
@@ -551,6 +562,7 @@ const emit = defineEmits<{
   'toggle-thinking': [expanded: boolean]
   approve: [pendingId: string]
   deny: [pendingId: string]
+  'open-project-panel': []
 }>()
 
 // --- 基础计算 ---
@@ -1032,12 +1044,83 @@ function splitTeacherAnswerRubricContent(content: string) {
   }
 }
 
-function normalizeTeacherSectionContent(value: unknown) {
+function stripTeacherAuxiliaryLabels(text: string) {
+  let result = String(text || '').trim()
+  if (!result) return ''
+  const labelPattern = /^([【\[][^【\]】\n]{1,32}(?:基础|提升|拓展|情节|人物|细节|主旨|分析|理解|辨识|考点|难度|来源依据|命题|规则|审核)[^【\]】\n]{0,32}[】\]]\s*)+/
+  result = result.replace(labelPattern, '').trim()
+  result = result.replace(/^(?:题型|考点|难度|来源依据)[：:]\s*/i, '').trim()
+  return result
+}
+
+function normalizeTeacherVisibleText(value: unknown) {
+  return stripTeacherAuxiliaryLabels(String(value || '').trim())
+}
+
+function formatTeacherQuestionItem(value: unknown, index: number) {
+  if (typeof value === 'string') return normalizeTeacherVisibleText(value)
+  if (!value || typeof value !== 'object') return normalizeTeacherVisibleText(String(value || ''))
+  const item = value as Record<string, unknown>
+  const no = teacherFieldValue(item, ['questionNo', 'number', 'index', 'id']) || String(index + 1)
+  const title = normalizeTeacherVisibleText(teacherFieldValue(item, ['title']))
+  const stem = normalizeTeacherVisibleText(teacherFieldValue(item, ['stem', 'question', 'content', 'text', 'prompt']))
+  const material = normalizeTeacherVisibleText(teacherFieldValue(item, ['material', 'passage']))
+  const options = teacherFieldValue(item, ['options', 'choices'])
+  const score = teacherFieldValue(item, ['score', 'pointsValue', 'pointValue'])
+  const lines: string[] = [`### 第 ${no} 题${title ? `：${title}` : ''}${score ? `（${score}分）` : ''}`]
+  if (material) lines.push(`**材料**：${material}`)
+  if (stem) lines.push(stem)
+  if (options) lines.push(`**选项**：${options}`)
+  return lines.join('\n').trim()
+}
+
+function formatTeacherAnswerItem(value: unknown, index: number) {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object') return String(value || '').trim()
+  const item = value as Record<string, unknown>
+  const no = teacherFieldValue(item, ['questionNo', 'number', 'index', 'id']) || String(index + 1)
+  const answer = teacherFieldValue(item, ['answer', 'referenceAnswer', 'content', 'text'])
+  if (!answer) return ''
+  return [`### 第 ${no} 题`, answer].join('\n').trim()
+}
+
+function formatTeacherRubricItem(value: unknown, index: number) {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object') return String(value || '').trim()
+  const item = value as Record<string, unknown>
+  const no = teacherFieldValue(item, ['questionNo', 'number', 'index', 'id']) || String(index + 1)
+  const rubric = teacherFieldValue(item, ['rubric', 'scoringPoints', 'points', 'criteria', 'content', 'text'])
+  if (!rubric) return ''
+  return [`### 第 ${no} 题`, rubric].join('\n').trim()
+}
+
+function formatTeacherSourceItem(value: unknown, index: number) {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object') return String(value || '').trim()
+  const item = value as Record<string, unknown>
+  const no = teacherFieldValue(item, ['questionNo', 'number', 'index', 'id']) || ''
+  const source = teacherFieldValue(item, ['source', 'sources', 'basis', 'content', 'text'])
+  if (!source) return ''
+  return no ? [`### 第 ${no} 题`, source].join('\n').trim() : source.trim()
+}
+
+function normalizeTeacherSectionContent(value: unknown, sectionKey?: TeacherResultSection['key']) {
   if (Array.isArray(value)) {
-    return value.map((item, index) => formatTeacherStructuredItem(item, index)).filter(Boolean).join('\n\n')
+    const renderer = sectionKey === 'questions'
+      ? formatTeacherQuestionItem
+      : sectionKey === 'answers'
+        ? formatTeacherAnswerItem
+        : sectionKey === 'scoringRubric'
+          ? formatTeacherRubricItem
+          : sectionKey === 'sources'
+            ? formatTeacherSourceItem
+            : formatTeacherStructuredItem
+    return value.map((item, index) => renderer(item, index)).filter(Boolean).join('\n\n')
   }
   if (value && typeof value === 'object') return formatTeacherStructuredObject(value as Record<string, unknown>)
-  return String(value || '').trim()
+  return sectionKey === 'questions'
+    ? normalizeTeacherVisibleText(String(value || '').trim())
+    : String(value || '').trim()
 }
 
 function teacherFieldValue(item: Record<string, unknown>, keys: string[]) {
@@ -1108,7 +1191,6 @@ function formatTeacherStructuredItem(value: unknown, index: number) {
   if (options) lines.push(`**选项**：${options}`)
   if (answer) lines.push(`**参考答案**：${answer}`)
   if (rubric) lines.push(`**采分点**：${rubric}`)
-  if (source) lines.push(`**来源依据**：${source}`)
 
   const consumed = new Set([
     'questionNo', 'number', 'index', 'id', 'title', 'stem', 'question', 'content', 'text', 'prompt',
@@ -1139,8 +1221,8 @@ function parseTeacherJsonSections(text: string): TeacherResultSection[] {
     const parsed = JSON.parse(candidate.slice(start, end + 1))
     const sections: TeacherResultSection[] = []
     if (parsed?.type === 'teacher_exam_result_v2') {
-      const paper = normalizeTeacherSectionContent(parsed.paper)
-      const questions = normalizeTeacherSectionContent(parsed.questions)
+      const paper = normalizeTeacherSectionContent(parsed.paper, 'questions')
+      const questions = normalizeTeacherSectionContent(parsed.questions, 'questions')
       if (questions) {
         sections.push({
           key: 'questions',
@@ -1148,18 +1230,18 @@ function parseTeacherJsonSections(text: string): TeacherResultSection[] {
           content: [paper, questions].filter(Boolean).join('\n\n'),
         })
       }
-      const answers = normalizeTeacherSectionContent(parsed.answers)
+      const answers = normalizeTeacherSectionContent(parsed.answers, 'answers')
       if (answers) sections.push({ key: 'answers', title: teacherSectionTitles.answers, content: answers })
-      const scoringRubric = normalizeTeacherSectionContent(parsed.scoringRubric)
+      const scoringRubric = normalizeTeacherSectionContent(parsed.scoringRubric, 'scoringRubric')
       if (scoringRubric) sections.push({ key: 'scoringRubric', title: teacherSectionTitles.scoringRubric, content: scoringRubric })
-      const sources = normalizeTeacherSectionContent(parsed.sources)
+      const sources = normalizeTeacherSectionContent(parsed.sources, 'sources')
       if (sources) sections.push({ key: 'sources', title: teacherSectionTitles.sources, content: sources })
-      const qualityReview = normalizeTeacherSectionContent(parsed.internalReview || parsed.qualityReview)
+      const qualityReview = normalizeTeacherSectionContent(parsed.internalReview || parsed.qualityReview, 'qualityReview')
       if (qualityReview) sections.push({ key: 'qualityReview', title: teacherSectionTitles.qualityReview, content: qualityReview })
       return sections
     }
     for (const key of teacherSectionOrder) {
-      const content = normalizeTeacherSectionContent(parsed[key])
+      const content = normalizeTeacherSectionContent(parsed[key], key)
       if (!content) continue
       sections.push({ key, title: teacherSectionTitles[key], content })
     }
@@ -1174,11 +1256,12 @@ function normalizeTeacherSections(sections: TeacherResultSection[]) {
   for (const section of sections) {
     const existing = merged.get(section.key)
     if (existing) {
-      existing.content = `${existing.content}\n\n${section.content}`.trim()
+      existing.content = mergeTeacherSectionContent(existing.content, section.content)
     } else {
       merged.set(section.key, {
         ...section,
         title: teacherSectionTitles[section.key] || section.title,
+        content: dedupeTeacherSectionContent(section.content),
       })
     }
   }
@@ -1186,6 +1269,43 @@ function normalizeTeacherSections(sections: TeacherResultSection[]) {
   const uniqueKeys = new Set(values.map(section => section.key))
   if (!uniqueKeys.has('questions') && !uniqueKeys.has('plan')) return []
   return values.sort((a, b) => teacherSectionOrder.indexOf(a.key) - teacherSectionOrder.indexOf(b.key))
+}
+
+function normalizeTeacherContentComparable(content: string) {
+  return normalizeMultilineText(content)
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function dedupeTeacherSectionContent(content: string) {
+  const normalized = normalizeTeacherContentComparable(content)
+  if (!normalized) return ''
+
+  const paragraphs = normalized.split(/\n{2,}/)
+  if (paragraphs.length <= 1) return normalized
+
+  const kept: string[] = []
+  const seen = new Set<string>()
+  for (const paragraph of paragraphs) {
+    const block = paragraph.trim()
+    if (!block) continue
+    const key = block.replace(/\s+/g, ' ').trim()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    kept.push(block)
+  }
+  return kept.join('\n\n').trim()
+}
+
+function mergeTeacherSectionContent(existingContent: string, nextContent: string) {
+  const existing = dedupeTeacherSectionContent(existingContent)
+  const next = dedupeTeacherSectionContent(nextContent)
+  if (!existing) return next
+  if (!next) return existing
+  if (existing === next || existing.includes(next)) return existing
+  if (next.includes(existing)) return next
+  return dedupeTeacherSectionContent(`${existing}\n\n${next}`)
 }
 
 function buildTeacherSectionsFromMatches(source: string, matches: RegExpMatchArray[]) {
@@ -1259,6 +1379,13 @@ const teacherResultSource = computed(() => {
   }
   const metadata = parseMessageMetadataValue(props.message.metadata)
 
+  const directContent = String(displayContent.value || '').trim()
+  const directSections = directContent ? parseTeacherSections(directContent) : []
+  const directCustomerCount = directSections.filter(section => ['questions', 'answers', 'scoringRubric', 'sources'].includes(section.key)).length
+  if (directCustomerCount >= 3 || directSections.some(section => section.key === 'questions')) {
+    return directContent
+  }
+
   const stepResults = Array.isArray(metadata?.plan?.stepResults)
     ? metadata.plan.stepResults
     : []
@@ -1268,8 +1395,8 @@ const teacherResultSource = computed(() => {
     }
   }
 
-  if (displayContent.value) {
-    addCandidate(displayContent.value)
+  if (directContent) {
+    addCandidate(directContent)
   }
 
   let bestCandidate = ''
@@ -1434,6 +1561,40 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+function previewGeneratedFile(file: { previewUrl: string | null; url: string }) {
+  const previewUrl = normalizeGeneratedFileUrl(file.previewUrl || `${file.url.replace(/\/inline$/, '')}/inline`)
+  if (!previewUrl) {
+    ElMessage.error('预览地址无效')
+    return
+  }
+  openGeneratedPreviewUrl(previewUrl)
+}
+
+function openGeneratedPreviewUrl(url: string) {
+  const absoluteUrl = new URL(url, window.location.origin).href
+  const opened = window.open('', '_blank')
+  if (opened) {
+    opened.opener = null
+    opened.location.href = absoluteUrl
+    return
+  }
+  window.open(absoluteUrl, '_blank', 'noopener,noreferrer')
+}
+
+async function downloadGeneratedFile(file: { name: string; url: string }) {
+  const url = normalizeGeneratedFileUrl(file.url).replace(/\/inline$/, '')
+  if (!url) {
+    ElMessage.error('下载地址无效')
+    return
+  }
+  try {
+    const blob = await fetchAuthenticatedBlob(url)
+    triggerBlobDownload(blob, file.name || '生成文件')
+  } catch (error: any) {
+    ElMessage.error(`下载失败：${error?.message || error || 'unknown error'}`)
+  }
+}
+
 async function exportTeacherWord(mode: 'questions' | 'full') {
   const content = buildTeacherPaperContent(mode)
   if (!content.trim()) {
@@ -1501,9 +1662,16 @@ function deduplicateFilePathSections(content: string): string {
   return content
 }
 
-const renderedContent = computed(() => {
-  if (!displayContent.value) return ''
-  let text = displayContent.value
+function stripGeneratedFileAnchorHtml(text: string) {
+  return String(text || '').replace(
+    /<a\b[^>]*href=["']((?:https?:\/\/[^"']+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^"']+|[^"']+\.html?(?:[?#][^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    '$2'
+  )
+}
+
+function buildAssistantBodyText(content: string) {
+  let text = String(content || '')
+  if (!text) return ''
   // Strip markdown links pointing to local absolute paths (Windows/Unix) — these are write_file echoes
   text = text.replace(/\[([^\]]*)\]\(((?:[A-Za-z]:[\\/]|file:\/\/\/)[^)]*)\)/g, '$1')
   // Strip bare Windows absolute paths that appear as inline text or in parentheses
@@ -1513,6 +1681,8 @@ const renderedContent = computed(() => {
     /\[([^\]]+)]\(((?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?)\)/g,
     '$1'
   )
+  // Strip raw HTML anchors for generated-file links / exported HTML previews.
+  text = stripGeneratedFileAnchorHtml(text)
   // Deduplicate 文件路径 summary sections: keep only first occurrence
   text = deduplicateFilePathSections(text)
   // If this assistant message is mainly a generated-file acknowledgement, the file card below
@@ -1525,16 +1695,37 @@ const renderedContent = computed(() => {
   if (generatedFileLinks.value.length === 0 && hasFailedGeneratedFileWrite.value && shouldHideGeneratedFileNarrative(text)) {
     return ''
   }
+  return text.trim()
+}
+
+const renderedContent = computed(() => {
+  if (!displayContent.value) return ''
+  const text = buildAssistantBodyText(displayContent.value)
+  if (!text) return ''
   return renderMarkdown(text)
 })
 
 function shouldHideGeneratedFileNarrative(text: string) {
   const normalized = normalizeMultilineText(String(text || ''))
   if (!normalized) return false
+  if (looksLikeGeneratedFileOnlyNarrative(normalized)) return true
   const looksLikeExportAck = /(?:已生成|已导出|生成(?:了|完成)|导出为|试题报表|报表内容|文件路径|支持浏览器直接打开|支持打印)/.test(normalized)
   const hasPathEcho = /(?:[A-Za-z]:\\|\/output\/|\/api\/v1\/files\/generated\/)/.test(normalized)
-  const hasVeryLittleExtra = normalized.length < 260 || normalized.split('\n').length <= 8
-  return looksLikeExportAck && hasPathEcho && hasVeryLittleExtra
+  const hasReportAck = /(?:HTML|html|Word|docx|报表|预览|下载|点击)/i.test(normalized)
+  const hasVeryLittleExtra = normalized.length < 520 || normalized.split('\n').length <= 14
+  return looksLikeExportAck && (hasPathEcho || hasReportAck) && hasVeryLittleExtra
+}
+
+function looksLikeGeneratedFileOnlyNarrative(normalized: string) {
+  const compact = normalized
+    .replace(/\[([^\]]+)]\(((?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?)\)/g, '$1')
+    .replace(/(?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?/g, '')
+    .replace(/[A-Za-z]:[\\/][^\s)>"']+/g, '')
+    .trim()
+  if (!compact || compact.length > 900) return false
+  const hasGeneratedFile = /(?:\.html?\b|\.docx\b|HTML|Word|download|preview)/i.test(compact)
+  const hasAck = ['已生成', '已导出', '生成', '报表', '预览', '下载', '点击', '文件'].some(term => compact.includes(term))
+  return hasGeneratedFile && hasAck
 }
 
 const hasFailedGeneratedFileWrite = computed(() => {
@@ -1547,12 +1738,99 @@ const hasFailedGeneratedFileWrite = computed(() => {
   })
 })
 
+function normalizeGeneratedFileUrl(rawUrl: string) {
+  const trimmed = String(rawUrl || '').trim()
+  if (!trimmed) return ''
+  try {
+    const parsed = new URL(trimmed, window.location.origin)
+    if (parsed.pathname.startsWith('/api/v1/files/generated/')) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    }
+  } catch {
+    // keep the fallback below for malformed but still usable relative URLs
+  }
+  return trimmed
+}
+
+function artifactIdentityProbe(file: { name?: string; url?: string; previewUrl?: string | null }) {
+  return normalizeGeneratedFileUrl(String(file.url || file.previewUrl || '')).replace(/\/inline$/, '')
+    || String(file.name || '').trim().toLowerCase()
+}
+
+function normalizeArtifactComparablePath(value: string) {
+  const normalizedUrl = normalizeGeneratedFileUrl(value).replace(/\/inline$/, '')
+  if (!normalizedUrl) return ''
+  const generatedMatch = normalizedUrl.match(/\/api\/v1\/files\/generated\/(?:disk\/)?([^?#]+)/i)
+  const candidate = generatedMatch?.[1] || normalizedUrl
+  try {
+    return decodeURIComponent(candidate).replace(/\\/g, '/').toLowerCase()
+  } catch {
+    return candidate.replace(/\\/g, '/').toLowerCase()
+  }
+}
+
+function artifactComparablePath(file: { name?: string; url?: string; previewUrl?: string | null; path?: string; source?: string }) {
+  return normalizeFilePath(String(file.path || '')).toLowerCase()
+    || normalizeArtifactComparablePath(String(file.url || file.previewUrl || ''))
+    || normalizeFilePath(String(file.name || '')).toLowerCase()
+}
+
+function artifactComparableDirectory(value: string) {
+  const normalized = String(value || '').replace(/\/+/g, '/').replace(/\/$/, '')
+  const index = normalized.lastIndexOf('/')
+  return index >= 0 ? normalized.slice(0, index) : ''
+}
+
+function artifactComparableStem(value: string) {
+  const normalized = String(value || '').replace(/\/+/g, '/').replace(/\/$/, '')
+  const basename = normalized.slice(normalized.lastIndexOf('/') + 1)
+  return basename.replace(/\.[^.]+$/, '').toLowerCase()
+}
+
+function sharesGeneratedArtifactLineage(
+  candidate: { name?: string; url?: string; previewUrl?: string | null; path?: string; source?: string },
+  finals: Array<{ name?: string; url?: string; previewUrl?: string | null; path?: string; source?: string }>,
+) {
+  const candidatePath = artifactComparablePath(candidate)
+  if (!candidatePath) return false
+  const candidateStem = artifactComparableStem(candidatePath)
+  const candidateDirectory = artifactComparableDirectory(candidatePath)
+  return finals.some(finalArtifact => {
+    const finalPath = artifactComparablePath(finalArtifact)
+    if (!finalPath) return false
+    if (candidatePath === normalizeFilePath(String(finalArtifact.source || '')).toLowerCase()) {
+      return true
+    }
+    const finalStem = artifactComparableStem(finalPath)
+    const finalDirectory = artifactComparableDirectory(finalPath)
+    return !!candidateStem && candidateStem === finalStem
+      && (!!candidateDirectory && candidateDirectory === finalDirectory || candidatePath.includes('/output/') || finalPath.includes('/output/'))
+  })
+}
+
+function isFinalGeneratedArtifact(file: { name?: string; url?: string; previewUrl?: string | null }) {
+  const probe = [file.name, file.url, file.previewUrl].map(item => String(item || '')).join(' ')
+  return /(?:\.html?|\.xhtml|\.docx|\.pdf|\.xlsx?|\.pptx)(?:\b|$)/i.test(probe)
+}
+
+function isTemporaryGeneratedArtifact(file: { name?: string; url?: string; previewUrl?: string | null }) {
+  const probe = [file.name, file.url, file.previewUrl].map(item => String(item || '')).join(' ')
+  return /(?:\.md|\.markdown|\.txt|\.json|\.csv|\.log)(?:\b|$)/i.test(probe)
+}
+
+function filterPrimaryGeneratedFileLinks<T extends { name?: string; url?: string; previewUrl?: string | null }>(files: T[]) {
+  if (!files.length) return files
+  const finals = files.filter(file => isFinalGeneratedArtifact(file))
+  if (!finals.length) return files
+  return files.filter(file => isFinalGeneratedArtifact(file) || !isTemporaryGeneratedArtifact(file) || !sharesGeneratedArtifactLineage(file, finals))
+}
+
 const generatedFileLinks = computed(() => {
   const seen = new Set<string>()
   const result: Array<{ name: string; url: string; previewUrl: string | null }> = []
 
   function addEntry(name: string, url: string) {
-    const baseUrl = url.replace(/\/inline$/, '')
+    const baseUrl = normalizeGeneratedFileUrl(url).replace(/\/inline$/, '')
     if (!baseUrl || seen.has(baseUrl)) return
     seen.add(baseUrl)
     const isPreviewable = /\.(html?|xhtml|txt|md|json|csv|log)$/i.test(name)
@@ -1607,7 +1885,16 @@ const generatedFileLinks = computed(() => {
     addEntry(name, url)
   }
 
-  return result
+  const filtered = filterPrimaryGeneratedFileLinks(result)
+  const deduped: Array<{ name: string; url: string; previewUrl: string | null }> = []
+  const filteredSeen = new Set<string>()
+  for (const item of filtered) {
+    const key = artifactIdentityProbe(item)
+    if (!key || filteredSeen.has(key)) continue
+    filteredSeen.add(key)
+    deduped.push(item)
+  }
+  return deduped
 })
 
 const showLoadingIndicator = computed(() => {
@@ -1813,20 +2100,30 @@ const reviewSummary = computed<ReviewSummary | undefined>(() => {
   return summary
 })
 
+const visibleReviewFiles = computed<FileChangeRecord[]>(() => {
+  const files = Array.isArray(reviewSummary.value?.files) ? reviewSummary.value!.files! : []
+  const finalArtifacts = generatedFileLinks.value.filter(file => isFinalGeneratedArtifact(file))
+  if (!finalArtifacts.length) {
+    return files
+  }
+  return files.filter(file => {
+    const path = normalizeFilePath(file.path || '').toLowerCase()
+    if (!path.includes('/output/')) return true
+    if (/\.(html?|docx|pdf)$/i.test(path)) return true
+    return !sharesGeneratedArtifactLineage({ path }, finalArtifacts)
+  })
+})
+
 const checkpointCapability = computed<CheckpointCapability | undefined>(() => reviewSummary.value?.checkpointCapability)
 
 const reviewValidationItems = computed<ReviewValidationRecord[]>(() => {
-  const items = reviewSummary.value?.validations
-  return Array.isArray(items) ? items : []
+  return []
 })
 
 const reviewDisplayCount = computed(() => {
-  const fileCount = reviewSummary.value?.totalFiles || 0
+  const fileCount = visibleReviewFiles.value.length
   if (fileCount > 0) {
     return fileCount
-  }
-  if (reviewValidationItems.value.length > 0) {
-    return reviewValidationItems.value.length
   }
   if (generatedFileLinks.value.length > 0) {
     return generatedFileLinks.value.length
@@ -1863,6 +2160,10 @@ function getReviewFileInlineMeta(file: FileChangeRecord) {
   if (file.bytesWritten) return t('chat.reviewBytesWritten', { count: file.bytesWritten })
   if (file.replacements) return t('chat.reviewReplacements', { count: file.replacements })
   return getToolLabel(file.toolName)
+}
+
+function openProjectPanelFromReview() {
+  emit('open-project-panel')
 }
 
 function getReviewValidationTone(item: ReviewValidationRecord) {
@@ -1908,9 +2209,7 @@ function getReviewValidationInlineMeta(item: ReviewValidationRecord) {
 const showReviewPanel = computed(() => {
   return role.value === 'assistant'
     && (
-      !!reviewSummary.value?.files?.length
-      || reviewValidationItems.value.length > 0
-      || !!checkpointCapability.value
+      visibleReviewFiles.value.length > 0
       || generatedFileLinks.value.length > 0
       || (props.isLast && projectReviewFiles.value.length > 0)
     )
@@ -1981,6 +2280,29 @@ const segments = computed<MessageSegment[]>(() => {
     segs.push({ id: 'ct-0', type: 'content', status: 'completed', text: props.message.content })
   }
   return segs
+})
+
+const displaySegments = computed<MessageSegment[]>(() => {
+  const contentSegments = segments.value.filter(seg => seg.type === 'content')
+  const lastContentId = contentSegments.length ? contentSegments[contentSegments.length - 1].id : ''
+  return segments.value.reduce<MessageSegment[]>((acc, seg) => {
+    if (seg.type !== 'content') {
+      acc.push(seg)
+      return acc
+    }
+    const nextText = seg.id === lastContentId
+      ? buildAssistantBodyText(displayContent.value || seg.text || '')
+      : String(seg.text || '')
+    if (!nextText.trim()) {
+      return acc
+    }
+    if (nextText === String(seg.text || '')) {
+      acc.push(seg)
+      return acc
+    }
+    acc.push({ ...seg, text: nextText })
+    return acc
+  }, [])
 })
 
 /** 是否使用分段模式渲染（有 segments 数据且包含多个分段） */
@@ -2162,12 +2484,6 @@ watch(planMeta, (plan) => {
 watch(pendingApproval, (approval) => {
   if (approval?.status === 'pending_approval') {
     executionExpanded.value = true
-  }
-})
-
-watch(reviewSummary, (summary) => {
-  if (summary?.files?.length && props.isLast) {
-    reviewExpanded.value = true
   }
 })
 
@@ -2860,6 +3176,10 @@ watch(isGenerating, (generating) => {
   background: var(--mc-bg-elevated, #f8fafc);
 }
 
+.review-file-row--actionable {
+  overflow: hidden;
+}
+
 .review-file-row__summary {
   list-style: none;
   display: flex;
@@ -2867,6 +3187,14 @@ watch(isGenerating, (generating) => {
   gap: 8px;
   padding: 8px 10px;
   cursor: pointer;
+}
+
+.review-file-row__summary--button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
 }
 
 .review-file-row__summary::-webkit-details-marker {
@@ -3273,7 +3601,11 @@ watch(isGenerating, (generating) => {
 
 .generated-file-link__action {
   flex-shrink: 0;
+  border: 0;
+  background: transparent;
   color: var(--mc-primary, #D97757);
+  cursor: pointer;
+  font: inherit;
   font-weight: 600;
   text-decoration: none;
   padding: 2px 6px;
@@ -3299,6 +3631,15 @@ watch(isGenerating, (generating) => {
   padding: 2px 0;
 }
 
+.review-generated-row--button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 4px 0;
+  text-align: left;
+  cursor: pointer;
+}
+
 .review-generated-row__name {
   flex: 1;
   min-width: 0;
@@ -3310,8 +3651,10 @@ watch(isGenerating, (generating) => {
 
 .review-generated-row__action {
   color: var(--mc-primary, #D97757);
+  font-weight: 600;
   font-size: 12px;
   text-decoration: none;
+  padding: 0;
 }
 
 .msg-actions {

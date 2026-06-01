@@ -136,6 +136,9 @@ public class HtmlRenderTool {
     }
 
     private Path resolvePersistTarget(String filename, String outputPath, @Nullable ToolContext ctx) {
+        if (outputPath == null || outputPath.isBlank()) {
+            return null;
+        }
         Path workingDir = WorkspacePathGuard.getWorkingDirectory(ctx);
         Path target = exportService.resolveOutputPath(workingDir, outputPath, filename);
         if (target == null) {

@@ -1182,6 +1182,8 @@ public class AgentGraphBuilder {
                     - Ordinary Q&A, usage guidance, material summaries, and concept explanation should answer directly without forcing confirmation.
                     - After confirmation, output with these exact Markdown sections: ## 试题, ## 参考答案, ## 采分点, ## 命题质量审核, ## 来源依据.
                     - The questions section must come first and should not be mixed with answers or scoring rubrics.
+                    - Formal question text must not leak internal control labels or rule hints such as 【基础·人物理解】, 【提升·细节理解】, 考点/难度/题型 tags, or 来源依据 markers. Keep those only in internal review or source sections.
+                    - Keep a stable question number for every item, and make answers / scoring rubrics / sources align one-to-one with the same question numbers.
                     - The runtime injects a cached project/material index for the active workspace. Reuse it as shared context across consecutive teacher turns; do not repeatedly call `list_directory` / `index_directory_materials` for the same broad folder.
                     - Local teaching folders inside the current workspace can be explored with `list_directory` or `index_directory_materials` only when the cached index is missing, the user explicitly asks to refresh/sync, or a specific subfolder/file list is needed; then read file-by-file with `read_file` / document extraction tools. Do not guess filenames.
                         - If the active runtime already exposes a search/filter skill or tool, use it first to narrow candidate materials. If not, use `filter_directory_materials(...)` as the lightweight shortlist step.
@@ -1190,10 +1192,11 @@ public class AgentGraphBuilder {
                     - For reusable materials, prefer Wiki/Knowledge Base scan -> process -> bind to Agent -> use in chat.
                     - If directory materials are outside the current workspace boundary or permissions block direct reads, stop retrying shell/path probes and clearly ask the user to approve the required action or import/bind the knowledge base.
                     - If the preferred path is blocked or materials are insufficient, stay goal-oriented: offer the closest feasible continuation path (approve access, use bound knowledge bases, use session materials, narrow to a subfolder, or ask for one minimal clarification) instead of ending with a blunt failure.
-                        - For export, first use whatever export-capable tool/skill is actually exposed by the current runtime. Prefer built-in `renderHtmlFromFile` / `renderHtmlFromFiles` / `renderHtml` for HTML output, and `renderDocxFromFile` / `renderDocxFromFiles` / `renderDocx` for Word output, or an equivalent bound document skill when available.
+                        - Only perform file export when the user explicitly asks for HTML / Word / 报表 / 下载 / 导出 / 保存到文件. If the user did not request an exported file, answer directly in the structured Teacher v2 JSON/Markdown protocol and let the client-side export entry handle later conversion.
+                        - When export is explicitly requested, first use whatever export-capable tool/skill is actually exposed by the current runtime. Prefer built-in `renderHtmlFromFile` / `renderHtmlFromFiles` / `renderHtml` for HTML output, and `renderDocxFromFile` / `renderDocxFromFiles` / `renderDocx` for Word output, or an equivalent bound document skill when available.
                         - Do NOT emit large final HTML documents through raw `write_file` tool arguments when an HTML render tool is available; instead write markdown to disk and call the HTML render tool from file(s).
-                        - If the user does not specify an export path, default to the current project/workspace `output/<workspace-name>/` directory and create it when needed.
-                        - Only fall back to Markdown/JSON delivery when no export-capable tool or skill is currently available.
+                        - If export is explicitly requested and the user does not specify an export path, default to the current project/workspace `output/<workspace-name>/` directory and create it when needed.
+                        - When export is not explicitly requested, keep delivery in Markdown/JSON instead of creating HTML/Word files.
                     """);
             }
 

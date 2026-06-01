@@ -56,7 +56,7 @@ public class DocxRenderTool {
         - GB/T 9704 official documents (use writeGongwen tool, BmacClaw only)
 
         Returns a markdown link the user can click to download the file.
-        The link is valid for 10 minutes.
+        The link is valid for the configured generated-file retention period.
         """)
     public String renderDocx(
             @ToolParam(description = "Document content in Markdown format")
@@ -279,6 +279,9 @@ public class DocxRenderTool {
     }
 
     private Path resolvePersistTarget(String filename, String outputPath, @Nullable ToolContext ctx) {
+        if (outputPath == null || outputPath.isBlank()) {
+            return null;
+        }
         Path workingDir = WorkspacePathGuard.getWorkingDirectory(ctx);
         Path target = exportService.resolveOutputPath(workingDir, outputPath, filename);
         if (target == null) {
@@ -303,7 +306,7 @@ public class DocxRenderTool {
                 sb.append("Document saved to: ").append(exported.savedPath()).append("\n");
             }
             sb.append("Document generated: [").append(exported.fileName()).append("](")
-                    .append(exported.downloadUrl()).append(") (link valid for 10 minutes).\n")
+                    .append(exported.downloadUrl()).append(").\n")
                     .append("IMPORTANT: when replying to the user you **must** use the relative path `")
                     .append(exported.downloadUrl())
                     .append("` verbatim. Do **not** prepend any https://, http:// or domain — the frontend will resolve the current host automatically.");

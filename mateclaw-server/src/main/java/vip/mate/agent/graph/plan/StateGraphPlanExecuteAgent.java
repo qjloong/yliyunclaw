@@ -702,11 +702,11 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
                 - 难度：默认包含基础、提升两个层级；如需拓展题可在确认前补充。
 
                 ### 分值与输出
-                - 每题标注题型、考点、难度和建议分值。
+                - 正式卷面中的每题只保留题号、题干、必要材料、选项和分值；题型、考点、难度、能力层级、命题标签等仅供内部控制，不得写进正式题面，不得出现【基础·人物理解】这类标签。
                 - 正式生成后不论业务模块是名著、文言文、现代文、古诗词、基础知识还是写作，都必须按统一 Teacher v2 结构分块输出：试题、参考答案、采分点、来源依据；命题说明和质量审核仅放内部折叠区。
 
                 ### 需要确认
-                请回复“确认出题”开始正式生成；也可以继续修改题量、难度、题型、材料/篇目范围或采分要求。
+                请回复"确认出题"开始正式生成；也可以继续修改题量、难度、题型、材料/篇目范围或采分要求。
                 """.formatted(localScopeMarker, module, rulePackId, intro, sanitizeTeacherLine(userMessage),
                 moduleLabel, sourceNote, questionTypeSummary, focusSummary);
     }
@@ -751,22 +751,26 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
                      "internalReview": [],
                      "exportOptions": { "questionsOnly": true, "full": true }
                    }
-                4. questions 只放题目、题型、考点、难度、分值、必要材料和选项，不要混入答案。文言文/现代文的原文材料也放在 questions 对应题目前，不另起非标准主区块。
-                5. answers 只放参考答案；scoringRubric 只放采分点和分值；sources 只放来源依据；internalReview 放命题说明和命题质量审核，仅供展开查看，不进入客户主展示和完整版导出。
+                     4. questions 只放正式卷面需要展示的内容：questionNo、题干、必要材料、选项、分值；不要混入答案、采分点、来源依据，也不要写入题型/考点/难度/能力层级/命题标签。禁止出现【基础·人物理解】、【提升·细节理解】、【来源依据】之类辅助标签。文言文/现代文的原文材料也放在 questions 对应题目前，不另起非标准主区块。
+                     5. answers、scoringRubric、sources 中每一项都必须携带与试题一致的 questionNo，顺序与题号严格对应；answers 只放参考答案；scoringRubric 只放采分点和分值；sources 只放来源依据；internalReview 放命题说明和质量审核，仅供展开查看，不进入客户主展示和完整版导出。
                 6. 如果不能稳定输出 JSON，则必须按以下 Markdown 标题分块输出，标题文本保持一致：
                    ## 试题
                    ## 参考答案
                    ## 采分点
                    ## 命题质量审核
                    ## 来源依据
-                7. 如果用户要求依据“最新教材”“最新课标”“名著稿件”等资料，但当前缺少已绑定知识库或会话材料，不要编造原文细节或假称已按最新课标出题；仍按结构化字段或以上分块输出，在“试题”中写明无法基于材料生成的原因，在“来源依据”中给出需要导入/绑定知识库、标记资料类型或补充材料的替代路径。
+                         并且每一题只保留正式题面，不得夹带任何【基础/提升/拓展/人物理解/情节辨识/来源依据】等内部提示标签。
+                7. 如果用户要求依据"最新教材""最新课标""名著稿件"等资料，但当前缺少已绑定知识库或会话材料，不要编造原文细节或假称已按最新课标出题；仍按结构化字段或以上分块输出，在"试题"中写明无法基于材料生成的原因，在"来源依据"中给出需要导入/绑定知识库、标记资料类型或补充材料的替代路径。
+                8. 当调用 wiki_search_pages 或 wiki_semantic_search 检索资料时，必须传递 businessModule="%s"，让系统优先返回与该模块相关的教材、课标、名著稿件或样题，提高检索精准度。
                 %s
                 %s
                 """.formatted(sanitizeTeacherLine(userMessage),
                 buildTeacherRulePackPromptRules(rulePackId, module),
                 TeacherSkillDefinitionService.activeSkillPromptRules(),
+                module,
                 localScopeRule,
                 assemblyRule);
+
     }
 
     private String buildClassicReadingPromptRules() {

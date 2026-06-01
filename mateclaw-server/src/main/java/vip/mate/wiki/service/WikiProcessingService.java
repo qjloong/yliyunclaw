@@ -11,11 +11,13 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import vip.mate.agent.AgentGraphBuilder;
 import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.classifier.WikiStructureExtractor;
 import vip.mate.wiki.dto.WikiChunkDraft;
 import vip.mate.wiki.job.WikiKbConfig;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
@@ -59,6 +61,9 @@ public class WikiProcessingService {
     private final WikiProgressBus progressBus;
     private final WikiCitationService citationService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final WikiStructureExtractor structureExtractor;
+    private final WikiMaterialProcessingRouter materialProcessingRouter;
+
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
@@ -330,8 +335,13 @@ public class WikiProcessingService {
                 if (raw.getContentHash() != null) {
                     rawService.setLastProcessedHash(rawId, raw.getContentHash());
                 }
+                // T2-4-6: Generate contents index for textbook materials
+                if ("textbook_latest".equals(raw.getMaterialType())) {
+                    generateContentsIndex(raw);
+                }
             }
             int pageCount = pageService.countByKbId(kb.getId());
+
             kbService.setPageCount(kb.getId(), pageCount);
             kbService.updateStatus(kb.getId(), "active");
 
@@ -1921,15 +1931,25 @@ public class WikiProcessingService {
             if (lines.isEmpty()) {
                 return "";
             }
+            WikiMaterialProcessingRecipe recipe = materialProcessingRouter.recipe(raw.getMaterialType());
+            if (recipe != null) {
+                lines.add("- 业务视图：" + recipe.businessViewType());
+                lines.add("- 通用图谱节点类型：" + recipe.canonicalEntityType());
+                lines.add("- 服务规则模块：" + String.join(" / ", recipe.rulePackModules()));
+                lines.add("- 关系语义：" + String.join(" / ", recipe.relationSemantics()));
+            }
             String guidance = switch ((raw.getMaterialType() == null ? "general" : raw.getMaterialType()).toLowerCase(Locale.ROOT)) {
-                case "textbook_latest" -> "切分时优先保留教材层级：册别 → 单元 → 课文 / 章节。不要把整册教材揉成一个宽泛页面。";
-                case "curriculum_standard" -> "切分时优先保留课标中的任务群、能力要求、学习主题，不要伪造具体课文内容。";
-                case "classic_manuscript" -> "切分时优先保留名著中的章节、情节、人物与主题边界，避免跨章节混写。";
-                case "question_rule" -> "切分时优先围绕题型规则、模块要求和适用范围生成页面。";
-                case "sample_question" -> "切分时优先保留样题所属模块、单元、题型与题干来源边界。";
-                case "answer_rubric" -> "切分时优先保留评分标准、采分点和对应题型 / 模块边界。";
+                case "textbook_latest" -> "切分时优先保留教材层级：册别 → 单元 → 课文 / 章节 → 文体 / 模块 → 可命题知识点。只有完整教材可生成单元视图；名著稿件不得套用教材单元层级。";
+                case "curriculum_standard" -> "按课标结构切分为课程性质/理念、核心素养、总目标/学段目标、课程内容/学习任务群、学业质量、教学/评价建议、附录/推荐篇目。课标只提供命题依据、能力要求和评价导向，不生成名著人物/情节页，不替代文本事实。";
+                case "classic_manuscript" -> "切分维度：1) 按回目/章节切分（chapter_slice）；2) 人物、地点、法宝、妖怪、事件进入通用 Wiki 分类和图谱，不生成教材单元视图；3) 《》标记段落生成名段赏析（excerpt）；4) 提取作品主旨与主题分析（theme_slice）；5) 关键情节分解为起因/发展/高潮/结局（plot_slice）；6) 语言风格与修辞手法分析（language_slice）。避免跨章节混写、非人物实体误入人物切片。";
+                case "question_rule" -> "切分维度：1) 题型规则（question_type_rule）：填空题/选择题/简答题/分析题/探究题等，含分值、占比、能力层级；2) 难度规则（difficulty_rule）：基础与提升比例、区分度；3) 考点覆盖规则（coverage_rule）：知识点分布比例；4) 评分标准规则（scoring_rule）：采分点分配；5) 材料要求规则（material_rule）：材料题必须提供原文/来源；6) 禁止项（forbidden_rule）：超纲术语、插图限制等。";
+                case "sample_question" -> "切分维度：每题独立成页（question_item），包含题号+题型+考点+难度+分值+题干；配套参考答案（answer_item）+采分点（rubric_item）+材料来源（source_item）+命题分析（analysis_item）。按题号关联各维度。";
+                case "answer_rubric" -> "切分维度：1) 评分维度（rubric_dimension）：内容/表达/结构/创新等；2) 等级描述（grade_level）：A/B/C/D各级别行为描述；3) 分值映射（score_bracket）：分值与等级对应；4) 常见错误分析（common_error）：丢分原因。";
                 default -> "若材料存在明显结构层级，请保留层级边界，不要把多层主题混写成单页。";
             };
+            if (recipe != null && StringUtils.hasText(recipe.processingGuidance())) {
+                guidance = guidance + " " + recipe.processingGuidance();
+            }
             return "## 材料结构提示\n\n"
                     + String.join("\n", lines)
                     + "\n\n- 切分页原则：" + guidance + "\n";
@@ -1950,19 +1970,62 @@ public class WikiProcessingService {
         String normalized = text.toLowerCase(Locale.ROOT);
         return switch (materialType) {
             case "textbook_latest" -> {
-                if (containsAny(normalized, "单元", "unit")) yield "教材单元页：保留单元主题、课文边界与册别信息。";
-                if (containsAny(normalized, "第", "课", "章节", "课文", "chapter", "lesson")) yield "教材课文 / 章节页：围绕单篇课文或章节组织内容，避免跨课混写。";
-                yield "教材结构页：按教材层级组织内容，保留册别、单元与课文边界。";
+                if (containsAny(normalized, "单元", "unit")) yield "教材单元页（unit_overview）：保留单元主题、课文边界、能力目标与册别信息，仅完整教材使用该层级。";
+                if (containsAny(normalized, "文言", "古文", "实词", "虚词", "翻译", "断句")) yield "教材文言文页（classical_slice）：保留原文、注释、翻译、断句、主旨与可命题考点。";
+                if (containsAny(normalized, "古诗", "诗词", "诗歌", "炼字", "意象")) yield "教材古诗词页（poetry_slice）：保留诗文、意象、情感、手法与可命题考点。";
+                if (containsAny(normalized, "写作", "作文", "表达训练")) yield "教材写作任务页（writing_task）：保留单元主题、表达目标、写作任务与评价要点。";
+                if (containsAny(normalized, "名著导读", "整本书", "名著阅读")) yield "教材名著导读页（classic_guide）：只作为教材中的名著导读依据，不替代名著稿件事实库。";
+                if (containsAny(normalized, "第", "课", "章节", "课文", "chapter", "lesson")) yield "教材课文 / 章节页（chapter_slice）：围绕单篇课文或章节组织内容，避免跨课混写。";
+                yield "教材知识点页（knowledge_point）：按教材层级组织内容，保留册别、单元、课文边界和可命题知识点。";
             }
-            case "curriculum_standard" -> "课标规则页：聚焦学习任务群、能力要求与课程标准约束。";
+            case "curriculum_standard" -> {
+                if (containsAny(normalized, "核心素养", "文化自信", "语言运用", "思维能力", "审美创造"))
+                    yield "课程标准-核心素养页：聚焦语文核心素养四个维度的内涵与要求。";
+                if (containsAny(normalized, "总目标", "学段目标", "课程目标"))
+                    yield "课程标准-目标页：聚焦总目标和分学段课程目标的完整边界。";
+                if (containsAny(normalized, "学段要求", "1-2年级", "3-4年级", "5-6年级", "7-9年级"))
+                    yield "课程标准-学段要求页：聚焦该学段在识字写字/阅读鉴赏/表达交流/梳理探究四个方面的具体要求。";
+                if (containsAny(normalized, "任务群", "语言文字积累", "实用性阅读", "文学阅读", "思辨性阅读", "整本书阅读", "跨学科学习"))
+                    yield "课程标准-学习任务群页：聚焦该任务群的学习内容与教学提示，确保学段衔接信息完整。";
+                if (containsAny(normalized, "学业质量", "质量描述"))
+                    yield "课程标准-学业质量页：聚焦该学段的学业质量描述标准。";
+                if (containsAny(normalized, "教学建议", "评价建议", "命题原则", "命题规划", "命题要求"))
+                    yield "课程标准-实施建议页：聚焦教学或评价的具体建议与要求。";
+                if (containsAny(normalized, "附录", "背诵", "推荐书目", "字表"))
+                    yield "课程标准-附录页：聚焦必背篇目/推荐书目/字表的具体清单。";
+                yield "课标规则页：按课程标准的篇章结构组织内容，保持课程目标→内容→学业质量→实施的层级边界。";
+            }
             case "classic_manuscript" -> {
-                if (containsAny(normalized, "人物", "角色")) yield "名著人物页：围绕单个人物组织相关情节与主题。";
-                if (containsAny(normalized, "情节", "章节", "回目")) yield "名著情节 / 章节页：保持情节推进与章节边界。";
-                yield "名著主题页：围绕名著主题、人物或情节建立页面。";
+                if (containsAny(normalized, "回目", "章回", "第", "回")) yield "名著章节页（chapter_slice）：围绕该回/章节的情节摘要、考点分析，保持章节边界不跨回混写。";
+                if (containsAny(normalized, "人物", "角色", "性格", "事迹")) yield "名著通用人物/实体页：人物进入通用 Wiki person 分类和图谱，业务视图只保留其可命题证据，不进入教材单元层级。";
+                if (containsAny(normalized, "名段", "赏析", "语言")) yield "名著名段赏析页（excerpt）：保留原文片段+赏析要点+语言考点。";
+                if (containsAny(normalized, "主题", "主旨", "思想", "内涵")) yield "名著主题分析页（theme_slice）：聚焦作品主旨、思想内涵与艺术特色分析。";
+                if (containsAny(normalized, "情节", "起因", "发展", "高潮", "结局")) yield "名著情节页（plot_slice）：围绕情节链、人物行动和因果关系组织内容。";
+                yield "名著章节页：按回目/章回组织内容，保留情节推进与章节边界。";
             }
-            case "question_rule" -> "题型规则页：聚焦题型要求、命题约束与适用范围。";
-            case "sample_question" -> "样题示例页：保留样题所属模块、题型和来源边界。";
-            case "answer_rubric" -> "评分标准页：聚焦答案要点、采分点与评分边界。";
+            case "question_rule" -> {
+                if (containsAny(normalized, "题型", "填空", "选择", "简答", "分析", "探究"))
+                    yield "题型规则页（question_type_rule）：聚焦该题型的分值、占比、考查能力层级。";
+                if (containsAny(normalized, "难度", "区分度", "基础", "提升"))
+                    yield "难度规则页（difficulty_rule）：聚焦难度梯度和区分度要求。";
+                if (containsAny(normalized, "禁止", "限制", "超纲", "不"))
+                    yield "禁止项规则页（forbidden_rule）：聚焦命题禁止项和红线要求。";
+                yield "题型规则页：聚焦题型要求、命题约束与适用范围。";
+            }
+            case "sample_question" -> {
+                if (containsAny(normalized, "答案", "解析", "采分点")) yield "样题答案页（answer_item）：与该题号关联的参考答案和采分点。";
+                if (containsAny(normalized, "命题", "分析", "审核")) yield "样题命题分析页（analysis_item）：聚焦命题人说明、难度预估和创新点。";
+                yield "样题题型页（question_item）：保留题号+题型+考点+难度+分值+题干完整信息。";
+            }
+            case "answer_rubric" -> {
+                if (containsAny(normalized, "维度", "内容", "表达", "结构", "创新"))
+                    yield "评分维度页（rubric_dimension）：聚焦该维度的评分标准和行为描述。";
+                if (containsAny(normalized, "等级", "A", "B", "C", "D", "优秀", "良好", "合格"))
+                    yield "等级描述页（grade_level）：聚焦各级别的行为描述和分值对应关系。";
+                if (containsAny(normalized, "错误", "丢分", "常见问题"))
+                    yield "常见错误分析页（common_error）：聚焦常见错误类型和丢分原因分析。";
+                yield "评分标准页：聚焦答案要点、采分点与评分边界。";
+            }
             default -> null;
         };
     }
@@ -2122,6 +2185,109 @@ public class WikiProcessingService {
         return chunks.size();
     }
 
+    // ---------- T2-4-6: Contents index generation ----------
+    // ---------- T2-5-9: LLM fallback for complex textbooks ----------
+
+    private static final int CONTENTS_INDEX_LLM_CHARS = 3000;
+
+    private void generateContentsIndex(WikiRawMaterialEntity raw) {
+        try {
+            String text = rawService.getTextContent(raw);
+            if (!StringUtils.hasText(text)) {
+                return;
+            }
+            List<WikiStructureExtractor.ContentIndexEntry> index =
+                    structureExtractor.extractContentsIndex(text, raw.getTitle());
+            // T2-5-9: LLM fallback when rule extraction produces no results
+            // for complex textbook layouts that regex can't parse
+            if ((index == null || index.isEmpty()) && text.length() > 200) {
+                index = extractContentsIndexViaLlm(text, raw.getTitle());
+            }
+            if (index == null || index.isEmpty()) {
+                return;
+            }
+            cn.hutool.json.JSONObject metadata = new cn.hutool.json.JSONObject();
+            if (StringUtils.hasText(raw.getMaterialMetadataJson()) && cn.hutool.json.JSONUtil.isTypeJSON(raw.getMaterialMetadataJson())) {
+                metadata = cn.hutool.json.JSONUtil.parseObj(raw.getMaterialMetadataJson());
+            }
+            metadata.set("materialType", raw.getMaterialType());
+            cn.hutool.json.JSONArray arr = new cn.hutool.json.JSONArray();
+            for (WikiStructureExtractor.ContentIndexEntry entry : index) {
+                cn.hutool.json.JSONObject item = new cn.hutool.json.JSONObject();
+                item.set("unit", entry.unit());
+                item.set("chapter", entry.chapter());
+                item.set("businessModules", entry.businessModules());
+                arr.add(item);
+            }
+            metadata.set("contentsIndex", arr);
+            rawService.updateMaterialMetadataJson(raw.getId(), cn.hutool.json.JSONUtil.toJsonStr(metadata));
+            log.info("[Wiki] Contents index generated for raw={}: {} entries", raw.getId(), index.size());
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to generate contents index for raw={}: {}", raw.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * T2-5-9: Lightweight LLM fallback for contents index extraction.
+     * Only processes the header portion of the text (first N chars) to
+     * keep cost low. Returns empty list if LLM is unavailable or fails.
+     */
+    private List<WikiStructureExtractor.ContentIndexEntry> extractContentsIndexViaLlm(String text, String title) {
+        try {
+            ChatModel model = buildChatModel();
+            if (model == null) {
+                log.debug("[Wiki] No chat model available for contents index LLM fallback");
+                return List.of();
+            }
+            String header = text.length() > CONTENTS_INDEX_LLM_CHARS
+                    ? text.substring(0, CONTENTS_INDEX_LLM_CHARS)
+                    : text;
+            if (header.length() < 50) return List.of();
+
+            String systemPrompt = """
+                    You are a textbook structure extractor. Extract the table of contents from the input text.
+                    Return ONLY a JSON array of objects, each with fields:
+                    - "unit" (unit/chapter group title, e.g. "第一单元")
+                    - "chapter" (individual lesson/chapter title, e.g. "《春》")
+                    - "businessModules" (array of relevant modules: "classical_chinese", "ancient_poetry", "classic_reading", "modern_reading", "basic_knowledge", "writing")
+                    If no table of contents is found, return [].
+                    """;
+            String userContent = "Textbook: " + (title != null ? title : "Unknown") + "\n" + header;
+            Prompt prompt = new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userContent)));
+            ChatResponse response = model.call(prompt);
+            String result = response.getResult().getOutput().getText();
+            if (result == null || result.isBlank()) return List.of();
+
+            // Extract JSON array from response
+            int start = result.indexOf('[');
+            int end = result.lastIndexOf(']');
+            if (start < 0 || end <= start) return List.of();
+            String json = result.substring(start, end + 1);
+
+            JsonNode arr = objectMapper.readTree(json);
+            if (!arr.isArray()) return List.of();
+            List<WikiStructureExtractor.ContentIndexEntry> entries = new ArrayList<>();
+            for (JsonNode node : arr) {
+                String unit = node.has("unit") ? node.get("unit").asText("") : "";
+                String chapter = node.has("chapter") ? node.get("chapter").asText("") : "";
+                List<String> modules = new ArrayList<>();
+                if (node.has("businessModules") && node.get("businessModules").isArray()) {
+                    for (JsonNode mod : node.get("businessModules")) {
+                        modules.add(mod.asText(""));
+                    }
+                }
+                if (StringUtils.hasText(unit) || StringUtils.hasText(chapter)) {
+                    entries.add(new WikiStructureExtractor.ContentIndexEntry(unit, chapter, modules));
+                }
+            }
+            log.info("[Wiki] LLM fallback extracted {} contents entries for textbook: {}", entries.size(), title);
+            return entries;
+        } catch (Exception e) {
+            log.debug("[Wiki] Contents index LLM fallback failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     /**
      * RFC-051 PR-1b: lazy ingest — chunk + embed, no page generation.
      * <p>
@@ -2131,6 +2297,7 @@ public class WikiProcessingService {
      * expected outcome, not a failure.
      */
     private void processLazyIngest(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw) {
+
         Long rawId = raw.getId();
         Long kbId = kb.getId();
         log.info("[Wiki] Lazy ingest starting for raw={}, kbId={}", rawId, kbId);

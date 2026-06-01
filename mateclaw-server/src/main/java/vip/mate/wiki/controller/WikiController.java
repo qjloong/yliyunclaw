@@ -341,7 +341,7 @@ public class WikiController {
         if (force) {
             rawService.setLastProcessedHash(rawId, null);
         }
-        rawService.reprocess(rawId);
+        rawService.reprocess(rawId, force);
         return R.ok();
     }
 

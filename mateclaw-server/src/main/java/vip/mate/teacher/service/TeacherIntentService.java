@@ -2,6 +2,7 @@ package vip.mate.teacher.service;
 
 import vip.mate.teacher.model.TeacherTurnContext;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -186,6 +187,27 @@ public final class TeacherIntentService {
             return "classic_reading";
         }
         return "unknown";
+    }
+
+    /**
+     * T2-4-3: Maps a detected business module to preferred material types for wiki retrieval.
+     * This helps HybridRetriever boost relevant materials when generating exam questions.
+     */
+    public static List<String> mapBusinessModuleToPreferredMaterialTypes(String businessModule) {
+        if (businessModule == null || businessModule.isBlank()) {
+            return List.of();
+        }
+        return switch (businessModule) {
+            case "classic_reading" -> List.of("classic_manuscript", "textbook_latest");
+            case "classical_chinese" -> List.of("textbook_latest", "curriculum_standard", "sample_question");
+            case "ancient_poetry" -> List.of("textbook_latest", "curriculum_standard", "sample_question");
+            case "modern_reading" -> List.of("textbook_latest", "sample_question", "curriculum_standard");
+            case "basic_knowledge" -> List.of("textbook_latest", "curriculum_standard", "question_rule");
+            case "writing" -> List.of("textbook_latest", "curriculum_standard", "sample_question", "answer_rubric");
+            case "paper_assembly" -> List.of("textbook_latest", "classic_manuscript", "curriculum_standard",
+                    "sample_question", "question_rule", "answer_rubric");
+            default -> List.of("textbook_latest", "curriculum_standard");
+        };
     }
 
     private static String normalize(String text) {

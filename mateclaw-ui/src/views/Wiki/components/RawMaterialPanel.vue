@@ -2,11 +2,6 @@
   <div class="raw-panel">
     <!-- Upload + Add text row -->
     <div class="upload-row">
-      <select v-if="store.currentKB?.kbKind === 'business'" v-model="teacherMaterialType" class="teacher-material-type-select" :title="'Teacher 资料类型'">
-        <option v-for="item in teacherMaterialTypes" :key="item.value" :value="item.value">
-          {{ item.label }}
-        </option>
-      </select>
       <div
         class="upload-zone"
         :class="{ 'is-dragging': isDragging, 'is-uploading': uploadingFiles.length > 0 }"
@@ -49,56 +44,7 @@
       </button>
     </div>
 
-    <div v-if="showTeacherMetadataForm" class="teacher-metadata-panel">
-      <div class="teacher-metadata-header">
-        <div>
-          <div class="teacher-metadata-title">结构化资料标签</div>
-          <div class="teacher-metadata-subtitle">为教材、课标、样题、评分标准补充年级 / 册别 / 单元 / 章节 / 标签，便于后续路由与检索重排。</div>
-        </div>
-        <div v-if="materialMetadataPreview.length > 0" class="teacher-metadata-preview">
-          <span v-for="item in materialMetadataPreview" :key="item" class="teacher-metadata-chip">{{ item }}</span>
-        </div>
-      </div>
-      <div class="teacher-metadata-grid">
-        <div v-if="showEditionField" class="form-group compact">
-          <label>{{ editionFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.edition" type="text" class="form-input" :placeholder="editionFieldPlaceholder" />
-        </div>
-        <div v-if="showSourceField" class="form-group compact">
-          <label>{{ sourceFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.source" type="text" class="form-input" :placeholder="sourceFieldPlaceholder" />
-        </div>
-        <div v-if="showGradeField" class="form-group compact">
-          <label>{{ gradeFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.grade" type="text" class="form-input" :placeholder="gradeFieldPlaceholder" />
-        </div>
-        <div v-if="showVolumeField" class="form-group compact">
-          <label>{{ volumeFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.volume" type="text" class="form-input" :placeholder="volumeFieldPlaceholder" />
-        </div>
-        <div v-if="showUnitField" class="form-group compact">
-          <label>{{ unitFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.unit" type="text" class="form-input" :placeholder="unitFieldPlaceholder" />
-        </div>
-        <div v-if="showChapterField" class="form-group compact">
-          <label>{{ chapterFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.chapter" type="text" class="form-input" :placeholder="chapterFieldPlaceholder" />
-        </div>
-        <div v-if="showClassicField" class="form-group compact teacher-metadata-span-2">
-          <label>{{ classicFieldLabel }}</label>
-          <input v-model="teacherMaterialMetadata.classicName" type="text" class="form-input" :placeholder="classicFieldPlaceholder" />
-        </div>
-        <div class="form-group compact teacher-metadata-span-2">
-          <label>路由标签</label>
-          <input
-            v-model="teacherMaterialMetadata.routeTagsInput"
-            type="text"
-            class="form-input"
-            placeholder="如：教材同步, 阅读理解, 七上, 第一单元"
-          />
-        </div>
-      </div>
-    </div>
+    <!-- T2-5: 移除批量上传区的结构化标签表单 — 批量上传和文件夹导入时无意义 -->
 
     <!-- Directory scan -->
     <div class="dir-scan-row">
@@ -191,8 +137,10 @@
         <div class="raw-item-row">
           <div class="raw-item-info">
             <span class="raw-item-title">{{ raw.title }}</span>
-            <span v-if="raw.materialType && raw.materialType !== 'general'" class="raw-item-business-type">{{ teacherMaterialLabel(raw.materialType) }}</span>
+            <span v-if="raw.materialType && raw.materialType !== 'general'" class="raw-item-business-type" :class="{ 'auto-detected-low': raw.autoDetected && raw.autoDetectConfidence === 'LOW' }">{{ teacherMaterialLabel(raw.materialType) }}</span>
+            <span v-if="raw.autoDetected" class="raw-item-auto-badge" :class="raw.autoDetectConfidence?.toLowerCase() || 'low'" :title="raw.autoDetectReason || '系统自动识别'">自动</span>
             <span class="raw-item-type">{{ raw.sourceType }}</span>
+
           </div>
           <div class="raw-item-meta">
             <span class="status-badge" :class="raw.processingStatus">
@@ -303,20 +251,38 @@
           <input v-model="textTitle" type="text" class="form-input" />
         </div>
         <div v-if="store.currentKB?.kbKind === 'business'" class="form-group">
-          <label>Teacher 资料类型</label>
+          <label>{{ (currentDomainProfile?.displayName || '业务') + ' 资料类型' }}</label>
           <select v-model="teacherMaterialType" class="form-input">
-            <option v-for="item in teacherMaterialTypes" :key="item.value" :value="item.value">
+            <option v-for="item in profileMaterialTypes" :key="item.value" :value="item.value">
               {{ item.label }}
             </option>
           </select>
         </div>
-        <div v-if="showTeacherMetadataForm" class="teacher-metadata-inline-note">
-          <div class="teacher-metadata-inline-title">当前结构化标签</div>
-          <div v-if="materialMetadataPreview.length > 0" class="teacher-metadata-preview">
-            <span v-for="item in materialMetadataPreview" :key="`modal-${item}`" class="teacher-metadata-chip">{{ item }}</span>
+        <template v-if="showTeacherMetadataForm">
+          <div class="teacher-metadata-inline-note">
+            <div class="teacher-metadata-inline-title">当前结构化标签</div>
+            <div v-if="materialMetadataPreview.length > 0" class="teacher-metadata-preview">
+              <span v-for="item in materialMetadataPreview" :key="`modal-${item}`" class="teacher-metadata-chip">{{ item }}</span>
+            </div>
+            <div v-else class="teacher-metadata-inline-empty">未填写结构化标签时，将仅保存资料类型。</div>
           </div>
-          <div v-else class="teacher-metadata-inline-empty">未填写结构化标签时，将仅保存资料类型。</div>
-        </div>
+          <div class="teacher-metadata-grid modal-metadata-grid">
+            <div
+              v-for="field in currentMaterialTypeConfig?.fields || []"
+              :key="field.key"
+              class="form-group compact"
+              :class="{ 'teacher-metadata-span-2': field.key === 'classicName' || field.key === 'routeTagsInput' }"
+            >
+              <label>{{ field.label }}</label>
+              <input
+                v-model="(teacherMaterialMetadata as any)[field.key]"
+                type="text"
+                class="form-input"
+                :placeholder="field.placeholder"
+              />
+            </div>
+          </div>
+        </template>
         <div class="form-group">
           <label>{{ t('wiki.materialContent') }}</label>
           <textarea v-model="textContent" class="form-input" rows="12" :placeholder="t('wiki.pasteContent')"></textarea>
@@ -333,19 +299,53 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { useWikiStore } from '@/stores/useWikiStore'
 import type { WikiRawMaterial } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
+import { mcConfirm } from '@/components/common/useConfirm'
 import JobStageBar from './JobStageBar.vue'
 import type { WikiProcessingJob } from '@/composables/useWikiJobPoller'
+import type { WikiDomainProfileOption, WikiDomainProfileMaterialType } from '@/types/index'
 
 const { t } = useI18n()
 const store = useWikiStore()
 const fileInput = ref<HTMLInputElement | null>(null)
+
+// Domain profile driven material types (T2-3-12)
+const domainProfiles = ref<WikiDomainProfileOption[]>([])
+
+async function loadDomainProfiles() {
+  try {
+    const res: any = await wikiApi.listDomainProfiles()
+    domainProfiles.value = (res.data || res || []) as WikiDomainProfileOption[]
+  } catch {
+    domainProfiles.value = []
+  }
+}
+
+onMounted(() => {
+  loadDomainProfiles()
+})
+
+const currentDomainProfile = computed<WikiDomainProfileOption | null>(() => {
+  const profileId = store.currentKB?.domainProfileId
+  if (!profileId) return null
+  return domainProfiles.value.find(p => p.id === profileId) || null
+})
+
+const profileMaterialTypes = computed<WikiDomainProfileMaterialType[]>(() => {
+  return currentDomainProfile.value?.materialTypes || [
+    { value: 'general', label: '通用资料', fields: [] }
+  ]
+})
+
+const currentMaterialTypeConfig = computed(() => {
+  return profileMaterialTypes.value.find(m => m.value === teacherMaterialType.value) || null
+})
 
 // RFC-012 M3：当列表中存在 processing 的材料时，优先订阅后端 SSE 实时进度流，
 // 60s 兜底拉取 processingStatus / fetchRawMaterials 作为 SSE 断线降级（DB 是真源）。
@@ -466,16 +466,19 @@ const rawJobs = reactive<Record<number, WikiProcessingJob>>({})
 let jobPoller: ReturnType<typeof setTimeout> | null = null
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'partial', 'cancelled'])
-const teacherMaterialTypes = [
-  { value: 'general', label: '通用资料' },
-  { value: 'curriculum_standard', label: '课程标准' },
-  { value: 'textbook_latest', label: '最新教材' },
-  { value: 'classic_manuscript', label: '名著稿件' },
-  { value: 'question_rule', label: '题型要求' },
-  { value: 'sample_question', label: '样题' },
-  { value: 'answer_rubric', label: '答案与评分标准' },
-]
 const teacherMaterialType = ref('general')
+
+// 切换材料类型时清空旧元数据，避免字段复用导致旧值残留
+watch(teacherMaterialType, () => {
+  teacherMaterialMetadata.edition = ''
+  teacherMaterialMetadata.source = ''
+  teacherMaterialMetadata.grade = ''
+  teacherMaterialMetadata.volume = ''
+  teacherMaterialMetadata.unit = ''
+  teacherMaterialMetadata.chapter = ''
+  teacherMaterialMetadata.classicName = ''
+  teacherMaterialMetadata.routeTagsInput = ''
+})
 
 interface TeacherMaterialMetadataForm {
   edition: string
@@ -499,29 +502,7 @@ const teacherMaterialMetadata = reactive<TeacherMaterialMetadataForm>({
   routeTagsInput: '',
 })
 
-const showTeacherMetadataForm = computed(() => teacherMaterialType.value !== 'general')
-const showEditionField = computed(() => teacherMaterialType.value !== 'general')
-const showSourceField = computed(() => teacherMaterialType.value !== 'general')
-const showGradeField = computed(() => ['curriculum_standard', 'textbook_latest', 'question_rule', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
-const showVolumeField = computed(() => ['textbook_latest', 'question_rule', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
-const showUnitField = computed(() => ['curriculum_standard', 'textbook_latest', 'question_rule', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
-const showChapterField = computed(() => ['textbook_latest', 'classic_manuscript', 'sample_question', 'answer_rubric'].includes(teacherMaterialType.value))
-const showClassicField = computed(() => teacherMaterialType.value === 'classic_manuscript')
-
-const editionFieldLabel = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '课标版本 / 年份' : '教材版本 / 版次')
-const editionFieldPlaceholder = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '如：2022版义务教育课标' : '如：部编版 / 统编版')
-const sourceFieldLabel = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '来源说明' : '适用来源 / 专题')
-const sourceFieldPlaceholder = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '如：整本书阅读任务群' : '如：现代文阅读 / 课内同步 / 期中复习')
-const gradeFieldLabel = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '适用学段 / 年级' : '适用年级')
-const gradeFieldPlaceholder = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '如：初中 / 七年级' : '如：七年级')
-const volumeFieldLabel = computed(() => teacherMaterialType.value === 'question_rule' ? '适用册别 / 学期' : '册别')
-const volumeFieldPlaceholder = computed(() => teacherMaterialType.value === 'question_rule' ? '如：七上 / 九下 / 一轮复习' : '如：上册 / 下册')
-const unitFieldLabel = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '主题 / 单元' : '单元 / 专题')
-const unitFieldPlaceholder = computed(() => teacherMaterialType.value === 'curriculum_standard' ? '如：文学阅读与创意表达' : '如：第一单元 / 名著导读')
-const chapterFieldLabel = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '章节 / 篇目' : '课文 / 章节')
-const chapterFieldPlaceholder = computed(() => teacherMaterialType.value === 'classic_manuscript' ? '如：孙悟空三打白骨精' : '如：《春》/ 第三课')
-const classicFieldLabel = computed(() => '名著名称')
-const classicFieldPlaceholder = computed(() => '如：西游记 / 朝花夕拾')
+const showTeacherMetadataForm = computed(() => teacherMaterialType.value !== 'general' && currentMaterialTypeConfig.value != null)
 
 const materialMetadataPreview = computed(() => {
   const metadata = buildMaterialMetadataObject()
@@ -530,19 +511,27 @@ const materialMetadataPreview = computed(() => {
     if (value && !preview.includes(value)) preview.push(value)
   }
   pushValue(teacherMaterialLabel())
-  pushValue(asDisplayText(metadata.edition))
-  pushValue(asDisplayText(metadata.source))
-  pushValue(asDisplayText(metadata.grade))
-  pushValue(asDisplayText(metadata.volume))
-  pushValue(asDisplayText(metadata.unit))
-  pushValue(asDisplayText(metadata.chapter))
-  pushValue(asDisplayText(metadata.classicName))
+  const config = currentMaterialTypeConfig.value
+  if (config) {
+    for (const field of config.fields) {
+      if (field.key === 'routeTagsInput') continue
+      pushValue(asDisplayText(metadata[field.key]))
+    }
+  } else {
+    pushValue(asDisplayText(metadata.edition))
+    pushValue(asDisplayText(metadata.source))
+    pushValue(asDisplayText(metadata.grade))
+    pushValue(asDisplayText(metadata.volume))
+    pushValue(asDisplayText(metadata.unit))
+    pushValue(asDisplayText(metadata.chapter))
+    pushValue(asDisplayText(metadata.classicName))
+  }
   ;(metadata.routeTags || []).slice(0, 4).forEach((tag: string) => pushValue(tag))
   return preview
 })
 
 function teacherMaterialLabel(value = teacherMaterialType.value) {
-  return teacherMaterialTypes.find(item => item.value === value)?.label || '通用资料'
+  return profileMaterialTypes.value.find(item => item.value === value)?.label || '通用资料'
 }
 
 function prefixTeacherMaterialTitle(title: string) {
@@ -579,23 +568,34 @@ function buildMaterialMetadataObject() {
   const metadata: Record<string, any> = {
     materialType: teacherMaterialType.value,
   }
-  const push = (key: string, value?: string) => {
-    const normalized = normalizedMetadataValue(value)
-    if (normalized) metadata[key] = normalized
+  const config = currentMaterialTypeConfig.value
+  if (config) {
+    for (const field of config.fields) {
+      if (field.key === 'routeTagsInput') continue
+      const value = (teacherMaterialMetadata as any)[field.key]
+      const normalized = normalizedMetadataValue(value)
+      if (normalized) metadata[field.key] = normalized
+    }
+  } else {
+    const push = (key: string, value?: string) => {
+      const normalized = normalizedMetadataValue(value)
+      if (normalized) metadata[key] = normalized
+    }
+    push('edition', teacherMaterialMetadata.edition)
+    push('source', teacherMaterialMetadata.source)
+    push('grade', teacherMaterialMetadata.grade)
+    push('volume', teacherMaterialMetadata.volume)
+    push('unit', teacherMaterialMetadata.unit)
+    push('chapter', teacherMaterialMetadata.chapter)
+    push('classicName', teacherMaterialMetadata.classicName)
   }
-  push('edition', teacherMaterialMetadata.edition)
-  push('source', teacherMaterialMetadata.source)
-  if (showGradeField.value) push('grade', teacherMaterialMetadata.grade)
-  if (showVolumeField.value) push('volume', teacherMaterialMetadata.volume)
-  if (showUnitField.value) push('unit', teacherMaterialMetadata.unit)
-  if (showChapterField.value) push('chapter', teacherMaterialMetadata.chapter)
-  if (showClassicField.value) push('classicName', teacherMaterialMetadata.classicName)
   const routeTags = new Set<string>(parseRouteTags(teacherMaterialMetadata.routeTagsInput))
   routeTags.add(teacherMaterialType.value)
-  ;['edition', 'source', 'grade', 'volume', 'unit', 'chapter', 'classicName'].forEach(key => {
+  for (const key of Object.keys(metadata)) {
+    if (key === 'materialType') continue
     const value = asDisplayText(metadata[key])
     if (value) routeTags.add(value)
-  })
+  }
   if (routeTags.size > 0) {
     metadata.routeTags = Array.from(routeTags)
   }
@@ -603,11 +603,25 @@ function buildMaterialMetadataObject() {
 }
 
 function buildMaterialMetadataJson() {
-  const metadata = buildMaterialMetadataObject()
-  const keys = Object.keys(metadata)
-  if (keys.length <= 1 && metadata.materialType) {
+  // T2-5: 仅手动添加文本时使用，批量上传直接传 undefined 走后端自动分类
+  if (teacherMaterialType.value === 'general') {
     return undefined
   }
+  const metadata: Record<string, any> = { materialType: teacherMaterialType.value }
+  const config = currentMaterialTypeConfig.value
+  if (config) {
+    for (const field of config.fields) {
+      if (field.key === 'routeTagsInput') continue
+      const value = (teacherMaterialMetadata as any)[field.key]
+      const normalized = normalizedMetadataValue(value)
+      if (normalized) metadata[field.key] = normalized
+    }
+  }
+  const routeTags = new Set<string>(parseRouteTags(teacherMaterialMetadata.routeTagsInput))
+  routeTags.add(teacherMaterialType.value)
+  const keys = Object.keys(metadata)
+  if (keys.length <= 1 && !metadata.materialType) return undefined
+  if (routeTags.size > 0) metadata.routeTags = Array.from(routeTags)
   return JSON.stringify(metadata)
 }
 
@@ -745,17 +759,14 @@ function removeUploadingFile(tempId: string) {
 
 // ─── Upload helpers ───────────────────────────────────────────────────────────
 async function uploadFile(kbId: number, file: File) {
-  const uploadName = prefixTeacherMaterialTitle(file.name)
-  const uploadFile = uploadName === file.name
-    ? file
-    : new File([file], uploadName, { type: file.type, lastModified: file.lastModified })
+  const uploadName = file.name
   const item = addUploadingFile(uploadName)
   try {
-    await store.uploadRawFile(kbId, uploadFile, (pct) => {
+    await store.uploadRawFile(kbId, file, (pct) => {
       item.httpPct = pct
     }, {
-      materialType: teacherMaterialType.value,
-      materialMetadataJson: buildMaterialMetadataJson(),
+      materialType: 'general',
+      materialMetadataJson: undefined,
     })
     // Success: real item was added to store.rawMaterials, remove the optimistic placeholder
     removeUploadingFile(item.tempId)
@@ -812,14 +823,30 @@ async function reprocess(rawId: number) {
   }
   // Clear stale job entry
   delete rawJobs[rawId]
-  await store.fetchRawMaterials(kbId)
+  await Promise.all([
+    store.fetchRawMaterials(kbId),
+    store.fetchPages(kbId, store.selectedRawId ?? undefined),
+  ])
   // Delayed re-fetch to catch final status if processing finishes before SSE connects
-  setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
-  setTimeout(() => { store.fetchRawMaterials(kbId) }, 15000)
+  setTimeout(() => {
+    store.fetchRawMaterials(kbId)
+    store.fetchPages(kbId, store.selectedRawId ?? undefined)
+  }, 5000)
+  setTimeout(() => {
+    store.fetchRawMaterials(kbId)
+    store.fetchPages(kbId, store.selectedRawId ?? undefined)
+  }, 15000)
 }
 
 async function deleteRaw(rawId: number) {
   if (!store.currentKB) return
+  // T2-5-8: Confirm before deleting — cascades to exclusive wiki pages
+  const confirmed = await mcConfirm({
+    title: '确认删除',
+    message: '删除后将自动清理该材料的全部关联 Wiki 页面和检索数据。此操作不可撤销，确定要继续吗？',
+    tone: 'danger'
+  })
+  if (!confirmed) return
   await wikiApi.deleteRaw(store.currentKB.id, rawId)
   await store.fetchRawMaterials(store.currentKB.id)
 }
@@ -1060,7 +1087,13 @@ function extractionPipelineHint(raw: { sourceType?: string; processingStatus?: s
 .raw-item-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .raw-item-title { font-weight: 500; color: var(--mc-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .raw-item-business-type { font-size: 10px; padding: 2px 6px; background: rgba(217,119,87,0.14); border-radius: 999px; color: var(--mc-primary); letter-spacing: 0.02em; }
+.raw-item-business-type.auto-detected-low { background: rgba(234,179,8,0.14); color: #b45309; }
+.raw-item-auto-badge { font-size: 10px; padding: 1px 5px; border-radius: 999px; letter-spacing: 0.02em; font-weight: 500; }
+.raw-item-auto-badge.high { background: rgba(34,197,94,0.14); color: #15803d; }
+.raw-item-auto-badge.medium { background: rgba(234,179,8,0.14); color: #b45309; }
+.raw-item-auto-badge.low { background: rgba(239,68,68,0.12); color: #b91c1c; }
 .raw-item-type { font-size: 10px; padding: 2px 6px; background: var(--mc-bg-sunken); border-radius: 4px; text-transform: uppercase; color: var(--mc-text-tertiary); letter-spacing: 0.02em; }
+
 .raw-item-hint { font-size: 11px; line-height: 1.5; color: var(--mc-text-tertiary); }
 .raw-item-hint--metadata { color: var(--mc-text-secondary); }
 .raw-item-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }

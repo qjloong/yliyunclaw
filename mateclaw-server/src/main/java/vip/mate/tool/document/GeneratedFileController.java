@@ -35,12 +35,13 @@ public class GeneratedFileController {
 
     private final GeneratedFileCache cache;
     private final GeneratedFileDiskTokenService diskTokenService;
+    private final GeneratedDiskFileRegistry diskFileRegistry;
 
     @Value("${mate.generated-files.output-dir:output}")
     private String outputDir;
 
     @Operation(summary = "Download a tool-generated file by its one-time id")
-    @GetMapping("/{id}")
+    @GetMapping("/{id:.+}")
     public ResponseEntity<?> download(@PathVariable String id) {
         return cache.get(id)
                 .<ResponseEntity<?>>map(entry -> {
@@ -60,7 +61,7 @@ public class GeneratedFileController {
     }
 
     @Operation(summary = "Preview a safe generated file by its one-time id")
-    @GetMapping("/{id}/inline")
+    @GetMapping("/{id:.+}/inline")
     public ResponseEntity<?> preview(@PathVariable String id) {
         return cache.get(id)
                 .<ResponseEntity<?>>map(entry -> {
@@ -103,11 +104,12 @@ public class GeneratedFileController {
 
     private ResponseEntity<?> buildDiskResponse(String token, boolean inline) {
         Path outputRoot = Paths.get(outputDir).toAbsolutePath().normalize();
-        Path file = diskTokenService.verifyAndResolve(token).orElse(null);
-        if (file == null) {
+        DiskFileRef diskFile = resolveDiskFile(token);
+        if (diskFile == null) {
             return ResponseEntity.status(404).body(Map.of("error", "File not found or token expired"));
         }
-        if (!file.startsWith(outputRoot)) {
+        Path file = diskFile.path();
+        if (!isAllowedDiskFile(file, outputRoot, diskFile.workspaceBasePath())) {
             return ResponseEntity.status(403).body(Map.of("error", "Access denied"));
         }
         if (!Files.exists(file) || !Files.isRegularFile(file)) {
@@ -141,6 +143,39 @@ public class GeneratedFileController {
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", "Failed to stream generated file"));
         }
+    }
+
+    private DiskFileRef resolveDiskFile(String idOrToken) {
+        GeneratedDiskFileRegistry.Entry entry = diskFileRegistry.get(idOrToken).orElse(null);
+        if (entry != null) {
+            return new DiskFileRef(entry.path(), entry.workspaceBasePath());
+        }
+        GeneratedFileDiskTokenService.DiskToken diskToken = diskTokenService.verify(idOrToken).orElse(null);
+        if (diskToken != null) {
+            return new DiskFileRef(diskToken.path(), diskToken.workspaceBasePath());
+        }
+        return null;
+    }
+
+    private record DiskFileRef(Path path, String workspaceBasePath) {
+    }
+
+    private boolean isAllowedDiskFile(Path file, Path outputRoot, String workspaceBasePath) {
+        if (file.startsWith(outputRoot)) {
+            return true;
+        }
+        if (workspaceBasePath != null && !workspaceBasePath.isBlank()) {
+            try {
+                Path workspaceOutputRoot = Paths.get(workspaceBasePath)
+                        .toAbsolutePath()
+                        .normalize()
+                        .resolve(outputDir)
+                        .normalize();
+                return file.startsWith(workspaceOutputRoot);
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
     }
 
     private String detectMimeType(Path file, String filename) {

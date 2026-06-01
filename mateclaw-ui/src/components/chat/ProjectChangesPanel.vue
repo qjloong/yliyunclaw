@@ -190,7 +190,7 @@
               <span class="project-file-row__path" :title="normalizeFilePath(file.path)">{{ normalizeFilePath(file.path) }}</span>
             </summary>
             <div class="project-file-row__body">
-              <div v-if="desktopActionsAvailable && resolveTargetPath(file.path)" class="project-changes-item__actions">
+              <div v-if="!resolveGeneratedArtifactDownloadUrl(file.path) && desktopActionsAvailable && resolveTargetPath(file.path)" class="project-changes-item__actions">
                 <button class="project-changes-action" type="button" @click.stop="handleOpenFile(file.path)">
                   {{ t('chat.projectChangesOpenFile') }}
                 </button>
@@ -206,7 +206,7 @@
                   {{ t('chat.projectChangesRevealFile') }}
                 </button>
               </div>
-              <div v-else-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
+              <div v-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
                 <button
                   v-if="resolveGeneratedArtifactPreviewUrl(file.path)"
                   class="project-changes-action"
@@ -235,7 +235,7 @@
               <span class="project-file-row__meta-inline">{{ latestReplyMetaLabel(file) }}</span>
             </summary>
             <div class="project-file-row__body">
-              <div v-if="desktopActionsAvailable && resolveTargetPath(file.path)" class="project-changes-item__actions">
+              <div v-if="!resolveGeneratedArtifactDownloadUrl(file.path) && desktopActionsAvailable && resolveTargetPath(file.path)" class="project-changes-item__actions">
                 <button class="project-changes-action" type="button" @click.stop="handleOpenFile(file.path)">
                   {{ t('chat.projectChangesOpenFile') }}
                 </button>
@@ -251,7 +251,7 @@
                   {{ t('chat.projectChangesRevealFile') }}
                 </button>
               </div>
-              <div v-else-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
+              <div v-if="resolveGeneratedArtifactDownloadUrl(file.path)" class="project-changes-item__actions">
                 <button
                   v-if="resolveGeneratedArtifactPreviewUrl(file.path)"
                   class="project-changes-action"
@@ -453,6 +453,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
+import { fetchAuthenticatedBlob } from '@/api'
 import { isDesktopRuntime, openDesktopPath, revealDesktopPath } from '@/utils/desktop'
 import type { CheckpointCapability, ContextRouterKnowledgeBaseSummary, ContextRouterSessionSummary, ContextRouterSummary, FileChangeRecord, GeneratedArtifactRecord, HarnessApproval, HarnessRun, HarnessStep, HarnessToolInvocation, Message, ProjectChangeRecord, ProjectInsightSummary, ReviewSummary, ReviewValidationRecord } from '@/types'
 
@@ -575,9 +576,31 @@ function isPreviewableProjectFile(filePath?: string) {
 function resolveArtifactUrl(url: string) {
   const trimmed = String(url || '').trim()
   if (!trimmed) return ''
+  try {
+    const parsed = new URL(trimmed, window.location.origin)
+    if (parsed.pathname.startsWith('/api/v1/files/generated/')) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    }
+  } catch {
+    // Fall back to the original string below.
+  }
   if (/^https?:\/\//i.test(trimmed)) return trimmed
-  if (trimmed.startsWith('/')) return `${window.location.origin}${trimmed}`
+  if (trimmed.startsWith('/')) return trimmed
   return trimmed
+}
+
+function normalizeGeneratedFileApiUrl(url: unknown) {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  try {
+    const parsed = new URL(raw, window.location.origin)
+    if (parsed.pathname.startsWith('/api/v1/files/generated/')) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    }
+  } catch {
+    // Keep original fallback for non-URL strings.
+  }
+  return raw
 }
 
 function artifactDisplayName(artifact: GeneratedArtifactRecord) {
@@ -591,6 +614,100 @@ function artifactDisplayPath(artifact: GeneratedArtifactRecord) {
   return normalizeFilePath(String(artifact.path || artifact.url || artifact.name || ''))
 }
 
+function artifactIdentityProbe(artifact: GeneratedArtifactRecord) {
+  return normalizeGeneratedFileApiUrl(artifact.url).replace(/\/inline$/, '')
+    || normalizeFilePath(String(artifact.path || artifact.name || '')).toLowerCase()
+}
+
+function normalizeArtifactComparablePath(value: unknown) {
+  const normalized = normalizeGeneratedFileApiUrl(value).replace(/\/inline$/, '')
+  if (!normalized) return ''
+  const generatedMatch = normalized.match(/\/api\/v1\/files\/generated\/(?:disk\/)?([^?#]+)/i)
+  const candidate = generatedMatch?.[1] || normalized
+  try {
+    return decodeURIComponent(candidate).replace(/\\/g, '/').toLowerCase()
+  } catch {
+    return candidate.replace(/\\/g, '/').toLowerCase()
+  }
+}
+
+function artifactComparablePath(artifact: GeneratedArtifactRecord) {
+  return normalizeFilePath(String(artifact.path || '')).toLowerCase()
+    || normalizeArtifactComparablePath(artifact.url)
+    || normalizeArtifactComparablePath(artifact.previewUrl)
+    || normalizeFilePath(String(artifact.name || '')).toLowerCase()
+}
+
+function artifactComparableDirectory(value: string) {
+  const normalized = String(value || '').replace(/\/+/g, '/').replace(/\/$/, '')
+  const index = normalized.lastIndexOf('/')
+  return index >= 0 ? normalized.slice(0, index) : ''
+}
+
+function artifactComparableStem(value: string) {
+  const normalized = String(value || '').replace(/\/+/g, '/').replace(/\/$/, '')
+  const basename = normalized.slice(normalized.lastIndexOf('/') + 1)
+  return basename.replace(/\.[^.]+$/, '').toLowerCase()
+}
+
+function artifactSourcePath(artifact: GeneratedArtifactRecord) {
+  return normalizeFilePath(String(artifact.source || '')).toLowerCase()
+}
+
+function sharesGeneratedArtifactLineage(artifact: GeneratedArtifactRecord, finals: GeneratedArtifactRecord[]) {
+  const candidatePath = artifactComparablePath(artifact)
+  if (!candidatePath) return false
+  const candidateStem = artifactComparableStem(candidatePath)
+  const candidateDirectory = artifactComparableDirectory(candidatePath)
+  return finals.some(finalArtifact => {
+    const finalPath = artifactComparablePath(finalArtifact)
+    if (!finalPath) return false
+    if (candidatePath === artifactSourcePath(finalArtifact)) {
+      return true
+    }
+    const finalStem = artifactComparableStem(finalPath)
+    const finalDirectory = artifactComparableDirectory(finalPath)
+    return !!candidateStem && candidateStem === finalStem
+      && (!!candidateDirectory && candidateDirectory === finalDirectory || candidatePath.includes('/output/') || finalPath.includes('/output/'))
+  })
+}
+
+function isFinalGeneratedArtifact(artifact: GeneratedArtifactRecord) {
+  const probe = [
+    artifact.name,
+    artifact.path,
+    artifact.mimeType,
+    artifact.url,
+  ].map(item => String(item || '')).join(' ')
+  return /(?:text\/html|\.html?|\.xhtml|application\/pdf|\.pdf|\.docx|\.xlsx?|\.pptx)(?:\b|$)/i.test(probe)
+}
+
+function isTemporaryGeneratedArtifact(artifact: GeneratedArtifactRecord) {
+  const probe = [
+    artifact.name,
+    artifact.path,
+    artifact.mimeType,
+    artifact.url,
+  ].map(item => String(item || '')).join(' ')
+  return /(?:text\/markdown|text\/plain|application\/json|text\/csv|\.md|\.markdown|\.txt|\.json|\.csv|\.log)(?:\b|$)/i.test(probe)
+}
+
+function filterPrimaryGeneratedArtifacts<T extends GeneratedArtifactRecord>(artifacts: T[]) {
+  if (!artifacts.length) return artifacts
+  const finals = artifacts.filter(artifact => isFinalGeneratedArtifact(artifact))
+  if (!finals.length) return artifacts
+  const filtered = artifacts.filter(artifact => isFinalGeneratedArtifact(artifact) || !isTemporaryGeneratedArtifact(artifact) || !sharesGeneratedArtifactLineage(artifact, finals))
+  const deduped: T[] = []
+  const seen = new Set<string>()
+  for (const artifact of filtered) {
+    const key = artifactIdentityProbe(artifact)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    deduped.push(artifact)
+  }
+  return deduped
+}
+
 function isPreviewableGeneratedArtifact(artifact: GeneratedArtifactRecord) {
   const probe = [
     artifact.name,
@@ -601,32 +718,69 @@ function isPreviewableGeneratedArtifact(artifact: GeneratedArtifactRecord) {
   return /(?:text\/html|\.html?|\.xhtml|text\/plain|text\/markdown|application\/json|text\/csv|\.txt|\.md|\.json|\.csv|\.log)(?:\b|$)/i.test(probe)
 }
 
-function openGeneratedArtifactUrl(url: string, download = false, filename = '') {
+function extractGeneratedFileLinkEntries(text: unknown) {
+  const content = String(text || '')
+  if (!content) return [] as Array<{ name: string; url: string }>
+  const entries: Array<{ name: string; url: string }> = []
+  const pattern = /\[([^\]]+)]\(((?:https?:\/\/[^)\s]+)?\/api\/v1\/files\/generated\/(?:disk\/)?[^)\s]+(?:\/inline)?)\)/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(content)) !== null) {
+    entries.push({
+      name: String(match[1] || '生成文件').trim(),
+      url: String(match[2] || '').trim(),
+    })
+  }
+  return entries
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename || '生成文件'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(objectUrl)
+}
+
+async function openGeneratedArtifactUrl(url: string, download = false, filename = '') {
   const rawUrl = resolveArtifactUrl(url)
   if (!rawUrl) {
     ElMessage.error(t('chat.downloadFailed'))
     return
   }
   const baseUrl = rawUrl.replace(/\/inline$/, '')
-  const link = document.createElement('a')
-  link.href = download ? baseUrl : `${baseUrl}/inline`
-  link.target = '_blank'
-  link.rel = 'noopener noreferrer'
-  if (download && filename) {
-    link.download = filename
+  if (!download) {
+    openGeneratedPreviewWindow(`${baseUrl}/inline`)
+    return
   }
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
+  try {
+    const blob = await fetchAuthenticatedBlob(baseUrl)
+    triggerBlobDownload(blob, filename || '生成文件')
+  } catch (error) {
+    ElMessage.error(t('chat.downloadFailed'))
+  }
+}
+
+function openGeneratedPreviewWindow(url: string) {
+  const absoluteUrl = new URL(url, window.location.origin).href
+  const opened = window.open('', '_blank')
+  if (opened) {
+    opened.opener = null
+    opened.location.href = absoluteUrl
+    return
+  }
+  window.open(absoluteUrl, '_blank', 'noopener,noreferrer')
 }
 
 function handlePreviewGeneratedArtifact(artifact: GeneratedArtifactRecord) {
   const url = String(artifact.previewUrl || artifact.url || '')
-  openGeneratedArtifactUrl(url, false, artifactDisplayName(artifact))
+  void openGeneratedArtifactUrl(url, false, artifactDisplayName(artifact))
 }
 
 function handleDownloadGeneratedArtifact(artifact: GeneratedArtifactRecord) {
-  openGeneratedArtifactUrl(String(artifact.url || ''), true, artifactDisplayName(artifact))
+  void openGeneratedArtifactUrl(String(artifact.url || ''), true, artifactDisplayName(artifact))
 }
 
 const generatedArtifactDownloadByPath = computed(() => {
@@ -656,8 +810,8 @@ const generatedArtifactDownloadByPath = computed(() => {
         const artifact: GeneratedArtifactRecord = {
           name: String((parsed as any).filename || (parsed as any).fileName || (parsed as any).filePath || '生成文件'),
           path: (parsed as any).filePath || (parsed as any).path || (parsed as any).outputPath,
-          url: String((parsed as any).apiUrl),
-          previewUrl: (parsed as any).previewUrl,
+          url: normalizeGeneratedFileApiUrl((parsed as any).apiUrl),
+          previewUrl: normalizeGeneratedFileApiUrl((parsed as any).previewUrl),
           mimeType: (parsed as any).mimeType,
           source: (parsed as any).source,
         }
@@ -666,6 +820,22 @@ const generatedArtifactDownloadByPath = computed(() => {
       }
     } catch {
       // ignore non-JSON tool results
+    }
+  }
+
+  function tryCollectFromMessageText(text: unknown) {
+    for (const entry of extractGeneratedFileLinkEntries(text)) {
+      const name = entry.name
+      const url = normalizeGeneratedFileApiUrl(entry.url)
+      if (!url) continue
+      const artifact: GeneratedArtifactRecord = {
+        name,
+        path: name,
+        url: url.replace(/\/inline$/, ''),
+        previewUrl: /\/inline$/i.test(url) ? url : `${url.replace(/\/inline$/, '')}/inline`,
+      }
+      addPathMapping(artifact.path, artifact)
+      addPathMapping(artifact.name, artifact)
     }
   }
 
@@ -688,6 +858,7 @@ const generatedArtifactDownloadByPath = computed(() => {
     for (const tc of toolCalls) {
       tryCollect(tc?.result)
     }
+    tryCollectFromMessageText((msg as any)?.content)
   }
 
   return map
@@ -700,7 +871,10 @@ function resolveGeneratedArtifactDownloadUrl(filePath?: string) {
 function resolveGeneratedArtifactPreviewUrl(filePath?: string) {
   const artifact = resolveGeneratedArtifactByPath(filePath)
   if (!artifact || !isPreviewableGeneratedArtifact(artifact)) return ''
-  return artifact.previewUrl || (artifact.url ? `${artifact.url.replace(/\/inline$/, '')}/inline` : '')
+  const previewUrl = normalizeGeneratedFileApiUrl(artifact.previewUrl)
+  if (previewUrl) return previewUrl
+  const url = normalizeGeneratedFileApiUrl(artifact.url)
+  return url ? `${url.replace(/\/inline$/, '')}/inline` : ''
 }
 
 function resolveGeneratedArtifactByPath(filePath?: string): GeneratedArtifactRecord | null {
@@ -1198,14 +1372,34 @@ const checkpointCapability = computed<CheckpointCapability | undefined>(() => la
 const latestReplyFiles = computed<FileChangeRecord[]>(() => {
   const files = latestReviewSummary.value?.files
   if (Array.isArray(files) && files.length > 0) {
-    return files
+    return filterGeneratedScratchFiles(files)
   }
   const tools = Array.isArray(props.harnessRun?.toolInvocations) ? props.harnessRun.toolInvocations : []
-  return tools
+  return filterGeneratedScratchFiles(tools
     .map(extractPatchedFileChange)
     .filter((file): file is FileChangeRecord => Boolean(file))
-    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)))
 })
+
+function filterGeneratedScratchFiles(files: FileChangeRecord[]) {
+  const finals = latestGeneratedArtifacts.value.filter(artifact => isFinalGeneratedArtifact(artifact))
+  return files.filter(file => {
+    const path = normalizeFilePath(file.path || '').toLowerCase()
+    if (!isGeneratedOutputScratchPath(path)) return true
+    if (/\.(html?|docx|pdf)$/i.test(path)) return true
+    if (!finals.length) return true
+    return !finals.some(artifact => sharesGeneratedArtifactLineage({ path, name: file.path || '' } as GeneratedArtifactRecord, [artifact]))
+  })
+}
+
+function isGeneratedOutputScratchPath(path: string) {
+  if (!path) return false
+  const normalized = path.toLowerCase()
+  if (!normalized.includes('/output/')) return false
+  if (/\.(html?|docx|pdf)$/i.test(normalized)) return false
+  if (latestGeneratedArtifacts.value.length > 0) return true
+  return /^[a-z]:\/output\//i.test(normalized) || normalized.startsWith('/output/')
+}
 
 const latestReplyValidations = computed<ReviewValidationRecord[]>(() => {
   const validations = latestReviewSummary.value?.validations
@@ -1232,12 +1426,12 @@ const latestGeneratedArtifacts = computed<GeneratedArtifactRecord[]>(() => {
     try {
       const parsed = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult
       if (parsed && typeof parsed === 'object' && (parsed as any).apiUrl && (parsed as any).filename && !(parsed as any).error) {
-        const key = String((parsed as any).apiUrl)
+        const key = normalizeGeneratedFileApiUrl((parsed as any).apiUrl)
         dedup.set(key, {
           name: String((parsed as any).filename),
           path: (parsed as any).filePath,
-          url: String((parsed as any).apiUrl),
-          previewUrl: (parsed as any).previewUrl,
+          url: key,
+          previewUrl: normalizeGeneratedFileApiUrl((parsed as any).previewUrl),
           mimeType: (parsed as any).mimeType,
           source: (parsed as any).source,
         })
@@ -1247,20 +1441,37 @@ const latestGeneratedArtifacts = computed<GeneratedArtifactRecord[]>(() => {
     }
   }
 
+  function tryCollectFromMessageText(text: unknown) {
+    for (const entry of extractGeneratedFileLinkEntries(text)) {
+      const name = entry.name
+      const url = normalizeGeneratedFileApiUrl(entry.url).replace(/\/inline$/, '')
+      if (!url) continue
+      dedup.set(url, {
+        name,
+        path: name,
+        url,
+        previewUrl: `${url}/inline`,
+      })
+    }
+  }
+
   // 1. From ReviewSummary.generatedArtifacts
   const artifacts = latestReviewSummary.value?.generatedArtifacts
   if (Array.isArray(artifacts)) {
     for (const artifact of artifacts) {
       if (!artifact) continue
-      const key = String(artifact.url || artifact.path || artifact.name || '').trim()
+      const key = normalizeGeneratedFileApiUrl(artifact.url) || String(artifact.path || artifact.name || '').trim()
       if (!key) continue
-      dedup.set(key, artifact)
+      dedup.set(key, {
+        ...artifact,
+        url: normalizeGeneratedFileApiUrl(artifact.url),
+        previewUrl: normalizeGeneratedFileApiUrl(artifact.previewUrl),
+      })
     }
   }
 
-  // 2. From export/write tool results in the latest few assistant messages
-  const recentMessages = [...props.messages].reverse().slice(0, 10)
-  for (const msg of recentMessages) {
+  // 2. From export/write tool results and generated-file links in assistant messages
+  for (const msg of props.messages) {
     const rawMeta = msg?.metadata
     let meta: any = null
     try { meta = typeof rawMeta === 'string' ? JSON.parse(rawMeta) : rawMeta } catch { /* ignore */ }
@@ -1268,20 +1479,23 @@ const latestGeneratedArtifacts = computed<GeneratedArtifactRecord[]>(() => {
     for (const tc of toolCalls) {
       tryCollect(tc?.result)
     }
+    tryCollectFromMessageText((msg as any)?.content)
   }
 
-  return Array.from(dedup.values())
+  return filterPrimaryGeneratedArtifacts(Array.from(dedup.values()))
 })
 
 const projectFiles = computed<Array<ProjectChangeRecord | FileChangeRecord>>(() => {
   const insightChanges = props.projectInsight?.changedFiles
   if (Array.isArray(insightChanges) && insightChanges.length > 0) {
-    return [...insightChanges].sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
+    return mergeGeneratedArtifactsIntoProjectFiles(filterGeneratedProjectScratchFiles([...insightChanges]))
+      .sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
   }
 
   const snapshot = latestReviewSummary.value?.projectChangedFiles
   if (Array.isArray(snapshot) && snapshot.length > 0) {
-    return [...snapshot].sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
+    return mergeGeneratedArtifactsIntoProjectFiles(filterGeneratedProjectScratchFiles([...snapshot]))
+      .sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
   }
 
   const latestByPath = new Map<string, FileChangeRecord>()
@@ -1298,9 +1512,40 @@ const projectFiles = computed<Array<ProjectChangeRecord | FileChangeRecord>>(() 
     if (!file?.path) continue
     latestByPath.set(file.path, file)
   }
-  return Array.from(latestByPath.values())
+  return mergeGeneratedArtifactsIntoProjectFiles(filterGeneratedProjectScratchFiles(Array.from(latestByPath.values())))
     .sort((a, b) => normalizeFilePath(a.path).localeCompare(normalizeFilePath(b.path)))
 })
+
+function mergeGeneratedArtifactsIntoProjectFiles<T extends ProjectChangeRecord | FileChangeRecord>(files: T[]) {
+  const merged: Array<ProjectChangeRecord | FileChangeRecord> = [...files]
+  const existing = new Set(merged.map(file => normalizeFilePath(file.path || '').toLowerCase()).filter(Boolean))
+  for (const artifact of latestGeneratedArtifacts.value) {
+    const artifactPath = normalizeFilePath(String(artifact.path || artifact.name || '')).trim()
+    if (!artifactPath) continue
+    const normalized = artifactPath.toLowerCase()
+    if (existing.has(normalized)) continue
+    merged.push({
+      path: artifactPath,
+      changeType: 'added',
+      toolName: 'generated_file',
+      summary: artifactDisplayName(artifact),
+      timestamp: Date.now(),
+    } as FileChangeRecord)
+    existing.add(normalized)
+  }
+  return merged
+}
+
+function filterGeneratedProjectScratchFiles(files: Array<ProjectChangeRecord | FileChangeRecord>) {
+  const finals = latestGeneratedArtifacts.value.filter(artifact => isFinalGeneratedArtifact(artifact))
+  return files.filter(file => {
+    const path = normalizeFilePath(file.path || '').toLowerCase()
+    if (!isGeneratedOutputScratchPath(path)) return true
+    if (/\.(html?|docx|pdf)$/i.test(path)) return true
+    if (!finals.length) return true
+    return !finals.some(artifact => sharesGeneratedArtifactLineage({ path, name: file.path || '' } as GeneratedArtifactRecord, [artifact]))
+  })
+}
 
 const projectChangeStats = computed<Array<{ type: string; count: number }>>(() => {
   const counts = new Map<string, number>()

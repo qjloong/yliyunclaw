@@ -74,8 +74,21 @@ public class WikiRawMaterialEntity {
     /** RFC-012 M2 v2 UI：已完成的页数（每个 phase B 页成功后 +1）。 */
     private Integer progressDone;
 
+    /** T2-4-1: Whether materialType was auto-detected by the classifier (transient, not persisted). */
+    @TableField(exist = false)
+    private Boolean autoDetected;
+
+    /** T2-4-1: Auto-detection confidence: HIGH / MEDIUM / LOW (transient, not persisted). */
+    @TableField(exist = false)
+    private String autoDetectConfidence;
+
+    /** T2-4-1: Human-readable auto-detection reason (transient, not persisted). */
+    @TableField(exist = false)
+    private String autoDetectReason;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
+
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
