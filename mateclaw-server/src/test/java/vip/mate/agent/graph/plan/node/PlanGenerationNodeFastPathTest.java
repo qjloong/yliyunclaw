@@ -56,12 +56,12 @@ class PlanGenerationNodeFastPathTest {
     void simpleRequest_skipsSilentTriage() throws Exception {
         PlanEntity plan = new PlanEntity();
         plan.setId(123L);
-        when(planningService.createPlan("agent-1", "1+1", List.of("1+1"))).thenReturn(plan);
+        when(planningService.createPlan("agent-1", "conv-1", "1+1", List.of("1+1"))).thenReturn(plan);
 
         Map<String, Object> output = createNode().apply(buildState("1+1"));
 
         verify(streamingHelper, never()).streamCallSilent(any(), any(), anyString(), anyString());
-        verify(planningService).createPlan("agent-1", "1+1", List.of("1+1"));
+        verify(planningService).createPlan("agent-1", "conv-1", "1+1", List.of("1+1"));
         assertEquals(true, output.get(NEEDS_PLANNING));
         assertEquals(123L, output.get(PLAN_ID));
         assertEquals(List.of("1+1"), output.get(PLAN_STEPS));
@@ -94,7 +94,7 @@ class PlanGenerationNodeFastPathTest {
         verify(streamingHelper).broadcastProgress("conv-1", "分析中...");
         verify(streamingHelper).streamCallSilent(any(), any(), eq("conv-1"), eq("plan_generation"));
         verify(streamingHelper).broadcastContent("conv-1", "好的");
-        verify(planningService, never()).createPlan(anyString(), anyString(), any());
+        verify(planningService, never()).createPlan(anyString(), anyString(), anyString(), any());
         assertEquals(false, output.get(NEEDS_PLANNING));
         assertEquals("好的", output.get(DIRECT_ANSWER));
     }

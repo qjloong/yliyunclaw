@@ -6,6 +6,7 @@ import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
 import vip.mate.agent.AgentGraphBuilder;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
@@ -88,7 +89,7 @@ class SoulSummarizerServiceTest {
 
         when(modelConfigService.getDefaultModel()).thenReturn(model);
         when(agentGraphBuilder.buildRuntimeChatModel(model)).thenReturn(chatModel);
-        when(chatModel.call(any())).thenReturn(response);
+        when(chatModel.call(any(Prompt.class))).thenReturn(response);
 
         service.updateSoul(3L);
 

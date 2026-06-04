@@ -3458,6 +3458,9 @@ watch(isGenerating, (generating) => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .teacher-result__section {
@@ -3465,6 +3468,9 @@ watch(isGenerating, (generating) => {
   border-radius: 8px;
   background: var(--mc-bg-elevated, #f8fafc);
   overflow: hidden;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .teacher-result__section.is-primary {
@@ -3533,6 +3539,9 @@ watch(isGenerating, (generating) => {
   background: color-mix(in srgb, var(--mc-bg-elevated, #f8fafc) 84%, transparent);
   color: var(--mc-text-secondary, #64748b);
   padding: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .teacher-result__internal > summary {
@@ -3564,6 +3573,9 @@ watch(isGenerating, (generating) => {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .generated-file-links {
@@ -3721,6 +3733,8 @@ watch(isGenerating, (generating) => {
 /* ==================== 主内容区域 ==================== */
 .msg-content {
   position: relative;
+  width: 100%;
+  min-width: 0;
 }
 
 .msg-content.with-cursor {

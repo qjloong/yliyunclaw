@@ -28,12 +28,13 @@ class MemoryLifecycleMediatorTest {
 
     @Mock private MemoryManager memoryManager;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private vip.mate.agent.context.ContextRouterService contextRouterService;
 
     private MemoryLifecycleMediator mediator;
 
     @BeforeEach
     void setUp() {
-        mediator = new MemoryLifecycleMediator(memoryManager, eventPublisher);
+        mediator = new MemoryLifecycleMediator(memoryManager, contextRouterService, eventPublisher);
     }
 
     // ==================== Normal path ====================

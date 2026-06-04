@@ -19,6 +19,7 @@ import vip.mate.memory.spi.MemoryManager;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -48,7 +49,7 @@ class LifecycleRecallCountIT {
     @BeforeEach
     void setUp() {
         props = new MemoryProperties();
-        MemoryLifecycleMediator mediator = new MemoryLifecycleMediator(memoryManager, eventPublisher);
+        MemoryLifecycleMediator mediator = new MemoryLifecycleMediator(memoryManager, mock(vip.mate.agent.context.ContextRouterService.class), eventPublisher);
         agentService = new AgentService(agentMapper, agentGraphBuilder,
                 memoryRecallTracker, mediator, props);
 

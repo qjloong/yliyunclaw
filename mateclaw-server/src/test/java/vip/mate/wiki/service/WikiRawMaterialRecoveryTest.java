@@ -36,9 +36,12 @@ class WikiRawMaterialRecoveryTest {
         eventPublisher = mock(ApplicationEventPublisher.class);
         WikiChunkService chunkService = mock(WikiChunkService.class);
         DocumentExtractTool docTool = mock(DocumentExtractTool.class);
+        WikiPageService pageService = mock(WikiPageService.class);
+        vip.mate.wiki.classifier.WikiMaterialTypeClassifier materialTypeClassifier =
+                mock(vip.mate.wiki.classifier.WikiMaterialTypeClassifier.class);
         props = new WikiProperties();
         props.setAutoProcessOnUpload(true);
-        service = new WikiRawMaterialService(rawMapper, kbService, props, eventPublisher, docTool, chunkService);
+        service = new WikiRawMaterialService(rawMapper, kbService, props, eventPublisher, docTool, chunkService, pageService, materialTypeClassifier);
     }
 
     private WikiRawMaterialEntity stuckRow(Long id, Long kbId) {

@@ -10,6 +10,7 @@ import vip.mate.hook.event.MateHookEvent;
 import vip.mate.hook.event.ToolEvent;
 import vip.mate.hook.model.HookEntity;
 import vip.mate.hook.repository.HookRunMapper;
+import vip.mate.lifecycle.normalizer.LifecycleEventNormalizer;
 
 import java.time.Duration;
 import java.util.List;
@@ -106,7 +107,7 @@ class HookDispatcherTest {
         when(registry.match("agent:end")).thenReturn(List.of(match));
         when(registry.match("tool:after")).thenReturn(List.of());
 
-        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props());
+        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props(), mock(LifecycleEventNormalizer.class));
 
         dispatcher.onEvent(AgentEvent.of("end", 1L, "trace", 3, Map.of()));
         dispatcher.onEvent(ToolEvent.of("after", "shell", 1L, "trace", Map.of()));
@@ -126,7 +127,7 @@ class HookDispatcherTest {
         var registry = mock(HookRegistry.class);
         when(registry.match("agent:end")).thenReturn(List.of(match));
 
-        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props());
+        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props(), mock(LifecycleEventNormalizer.class));
         for (int i = 0; i < events; i++) {
             dispatcher.onEvent(AgentEvent.of("end", (long) i, "trace", 1, Map.of()));
         }
@@ -144,7 +145,7 @@ class HookDispatcherTest {
         var registry = mock(HookRegistry.class);
         when(registry.match("agent:end")).thenReturn(List.of(match));
 
-        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props());
+        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props(), mock(LifecycleEventNormalizer.class));
         long t0 = System.nanoTime();
         dispatcher.onEvent(AgentEvent.of("end", 1L, "trace", 1, Map.of()));
         assertTrue(entered.await(2, TimeUnit.SECONDS));
@@ -166,7 +167,7 @@ class HookDispatcherTest {
         var registry = mock(HookRegistry.class);
         when(registry.match("agent:end")).thenReturn(List.of(match));
 
-        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props());
+        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), props(), mock(LifecycleEventNormalizer.class));
         for (int i = 0; i < 10; i++) {
             dispatcher.onEvent(AgentEvent.of("end", (long) i, "trace", 1, Map.of()));
         }
@@ -182,7 +183,7 @@ class HookDispatcherTest {
         var registry = mock(HookRegistry.class);
         var p = props();
         p.setEnabled(false);
-        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), p);
+        var dispatcher = new HookDispatcher(registry, mock(HookRunMapper.class), p, mock(LifecycleEventNormalizer.class));
         dispatcher.onEvent(AgentEvent.of("end", 1L, "trace", 1, Map.of()));
         verify(registry, never()).match(any());
         dispatcher.shutdown(1);

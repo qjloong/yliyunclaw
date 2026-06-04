@@ -32,6 +32,7 @@ class LifecycleFlagGuardTest {
 
     @Mock private MemoryManager memoryManager;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private vip.mate.agent.context.ContextRouterService contextRouterService;
 
     private MemoryProperties props;
     private MemoryLifecycleMediator mediator;
@@ -40,7 +41,7 @@ class LifecycleFlagGuardTest {
     @BeforeEach
     void setUp() {
         props = new MemoryProperties();
-        mediator = new MemoryLifecycleMediator(memoryManager, eventPublisher);
+        mediator = new MemoryLifecycleMediator(memoryManager, contextRouterService, eventPublisher);
         listener = new MemoryLifecycleEventListener(mediator, props);
     }
 
