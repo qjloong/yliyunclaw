@@ -84,6 +84,10 @@ public class WikiPageEntity {
     /** Knowledge layer derived from the pageType profile: {@code fact} / {@code experience}. */
     private String knowledgeLayer;
 
+    /** Cached page-level structure metadata (JSON), set by WikiStructureExtractor for material coverage. */
+    @TableField(value = "structure_metadata_json", updateStrategy = FieldStrategy.ALWAYS)
+    private String structureMetadataJson;
+
     /** Fact page ids this (experience) page depends on, as a JSON array. Source of truth is the dependency table. */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String dependsOnJson;
