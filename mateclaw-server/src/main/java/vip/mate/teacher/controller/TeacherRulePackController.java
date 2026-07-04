@@ -106,10 +106,10 @@ public class TeacherRulePackController {
         try {
             String json = objectMapper.writeValueAsString(pack);
             if ("global".equalsIgnoreCase(scope) || workspaceId == null) {
-                systemSettingService.saveRawValue(settingKey(id), json, "Teacher RulePack global override: " + id);
+                systemSettingService.saveString(settingKey(id), json, "Teacher RulePack global override: " + id);
                 TeacherRulePackService.putOverride(pack);
             } else {
-                systemSettingService.saveRawValue(workspaceSettingKey(id, workspaceId), json,
+                systemSettingService.saveString(workspaceSettingKey(id, workspaceId), json,
                         "Teacher RulePack workspace override: " + workspaceId + "/" + id);
                 TeacherRulePackService.putWorkspaceOverride(workspaceId, pack);
             }
@@ -131,10 +131,10 @@ public class TeacherRulePackController {
             throw new MateClawException(404, "Teacher rule pack not found: " + id);
         }
         if ("global".equalsIgnoreCase(scope) || workspaceId == null) {
-            systemSettingService.saveRawValue(settingKey(id), "", "Teacher RulePack global override cleared: " + id);
+            systemSettingService.saveString(settingKey(id), "", "Teacher RulePack global override cleared: " + id);
             TeacherRulePackService.clearOverride(id);
         } else {
-            systemSettingService.saveRawValue(workspaceSettingKey(id, workspaceId), "",
+            systemSettingService.saveString(workspaceSettingKey(id, workspaceId), "",
                     "Teacher RulePack workspace override cleared: " + workspaceId + "/" + id);
             TeacherRulePackService.clearWorkspaceOverride(id, workspaceId);
         }

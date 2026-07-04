@@ -77,7 +77,7 @@ public class TeacherSkillController {
         try {
             List<String> ids = TeacherSkillDefinitionService.validateBindings(request != null ? request.getSkillIds() : null);
             TeacherSkillDefinitionService.setActiveBindings(ids);
-            systemSettingService.saveRawValue(
+            systemSettingService.saveString(
                     TeacherSkillDefinitionService.DEFAULT_BINDING_SETTING_KEY,
                     objectMapper.writeValueAsString(ids),
                     "Teacher default skill bindings"
@@ -96,7 +96,7 @@ public class TeacherSkillController {
     @DeleteMapping("/bindings")
     public R<TeacherSkillBindingView> resetBindings() {
         TeacherSkillDefinitionService.resetActiveBindings();
-        systemSettingService.saveRawValue(
+        systemSettingService.saveString(
                 TeacherSkillDefinitionService.DEFAULT_BINDING_SETTING_KEY,
                 "",
                 "Teacher default skill bindings reset"

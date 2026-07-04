@@ -119,3 +119,4 @@ outputs/
 # Ignore stray npm/yarn lockfiles so they are not committed by mistake.
 package-lock.json
 yarn.lock
+/output/
