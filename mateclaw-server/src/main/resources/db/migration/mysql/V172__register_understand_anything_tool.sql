@@ -1,24 +1,18 @@
--- V172: Register Understand-Anything tool methods (H2)
-INSERT INTO mate_tool (name, display_name, description, tool_type, bean_name, enabled, create_time, update_time, deleted)
-SELECT 'understand_scan', 'Understand Scan',
-       'Full multi-agent pipeline analysis — primary entry for architecture, domain, onboarding',
-       'builtin', 'understandAnythingTool', TRUE, NOW(), NOW(), 0
-WHERE NOT EXISTS (SELECT 1 FROM mate_tool WHERE name = 'understand_scan');
+-- V172: Register Understand-Anything tool methods.
+-- Idempotent: MERGE INTO updates existing rows when id matches.
 
-INSERT INTO mate_tool (name, display_name, description, tool_type, bean_name, enabled, create_time, update_time, deleted)
-SELECT 'understand_diff', 'Understand Diff',
-       'Analyze impact of uncommitted changes only (diff analysis)',
-       'builtin', 'understandAnythingTool', TRUE, NOW(), NOW(), 0
-WHERE NOT EXISTS (SELECT 1 FROM mate_tool WHERE name = 'understand_diff');
+MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
+KEY (id)
+VALUES (1000000040, 'understand_scan', 'Understand Scan', 'Full multi-agent pipeline analysis', 'builtin', 'understandAnythingTool', '🧠', TRUE, TRUE, NOW(), NOW(), 0);
 
-INSERT INTO mate_tool (name, display_name, description, tool_type, bean_name, enabled, create_time, update_time, deleted)
-SELECT 'understand_explain', 'Understand Explain',
-       'Deep-dive explain a single source file',
-       'builtin', 'understandAnythingTool', TRUE, NOW(), NOW(), 0
-WHERE NOT EXISTS (SELECT 1 FROM mate_tool WHERE name = 'understand_explain');
+MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
+KEY (id)
+VALUES (1000000041, 'understand_diff', 'Understand Diff', 'Analyze impact of uncommitted changes only', 'builtin', 'understandAnythingTool', '🔍', TRUE, TRUE, NOW(), NOW(), 0);
 
-INSERT INTO mate_tool (name, display_name, description, tool_type, bean_name, enabled, create_time, update_time, deleted)
-SELECT 'understand_knowledge', 'Understand Knowledge',
-       'Analyze documentation/wiki directory (Karpathy-style)',
-       'builtin', 'understandAnythingTool', TRUE, NOW(), NOW(), 0
-WHERE NOT EXISTS (SELECT 1 FROM mate_tool WHERE name = 'understand_knowledge');
+MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
+KEY (id)
+VALUES (1000000042, 'understand_explain', 'Understand Explain', 'Deep-dive explain a single source file', 'builtin', 'understandAnythingTool', '📄', TRUE, TRUE, NOW(), NOW(), 0);
+
+MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
+KEY (id)
+VALUES (1000000043, 'understand_knowledge', 'Understand Knowledge', 'Analyze documentation/wiki directory', 'builtin', 'understandAnythingTool', '📚', TRUE, TRUE, NOW(), NOW(), 0);
