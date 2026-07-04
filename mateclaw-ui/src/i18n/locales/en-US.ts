@@ -1,6 +1,6 @@
 export default {
   app: {
-    title: 'Meta Y - AI Assistant',
+    title: 'Meta Y',
   },
   common: {
     save: 'Save',
@@ -926,7 +926,7 @@ export default {
       claudeCodeOauthDetect: 'Detect Claude Code Login',
       claudeCodeOauthHint: 'Reuses your local Claude Code Pro/Max subscription. Sign in via the Claude Code app first, then click "Detect" to pick up the credentials.',
       claudeCodeOauthInstructions: 'No Claude Code credentials found. Install Claude Code, sign in with a Pro/Max account, then click Detect again.',
-      claudeCodeOauthRevokeHint: 'Sign out from the Claude Code app to revoke. Meta Y does not modify Claude Code\'s on-disk credentials.',
+      claudeCodeOauthRevokeHint: 'Sign out from the Claude Code app to revoke. MateClaw does not modify Claude Code\'s on-disk credentials.',
       providerIdPlaceholder: 'e.g. my-local-gemma',
       providerIdHint: 'Used only as an internal key. Lowercase letters/digits, plus . _ - are fine — no slashes or spaces (cannot be changed after create).',
       providerIdInvalid: 'Provider ID may only contain letters, digits, dot, underscore, and hyphen (no slashes or spaces). Must start with a letter or digit and be 1–64 chars.',
@@ -1730,7 +1730,7 @@ export default {
       },
       exportBtn: 'Export JSON',
       importBtn: 'Import JSON',
-      exportFileName: 'metay-guard-rules-{date}.json',
+      exportFileName: 'mateclaw-guard-rules-{date}.json',
       importPromptHint: 'Upload a JSON exported by this UI. Built-in rules only sync their policy fields.',
       importSummary: 'Import done: {inserted} added, {updatedBuiltin} built-in updated, {updatedCustom} custom updated, {skipped} skipped',
       importFailed: 'Import failed: {msg}',
@@ -1881,7 +1881,7 @@ export default {
       hints: {
         anthropic: 'Anthropic API key (sk-ant-…). Get one at https://console.anthropic.com/settings/keys',
         openai: 'OpenAI API key (sk-…). Get one at https://platform.openai.com/api-keys',
-        dashscope: 'Aliyun DashScope key — same value as Meta Y .env DASHSCOPE_API_KEY',
+        dashscope: 'Aliyun DashScope key — same value as MateClaw .env DASHSCOPE_API_KEY',
         google: 'Google AI Studio API key. Get one at https://aistudio.google.com/apikey',
         claudeOauth: 'Heads up: claude-code OAuth login (the one stored in ~/.claude/) does NOT work here, and worse — the Claude Agent SDK reads it BEFORE this env var, silently shadowing your API key. If you have ever run `claude login` on this host, clear the keychain first: (macOS) `claude logout` or `security delete-generic-password -s "Claude Code-credentials"`; (Linux/Windows) delete ~/.claude/credentials.json. Then put a real API key (sk-ant-…) above. Or switch to qwen-code / opencode to reuse a CLI login.',
       },
@@ -2157,7 +2157,7 @@ export default {
     configSecretPlaceholder: '(leave blank to keep unchanged)',
     noDescription: 'No description',
     emptyTitle: 'No plugins installed',
-    emptyHint: 'Place plugin JAR files in ~/.metay/plugins/ and restart the server',
+    emptyHint: 'Place plugin JAR files in ~/.mateclaw/plugins/ and restart the server',
     loading: 'Loading plugins...',
     loadFailed: 'Failed to load plugins',
     enabled: '{name} enabled',
@@ -3394,7 +3394,7 @@ export default {
       authFailed: 'Authorization failed',
     },
     webHint: 'Web channel uses built-in SSE communication, no additional configuration needed.',
-    webchatHint: 'Web / API access can embed the Meta Y chat widget into external websites, or be called as a pure backend SSE API. With the API key configured, the frontend can load the WebChat SDK; the backend can POST directly to /api/v1/channels/webchat/stream with header X-MC-Key and body {message, visitorId, optional sessionId/agentId}.',
+    webchatHint: 'Web / API access can embed the MateClaw chat widget into external websites, or be called as a pure backend SSE API. With the API key configured, the frontend can load the WebChat SDK; the backend can POST directly to /api/v1/channels/webchat/stream with header X-MC-Key and body {message, visitorId, optional sessionId/agentId}.',
     webchatApiKeyGenerated: 'The platform will generate the API key after save. Reopen this channel to copy it.',
     webchatApiKeyReadOnly: 'This API key is generated and managed by the platform. It can be copied, but not edited manually.',
     webhookHint: 'Webhook channel configuration should be edited in the "Raw JSON" tab below.',
@@ -4184,7 +4184,7 @@ export default {
     extract_pdf_text: 'Extract PDF',
     extract_docx_text: 'Extract Document',
     detect_file_type: 'Detect File Type',
-    readMeta YDoc: 'Read System Docs',
+    readMateClawDoc: 'Read System Docs',
 
     // Generative
     image_generate: 'Generate Image',
