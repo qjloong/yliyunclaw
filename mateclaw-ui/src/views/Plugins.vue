@@ -23,7 +23,51 @@
           <p>{{ t('plugins.loading') }}</p>
         </div>
 
-        <!-- Plugin Cards -->
+        <!-- Built-in Plugins -->
+        <div class="plugins-section">
+          <h3 class="plugins-section-title">内置插件 / Built-in</h3>
+          <div class="plugins-grid">
+            <!-- 教学出题规则插件 -->
+            <div class="plugin-card mc-surface-card plugin-builtin">
+              <div class="plugin-header">
+                <div class="plugin-icon-wrap plugin-icon-teacher">📚</div>
+                <div class="plugin-meta">
+                  <div class="plugin-name">教学出题规则插件</div>
+                  <div class="plugin-version">系统内置</div>
+                </div>
+              </div>
+              <p class="plugin-desc">面向初中语文教学与中考备考，内置古诗词、文言文、现代文、名著、基础、写作 6 个出题规则模块。</p>
+              <div class="plugin-details">
+                <div class="plugin-detail-row">
+                  <span class="detail-label">{{ t('plugins.type') }}</span>
+                  <span class="type-badge type-education">education</span>
+                </div>
+                <div class="plugin-detail-row">
+                  <span class="detail-label">{{ t('plugins.status') }}</span>
+                  <span class="status-badge status-active">active</span>
+                </div>
+              </div>
+              <div class="plugin-capabilities">
+                <div class="capability-section">
+                  <span class="capability-label">能力包:</span>
+                  <span class="capability-tag">古诗词出题</span>
+                  <span class="capability-tag">文言文出题</span>
+                  <span class="capability-tag">现代文出题</span>
+                  <span class="capability-tag">名著阅读出题</span>
+                  <span class="capability-tag">基础知识出题</span>
+                  <span class="capability-tag">写作出题</span>
+                </div>
+              </div>
+              <div class="plugin-actions">
+                <button type="button" class="btn-secondary btn-configure" @click="$router.push('/teacher-ops')">
+                  配置规则
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Plugin Cards (external) -->
         <div v-else class="plugins-grid">
           <div v-for="plugin in plugins" :key="plugin.name" class="plugin-card mc-surface-card">
             <div class="plugin-header">
@@ -297,6 +341,30 @@ onUnmounted(() => {
 
 <style scoped>
 .plugins-page { gap: 18px; }
+
+.plugins-section { margin-bottom: 24px; }
+
+.plugins-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mc-text-secondary, #64748b);
+  margin-bottom: 12px;
+  padding-left: 4px;
+}
+
+.plugin-builtin {
+  border: 2px solid var(--mc-border-accent, rgba(99, 102, 241, 0.2));
+}
+
+.plugin-icon-teacher {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.type-education {
+  background: var(--mc-fill-accent, rgba(139, 92, 246, 0.12));
+  color: #8b5cf6;
+}
 
 .plugins-grid {
   display: grid;
