@@ -61,6 +61,10 @@ public class WikiKnowledgeBaseEntity {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long embeddingModelId;
 
+    /** 绑定的领域配置 ID，用于 business module coverage 和 material routing */
+    @TableField(value = "domain_profile_id")
+    private String domainProfileId;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 
