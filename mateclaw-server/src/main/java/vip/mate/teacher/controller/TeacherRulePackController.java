@@ -41,7 +41,7 @@ public class TeacherRulePackController {
     @PostConstruct
     public void loadOverrides() {
         for (TeacherRulePack pack : TeacherRulePackService.listBuiltInRulePacks()) {
-            String stored = systemSettingService.getRawValue(settingKey(pack.id()), "");
+            String stored = systemSettingService.getString(settingKey(pack.id()), "");
             if (stored == null || stored.isBlank()) {
                 continue;
             }
@@ -153,7 +153,7 @@ public class TeacherRulePackController {
         if (workspaceId == null || TeacherRulePackService.hasWorkspaceOverride(id, workspaceId)) {
             return;
         }
-        String stored = systemSettingService.getRawValue(workspaceSettingKey(id, workspaceId), "");
+        String stored = systemSettingService.getString(workspaceSettingKey(id, workspaceId), "");
         if (stored == null || stored.isBlank()) {
             return;
         }

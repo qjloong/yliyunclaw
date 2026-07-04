@@ -151,6 +151,25 @@ export const templateApi = {
   apply: (id: string) => http.post(`/templates/${id}/apply`),
 }
 
+// ==================== Teacher Rule Packs ====================
+export const teacherRulePackApi = {
+  list: () => http.get('/teacher/rule-packs'),
+  get: (id: string) => http.get(`/teacher/rule-packs/${encodeURIComponent(id)}`),
+  view: (id: string) => http.get(`/teacher/rule-packs/${encodeURIComponent(id)}/view`),
+  update: (id: string, data: any, scope: 'workspace' | 'global' = 'workspace') =>
+    http.put(`/teacher/rule-packs/${encodeURIComponent(id)}`, data, { params: { scope } }),
+  clearOverride: (id: string, scope: 'workspace' | 'global' = 'workspace') =>
+    http.delete(`/teacher/rule-packs/${encodeURIComponent(id)}`, { params: { scope } }),
+}
+
+export const teacherSkillApi = {
+  list: () => http.get('/teacher/skills'),
+  get: (id: string) => http.get(`/teacher/skills/${encodeURIComponent(id)}`),
+  bindings: () => http.get('/teacher/skills/bindings'),
+  updateBindings: (skillIds: string[]) => http.put('/teacher/skills/bindings', { skillIds }),
+  resetBindings: () => http.delete('/teacher/skills/bindings'),
+}
+
 // ==================== Chat ====================
 export const chatApi = {
   uploadFile: async (conversationId: string, file: File) => {

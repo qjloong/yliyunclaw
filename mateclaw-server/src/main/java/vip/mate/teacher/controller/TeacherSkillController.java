@@ -37,7 +37,7 @@ public class TeacherSkillController {
 
     @PostConstruct
     public void loadBindingOverride() {
-        String stored = systemSettingService.getRawValue(TeacherSkillDefinitionService.DEFAULT_BINDING_SETTING_KEY, "");
+        String stored = systemSettingService.getString(TeacherSkillDefinitionService.DEFAULT_BINDING_SETTING_KEY, "");
         if (stored == null || stored.isBlank()) {
             return;
         }

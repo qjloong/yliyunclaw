@@ -961,6 +961,90 @@ export interface TestResult {
   errorMessage?: string
 }
 
+// ==================== 教师出题 ====================
+
+export interface QuestionTypeRule {
+  type: string
+  displayName: string
+  defaultScore: string
+  generationRule: string
+  requiresAnswer: boolean
+  requiresScoringRubric: boolean
+  requiresMaterial: boolean
+}
+
+export interface TeacherRulePack {
+  id: string
+  stage?: string
+  subject?: string
+  module: string
+  name: string
+  version: string
+  defaultQuestionMix: Record<string, any>
+  questionTypeRules: QuestionTypeRule[]
+  hardRules: string[]
+  sourceRequirements: Array<Record<string, string>>
+  acceptanceMatrix: Array<Record<string, string>>
+}
+
+export interface TeacherRulePackView {
+  rulePack: TeacherRulePack
+  overridden: boolean
+  builtIn: TeacherRulePack
+}
+
+export interface TeacherSkillDefinition {
+  id: string
+  name: string
+  version: string
+  module: string
+  purpose: string
+  supportedRulePackIds: string[]
+  workflowSteps: string[]
+  inputContract: Record<string, any>
+  outputContract: Record<string, any>
+  acceptanceSignals: Array<Record<string, string>>
+}
+
+export interface TeacherSkillBindingView {
+  activeSkillIds: string[]
+  defaultSkillIds: string[]
+  activeSkills: TeacherSkillDefinition[]
+  overridden: boolean
+}
+
+export interface TeacherImprovementDraft {
+  id: string
+  status: 'pending' | 'accepted' | 'rejected' | string
+  targetType: string
+  targetArea?: string | null
+  proposalType?: string | null
+  riskLevel?: string | null
+  title: string
+  summary: string
+  sourceRunId?: string | null
+  sourceConversationId?: string | null
+  rulePackId?: string | null
+  workspaceId?: string | number | null
+  createdAt?: string | null
+  reviewedAt?: string | null
+  reviewNote?: string | null
+  diagnosis?: Record<string, any>
+  evidence?: Record<string, any>
+  proposedPatch?: Record<string, any>
+  proposedSkillPatch?: Record<string, any>
+  proposedAcceptanceCase?: Record<string, any>
+  proposedRulePack?: TeacherRulePack | null
+}
+
+export interface TemplateKnowledgeBindingHealth {
+  externalKey?: string | null
+  name?: string | null
+  required: boolean
+  matched: boolean
+  detail?: string | null
+}
+
 // ==================== 安全 ====================
 
 export type GuardSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'
