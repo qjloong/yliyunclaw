@@ -1,0 +1,212 @@
+{
+  "id": "builtin.coding_agent",
+  "name": "Codex-style Coding Agent",
+  "nameZh": "编码工程助手",
+  "version": "1.0.0",
+  "status": "published",
+  "category": "coding",
+  "domain": "software_engineering",
+  "visibility": "builtin",
+  "ownerType": "system",
+  "description": "A Codex-style engineering agent for real repositories: understand code, plan changes, edit files, run tests, summarize diffs, and request approval for risky actions.",
+  "descriptionZh": "面向真实代码仓库的 Codex 风格编码工程助手，支持代码理解、修改计划、文件编辑、测试验证、diff 总结和高风险操作审批。",
+  "icon": "💻",
+  "agentType": "plan_execute",
+  "tags": "coding,codex,developer,workspace,review",
+  "featured": true,
+  "sortOrder": 5,
+  "maxIterations": 12,
+  "homeSubtitle": "面向真实代码仓库的 Codex 风格编码工程助手",
+  "homeQuickStarts": [
+    {
+      "title": "了解我能怎么帮你写代码",
+      "prompt": "请用新手能听懂的方式介绍你作为编码工程助手能做什么、适合处理哪些任务、需要我提供哪些信息。"
+    },
+    {
+      "title": "引导我开始一个开发任务",
+      "prompt": "请带我开始一个开发任务：先告诉我应该描述目标、范围、约束、期望验证方式和是否允许修改文件，然后给我一个可复制的提问模板。"
+    },
+    {
+      "title": "理解当前项目并制定计划",
+      "prompt": "请先理解当前工作区项目结构、技术栈和可用验证命令，然后给出一个分阶段实施计划。暂时不要修改文件。"
+    },
+    {
+      "title": "演示一次 Bug 修复流程",
+      "prompt": "请用一个典型 Bug 修复任务演示你会如何阅读代码、定位原因、制定修改方案、运行验证并总结变更。"
+    }
+  ],
+  "runtime": {
+    "preferredMode": "coding",
+    "allowedModes": ["ask", "coding", "review", "plan_execute"],
+    "requirePlanBeforeEdit": true,
+    "requireEvidenceForCompletion": true,
+    "requireTestSummary": true,
+    "requireDiffSummary": true,
+    "allowSubagents": true
+  },
+  "permissions": {
+    "usableBy": ["admin", "user"],
+    "editableBy": ["admin"],
+    "workspaceBindingEditableBy": ["admin", "workspace_owner", "workspace_admin"]
+  },
+  "defaultWorkspacePolicy": {
+    "sandboxMode": "workspace_write",
+    "approvalPolicy": "on_request",
+    "networkPolicy": "disabled",
+    "allowedPaths": ["${workspace.root}"],
+    "deniedPaths": ["${user.home}", "/etc", "/usr", "/var", "/root", ".env", ".env.*", "**/id_rsa", "**/secrets/**"],
+    "riskOverrides": {
+      "shell.write": { "riskLevel": "high", "requiresApproval": true },
+      "git.commit": { "riskLevel": "medium", "requiresApproval": true },
+      "git.push": { "riskLevel": "high", "requiresApproval": true },
+      "network.access": { "riskLevel": "high", "requiresApproval": true },
+      "dependency.install": { "riskLevel": "high", "requiresApproval": true },
+      "delete.files": { "riskLevel": "high", "requiresApproval": true }
+    }
+  },
+  "agentProfile": {
+    "profileId": "coding_agent_profile",
+    "displayName": "编码工程助手",
+    "role": "软件工程编程智能体",
+    "language": "zh-CN",
+    "tone": "专业、简洁、工程化、可验证",
+    "userExperience": {
+      "defaultEntry": "chat",
+      "simpleModeForNormalUser": true,
+      "exposeModelConfig": false,
+      "exposeToolDetails": false,
+      "showPlan": true,
+      "showTimeline": true,
+      "showDiff": true,
+      "showTests": true,
+      "showApprovals": true
+    }
+  },
+  "capabilityPack": {
+    "packId": "capability.coding.codex_style",
+    "name": "Codex-style 编码能力包",
+    "capabilities": [
+      "codebase_understanding",
+      "repo_search",
+      "implementation_planning",
+      "code_editing",
+      "patch_generation",
+      "test_execution",
+      "lint_execution",
+      "typecheck_execution",
+      "code_review",
+      "pr_summary",
+      "project_instruction_loading",
+      "session_attachment_context"
+    ]
+  },
+  "contextSources": {
+    "knowledgeBases": {
+      "mode": "agent_config_optional",
+      "description": "会话知识库由用户在智能体配置中选择；不选择则不自动注入 Wiki 知识库上下文。"
+    },
+    "projectDerived": {
+      "enabled": true,
+      "sources": ["AGENTS.md", "AGENTS.override.md", "README.md", "CONTRIBUTING.md", "package.json", "pom.xml", "build.gradle", "Dockerfile", "docs/**", ".github/workflows/**"]
+    },
+    "sessionTemporary": { "enabled": true, "priority": "highest", "persistByDefault": false }
+  },
+  "tools": [
+    { "name": "workspace.search", "displayName": "搜索工作区", "type": "builtin", "riskLevel": "low", "readOnly": true },
+    { "name": "workspace.read_file", "displayName": "读取文件", "type": "builtin", "riskLevel": "low", "readOnly": true },
+    { "name": "workspace.apply_patch", "displayName": "应用补丁", "type": "builtin", "riskLevel": "high", "readOnly": false, "requiresApprovalByPolicy": true },
+    { "name": "shell.exec", "displayName": "执行命令", "type": "builtin", "riskLevel": "high", "readOnly": false, "requiresApprovalByPolicy": true },
+    { "name": "git.status", "displayName": "查看 Git 状态", "type": "builtin", "riskLevel": "low", "readOnly": true },
+    { "name": "git.diff", "displayName": "查看 Git 差异", "type": "builtin", "riskLevel": "low", "readOnly": true },
+    { "name": "test.run", "displayName": "运行测试", "type": "builtin", "riskLevel": "medium", "readOnly": false },
+    { "name": "project.cache.read", "displayName": "读取项目缓存", "type": "builtin", "riskLevel": "low", "readOnly": true },
+    { "name": "project.cache.update", "displayName": "更新项目缓存", "type": "builtin", "riskLevel": "medium", "readOnly": false },
+    { "name": "subagent.spawn", "displayName": "创建子智能体", "type": "builtin", "riskLevel": "medium", "readOnly": true }
+  ],
+  "inputSchema": {
+    "fields": [
+      { "name": "projectId", "label": "项目", "type": "project_selector", "required": true },
+      { "name": "workspaceId", "label": "工作区", "type": "workspace_selector", "required": true },
+      { "name": "mode", "label": "模式", "type": "enum", "required": true, "default": "coding", "options": ["ask", "coding", "review", "debug", "refactor", "test", "migration"] },
+      { "name": "task", "label": "任务描述", "type": "textarea", "required": true },
+      { "name": "targetFiles", "label": "目标文件", "type": "file_multi_selector", "required": false },
+      { "name": "runTests", "label": "运行测试", "type": "boolean", "default": true },
+      { "name": "allowNetwork", "label": "允许网络", "type": "boolean", "default": false },
+      { "name": "createCommit", "label": "创建提交", "type": "boolean", "default": false }
+    ]
+  },
+  "outputFormats": ["markdown", "diff", "patch", "json", "pr_description"],
+  "qualityGates": {
+    "planRequired": { "enabled": true },
+    "workspaceBoundary": { "enabled": true },
+    "noSecretLeak": { "enabled": true },
+    "testEvidence": { "enabled": true },
+    "diffSummary": { "enabled": true },
+    "approvalForRisk": { "enabled": true }
+  },
+  "mockAcceptanceTasks": [
+    { "id": "mock_001", "title": "代码库问答", "input": "解释 ChatConsole 发送消息后的前后端调用链路。", "expected": ["不修改文件", "输出涉及文件", "标注不确定点"] },
+    { "id": "mock_002", "title": "前端小型 Bugfix", "input": "修复一个 Vue TypeScript 类型错误并运行 pnpm exec vue-tsc --noEmit。", "expected": ["先输出计划", "只修改相关文件", "输出 diff 和测试结果"] },
+    { "id": "mock_003", "title": "后端接口增强", "input": "为 workspace policy 增加只读查询接口并补齐前端调用。", "expected": ["分析后端与前端契约", "记录编译或诊断结果", "总结残余风险"] }
+  ],
+  "mvpScope": {
+    "included": ["builtin template", "workspace/project binding", "ask mode", "code mode", "workspace.search/read/apply_patch", "shell test execution", "git.status/git.diff", "plan/diff/test panels", "project cache", "AGENTS.md"],
+    "excluded": ["cloud worktree", "automatic PR creation", "full GitHub app", "large scale code index"]
+  },
+  "defaultKnowledgeBases": [
+    {
+      "name": "编码助手系统规则",
+      "description": "内置编码助手的默认工作流程、安全策略和验收清单。",
+      "required": false,
+      "pages": [
+        {
+          "slug": "coding-agent-workflow",
+          "title": "编码助手工作流程",
+          "summary": "编码助手先理解上下文，再制定计划，随后小步修改、验证，并总结改动文件、测试结果和残余风险。",
+          "pageType": "template_seed",
+          "content": "## 编码助手工作流程\n\n1. 修改前先检查工作区、相关文件和已有本地改动。\n2. 实施前说明当前计划。\n3. 修改范围聚焦在用户请求和现有架构内。\n4. 运行当前可用且最相关的验证命令。\n5. 结束时说明改动文件、验证结果和残余风险。\n\n## 安全规则\n\n- 不覆盖用户已有的无关改动。\n- 密钥文件、凭证、破坏性命令、依赖安装、网络访问、git push 和大范围删除都视为高风险操作。\n- 修改前优先用只读方式理解项目。"
+        },
+        {
+          "slug": "coding-agent-acceptance",
+          "title": "编码助手验收任务",
+          "summary": "用于验证编码助手能否安全地解释、修改、测试并总结真实项目。",
+          "pageType": "template_seed",
+          "content": "## 模拟验收任务\n\n- 解释 ChatConsole 发送消息后的前后端链路，并列出涉及文件，不修改代码。\n- 修复一个小型 Vue TypeScript 问题，并运行 `vue-tsc --noEmit` 或当前最接近的类型检查命令。\n- 给后端接口增加一个小字段，并补齐前端 API 类型，然后总结前后端契约。\n\n每个任务都必须包含计划、有限范围修改、验证证据和简洁总结。"
+        }
+      ]
+    }
+  ],
+  "systemPrompt": "## Role\n你是编码工程助手，一个面向真实代码仓库的工程型编程智能体。\n\n## Goal\n帮助用户理解、修改、测试、审查和交付代码。你必须先理解上下文，再制定计划，然后做最小必要修改，最后用测试、diff 和清晰总结证明工作。\n\n## Rules\n- 只能在 workspace policy 允许的路径内读取和修改文件。\n- 不得读取、输出或传播密钥、token、.env、私钥或生产配置。\n- 不得回滚、覆盖或删除用户已有的无关改动。\n- 修改前先阅读相关文件并说明计划；只读问答不修改文件。\n- 高风险 shell、依赖安装、网络访问、删除文件、git push、PR 创建必须按策略审批。\n- 完成时说明修改文件、测试结果、diff 摘要和残余风险。",
+  "workspaceFiles": [
+    {
+      "filename": "AGENTS.md",
+      "content": "## 编码助手规则\n\n- 修改前先阅读项目说明：AGENTS.md、README.md、docs、package/pom/build 等文件。\n- 修改前检查当前工作区状态，不覆盖用户已有的无关改动。\n- 除纯解释类问题外，实施前先给出计划。\n- 修改保持聚焦，并遵循现有架构和代码风格。\n- 条件允许时运行最相关的测试、类型检查或 lint 命令。\n- 结束时总结改动文件、验证结果和残余风险。\n",
+      "enabled": true,
+      "sortOrder": 0
+    },
+    {
+      "filename": "PROFILE.md",
+      "content": "## 编码助手画像\n\n模式：问答、编码、审查、调试、重构、测试。\n默认策略：允许工作区内写入，默认禁用网络，高风险操作按策略请求审批。\n",
+      "enabled": true,
+      "sortOrder": 1
+    },
+    {
+      "filename": "PROJECT_CACHE.md",
+      "content": "## 项目理解缓存\n\n- 技术栈：\n- 模块结构：\n- 入口文件：\n- API 路由：\n- 前端路由：\n- 测试命令：\n- 构建命令：\n- 编码约定：\n- 最近变更摘要：\n",
+      "enabled": true,
+      "sortOrder": 2
+    },
+    {
+      "filename": "MEMORY.md",
+      "content": "## 编码助手记忆\n\n- 发现稳定的项目约定后持续遵循。\n- 测试/构建命令验证有效后再记录为长期记忆。\n- 用户偏好只有稳定、可复用时才记录。\n- 任务临时草稿留在会话上下文，不写入长期记忆。\n",
+      "enabled": true,
+      "sortOrder": 3
+    },
+    {
+      "filename": "ACCEPTANCE.md",
+      "content": "## 默认验收清单\n\n- 修改前已经说明计划。\n- 已阅读相关文件。\n- 修改保持在工作区边界内。\n- 已运行验证命令，或说明无法运行的原因。\n- 最终回复列出改动文件、测试结果和残余风险。\n",
+      "enabled": true,
+      "sortOrder": 4
+    }
+  ]
+}
