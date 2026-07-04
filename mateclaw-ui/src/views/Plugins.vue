@@ -23,6 +23,7 @@
           <p>{{ t('plugins.loading') }}</p>
         </div>
 
+        <template v-else>
         <!-- Built-in Plugins -->
         <div class="plugins-section">
           <h3 class="plugins-section-title">内置插件 / Built-in</h3>
@@ -68,7 +69,7 @@
         </div>
 
         <!-- Plugin Cards (external) -->
-        <div v-else class="plugins-grid">
+        <div class="plugins-grid">
           <div v-for="plugin in plugins" :key="plugin.name" class="plugin-card mc-surface-card">
             <div class="plugin-header">
               <div class="plugin-icon-wrap">
@@ -150,6 +151,7 @@
             </div>
           </div>
         </div>
+        </template>
 
         <!-- Empty state -->
         <div v-if="plugins.length === 0 && !loading" class="empty-state mc-surface-card">
