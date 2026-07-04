@@ -37,8 +37,16 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ContextRouterService {
 
+    /** P1 Closure SF-1: approximate token budget (≈3.5 chars/token = ~685 tokens for 2400 chars). */
     private static final int INJECTION_CHAR_BUDGET = 2400;
+    private static final int INJECTION_TOKEN_BUDGET = estimateTokens(INJECTION_CHAR_BUDGET);
     private static final int INJECTION_SECTION_ITEM_LIMIT = 3;
+    private static final double CHARS_PER_TOKEN_FALLBACK = 3.5;
+
+    private static int estimateTokens(int charLen) {
+        return (int) Math.round(charLen / CHARS_PER_TOKEN_FALLBACK);
+    }
+
 
     private final WorkspaceService workspaceService;
     private final AgentMapper agentMapper;
@@ -191,6 +199,10 @@ public class ContextRouterService {
         }
         sb.append("</context-router>");
         }
+            // P1 Closure SF-1: log actual char/token budget usage for observability
+            int actualChars = sb.length();
+            log.debug("[ContextRouter] Injection block: {} chars / ~{} tokens (budget={} chars / ~{} tokens)",
+                    actualChars, estimateTokens(actualChars), INJECTION_CHAR_BUDGET, INJECTION_TOKEN_BUDGET);
             return sb.toString();
         } catch (Exception e) {
             log.debug("[ContextRouter] Failed to build injection block for agent {}: {}", agentId, e.getMessage());

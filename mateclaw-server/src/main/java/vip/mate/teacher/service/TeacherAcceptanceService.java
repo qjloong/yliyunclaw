@@ -85,6 +85,17 @@ public class TeacherAcceptanceService {
             blockers.add("repeated directory scan without cache or alternative path");
         }
 
+        // P1 Closure TA-1: section-aware question-type ratio enforcement
+        int questionTypeCount = detectedQuestionTypes.size();
+        if (formalResult && questionTypeCount >= 3 && !mentionsQuestionMix) {
+            blockers.add("question-type ratio verification failed: " + questionTypeCount
+                    + " types detected but no mix/ratio signal — check RulePack question mix requirements");
+        }
+        // P1 Closure TA-2: open-ended answer completeness hard-enforcement
+        if (formalResult && hasOpenQuestion && !openQuestionHasDirection) {
+            blockers.add("open-ended answer missing direction/rubric — every open question needs reference direction and scoring points");
+        }
+
         List<String> evidence = new ArrayList<>();
         evidence.add("teacher rule pack=" + pack.name());
         if (!detectedQuestionTypes.isEmpty()) {
@@ -248,6 +259,14 @@ public class TeacherAcceptanceService {
     ) {
         public static TeacherAcceptanceResult empty() {
             return new TeacherAcceptanceResult("", "", "", List.of(), List.of(), Map.of(), 0);
+        }
+
+        /** P1 Closure TA-1/TA-2: returns true when hard-enforcement blockers exist. */
+        public boolean hasHardBlockers() {
+            return gateBlockers.stream().anyMatch(blocker ->
+                    blocker.contains("question-type ratio")
+                            || blocker.contains("open-ended answer missing")
+                            || blocker.contains("missing answer/rubric pair"));
         }
     }
 }

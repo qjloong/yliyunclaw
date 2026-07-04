@@ -1675,6 +1675,8 @@ export default {
     title: '工具管理',
     desc: '管理 Agent 可用的工具',
     registerButton: '注册工具',
+    searchPlaceholder: '搜索工具名称、Bean 或描述...',
+    noMatch: '没有匹配的工具',
     columns: {
       tool: '工具',
       beanName: 'Bean 名称',

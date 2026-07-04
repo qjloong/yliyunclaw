@@ -16,20 +16,30 @@
           </button>
         </div>
 
+        <!-- 搜索栏 -->
+        <div class="tools-search-bar">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input v-model="searchQuery" class="search-input"
+                 :placeholder="t('tools.searchPlaceholder')" @input="onSearchInput" />
+          <span v-if="searchQuery" class="search-count">{{ filteredTools.length }} / {{ tools.length }}</span>
+        </div>
+
         <!-- 工具列表 -->
         <div class="tools-table-wrap mc-surface-card">
           <table class="tools-table">
         <thead>
           <tr>
-            <th>{{ t('tools.columns.tool') }}</th>
-            <th>{{ t('tools.columns.beanName') }}</th>
-            <th>{{ t('tools.columns.type') }}</th>
-            <th>{{ t('tools.columns.status') }}</th>
-            <th>{{ t('tools.columns.actions') }}</th>
+            <th class="col-tool">{{ t('tools.columns.tool') }}</th>
+            <th class="col-bean">{{ t('tools.columns.beanName') }}</th>
+            <th class="col-type">{{ t('tools.columns.type') }}</th>
+            <th class="col-status">{{ t('tools.columns.status') }}</th>
+            <th class="col-actions">{{ t('tools.columns.actions') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="tool in tools" :key="tool.id" class="tool-row">
+          <tr v-for="tool in filteredTools" :key="tool.id" class="tool-row">
             <td>
               <div class="tool-info">
                 <div class="tool-icon-wrap">
@@ -71,11 +81,11 @@
               </div>
             </td>
           </tr>
-          <tr v-if="tools.length === 0">
+          <tr v-if="filteredTools.length === 0">
             <td colspan="5" class="empty-row">
               <div class="empty-state">
-                <span class="empty-icon">🔧</span>
-                <p>{{ t('tools.empty') }}</p>
+                <span class="empty-icon">{{ searchQuery ? '🔍' : '🔧' }}</span>
+                <p>{{ searchQuery ? t('tools.noMatch') : t('tools.empty') }}</p>
               </div>
             </td>
           </tr>
@@ -130,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { toolApi } from '@/api/index'
@@ -138,8 +148,23 @@ import type { Tool } from '@/types/index'
 
 const { t } = useI18n()
 const tools = ref<Tool[]>([])
+const searchQuery = ref('')
 const showModal = ref(false)
 const editingTool = ref<Tool | null>(null)
+
+const filteredTools = computed(() => {
+  if (!searchQuery.value.trim()) return tools.value
+  const q = searchQuery.value.toLowerCase().trim()
+  return tools.value.filter(t =>
+    (t.name || '').toLowerCase().includes(q) ||
+    (t.beanName || '').toLowerCase().includes(q) ||
+    (t.displayName || '').toLowerCase().includes(q) ||
+    (t.description || '').toLowerCase().includes(q) ||
+    (t.toolType || '').toLowerCase().includes(q)
+  )
+})
+
+function onSearchInput() { /* reactive — computed handles it */ }
 
 const defaultForm = () => ({ name: '', beanName: '', description: '', toolType: 'builtin' as string, enabled: true })
 const form = ref<any>(defaultForm())
@@ -211,7 +236,17 @@ async function toggleTool(tool: Tool) {
 .btn-secondary { padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 12px; font-size: 14px; cursor: pointer; }
 .btn-secondary:hover { background: var(--mc-bg-sunken); }
 .tools-table-wrap { overflow: hidden; }
-.tools-table { width: 100%; border-collapse: collapse; }
+.tools-search-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--mc-bg-elevated); border: 1px solid var(--mc-border); border-radius: 12px; margin-bottom: 14px; }
+.search-icon { color: var(--mc-text-tertiary); flex-shrink: 0; }
+.search-input { flex: 1; border: none; background: none; font-size: 14px; color: var(--mc-text-primary); outline: none; }
+.search-input::placeholder { color: var(--mc-text-tertiary); }
+.search-count { font-size: 12px; color: var(--mc-text-tertiary); white-space: nowrap; flex-shrink: 0; }
+.tools-table { width: 100%; border-collapse: collapse; table-layout: auto; }
+.col-tool { width: auto; }
+.col-bean { width: 170px; }
+.col-type { width: 90px; }
+.col-status { width: 80px; }
+.col-actions { width: 90px; }
 .tools-table th { padding: 14px 16px; text-align: left; font-size: 12px; font-weight: 700; color: var(--mc-text-secondary); text-transform: uppercase; letter-spacing: 0.08em; background: var(--mc-bg-muted); border-bottom: 1px solid var(--mc-border); }
 .tool-row { border-bottom: 1px solid var(--mc-border-light); transition: background 0.1s; }
 .tool-row:hover { background: var(--mc-bg-muted); }
@@ -221,7 +256,7 @@ async function toggleTool(tool: Tool) {
 .tool-icon-wrap { width: 36px; height: 36px; background: linear-gradient(135deg, rgba(217,109,87,0.12), rgba(24,74,69,0.08)); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--mc-text-secondary); }
 .tool-name { font-weight: 500; color: var(--mc-text-primary); }
 .tool-raw-name { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 2px; }
-.tool-desc { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 1px; }
+.tool-desc { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 2px; max-width: 480px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; line-height: 1.45; }
 .bean-name { background: var(--mc-bg-sunken); padding: 2px 8px; border-radius: 4px; font-size: 12px; color: var(--mc-text-primary); }
 .type-badge { padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; }
 .type-builtin { background: var(--mc-primary-bg); color: var(--mc-primary); }

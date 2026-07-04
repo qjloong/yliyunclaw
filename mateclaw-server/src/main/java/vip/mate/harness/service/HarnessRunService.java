@@ -1023,6 +1023,14 @@ public class HarnessRunService {
             assessmentStatus = score >= 45 || matchedSize > 0 ? "partial" : "failed";
         } else if (teacherTemplate && teacherAwaitingConfirmation) {
             assessmentStatus = "partial";
+        } else if (codingTemplate && (mutationGateFailed || validationGateFailed)) {
+            // P1 Closure CA-1/CA-2: hard gate — mutation-required tasks without diff or
+            // validation-required tasks without passing validation must fail, not just partial.
+            assessmentStatus = "failed";
+        } else if (teacherTemplate && !gateBlockers.isEmpty() && teacherRuleAssessment.hasHardBlockers()) {
+            // P1 Closure TA-1/TA-2: hard gate — teacher tasks with section-aware rubric
+            // enforcement failures (ratio mismatches, missing answers) must fail.
+            assessmentStatus = "failed";
         } else if ((codingTemplate || teacherTemplate) && !gateBlockers.isEmpty()) {
             assessmentStatus = score >= 45 || matchedSize > 0 ? "partial" : "failed";
         } else if (score >= passThreshold && matchedSize >= minimumMatched) {

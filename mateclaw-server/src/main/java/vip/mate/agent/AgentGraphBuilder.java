@@ -1123,8 +1123,22 @@ public class AgentGraphBuilder {
 
             JsonNode capabilityPack = template.path("capabilityPack");
             if (capabilityPack.isObject()) {
-                appendLine(sb, "Capability Pack", firstText(capabilityPack.path("packId"), pluginBindingContext.capabilityPackId()));
+                String packId = firstText(capabilityPack.path("packId"), pluginBindingContext.capabilityPackId());
+                appendLine(sb, "Capability Pack", packId);
                 appendArray(sb, "Capabilities", capabilityPack.path("capabilities"), 12);
+                // P1 Closure SF-3: inject capability declarations as runtime tool filter hints.
+                // The model should prefer tools aligned with declared capabilities and avoid
+                // tools that don't match any active capability when capability-constrained.
+                JsonNode caps = capabilityPack.path("capabilities");
+                if (caps.isArray() && caps.size() > 0) {
+                    List<String> capList = new ArrayList<>();
+                    caps.forEach(c -> capList.add(c.asText()));
+                    sb.append("Capability-aligned tool guidance: Only use tools that serve the declared capabilities above. ")
+                      .append("If a tool's purpose does not match any declared capability (")
+                      .append(String.join(", ", capList.stream().limit(6).toList()))
+                      .append(capList.size() > 6 ? ", ..." : "")
+                      .append("), prefer not to invoke it unless explicitly requested by the user.\n\n");
+                }
             }
 
             JsonNode runtime = template.path("runtime");

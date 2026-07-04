@@ -82,20 +82,34 @@ public class WikiContextService {
         return sb.toString();
     }
 
+    /** P1 Closure SF-2: max excerpt chars before smart truncation kicks in. */
+    private static final int MAX_EXCERPT_CHARS = 200;
+
     private String buildContextEntry(RelevantHit hit) {
         StringBuilder entry = new StringBuilder();
         PageSearchResult result = hit.result();
         entry.append("- **[[").append(result.slug()).append("]]** ").append(result.title()).append("\n");
         entry.append("  KB: ").append(formatKnowledgeBaseLabel(hit.kb())).append("\n");
         String excerpt = result.snippet() != null ? result.snippet() : result.summary();
-        if (excerpt != null) {
-            entry.append("  ").append(excerpt).append("\n");
+        if (excerpt != null && !excerpt.isBlank()) {
+            String trimmed = truncateExcerpt(excerpt);
+            entry.append("  ").append(trimmed).append("\n");
         }
         if (result.reason() != null && !result.reason().isBlank()) {
             entry.append("  Relevance: ").append(result.reason()).append("\n");
         }
         entry.append("\n");
         return entry.toString();
+    }
+
+    /** Smart truncation: keep head + tail with ellipsis for long snippets. */
+    private String truncateExcerpt(String excerpt) {
+        if (excerpt == null || excerpt.length() <= MAX_EXCERPT_CHARS) {
+            return excerpt;
+        }
+        int headLen = MAX_EXCERPT_CHARS * 2 / 3;       // ~133 chars
+        int tailLen = MAX_EXCERPT_CHARS - headLen - 4; // ~63 chars, leave room for "..."
+        return excerpt.substring(0, headLen) + " ... " + excerpt.substring(excerpt.length() - tailLen);
     }
 
     /**

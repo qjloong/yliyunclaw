@@ -1675,6 +1675,8 @@ export default {
     title: 'Tools',
     desc: 'Manage tools available to your agents',
     registerButton: 'Register Tool',
+    searchPlaceholder: 'Search tool name, bean or description...',
+    noMatch: 'No matching tools',
     columns: {
       tool: 'Tool',
       beanName: 'Bean Name',
