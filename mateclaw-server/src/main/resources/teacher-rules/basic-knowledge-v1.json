@@ -1,0 +1,27 @@
+{
+  "id": "teacher.rulepack.basic_knowledge.v1",
+  "stage": "junior",
+  "subject": "chinese",
+  "module": "basic_knowledge",
+  "name": "初中语文基础知识规则包 v1",
+  "version": "1.0.0",
+  "defaultQuestionMix": {
+    "phoneticsGlyph": "20%",
+    "wordUse": "20%",
+    "sentenceDisease": "20%",
+    "literaryCulture": "20%",
+    "comprehensivePractice": "20%"
+  },
+  "sourceRequirements": [
+    {
+      "id": "curriculum_standard",
+      "label": "课程标准",
+      "rule": "基础知识范围应以初中语文课标和教材为准，缺少资料时不得扩展到高中或竞赛内容。"
+    },
+    {
+      "id": "sample_questions",
+      "label": "样题",
+      "rule": "如用户要求贴近校内或中考风格，应上传并绑定样题或评分标准。"
+    }
+  ]
+}

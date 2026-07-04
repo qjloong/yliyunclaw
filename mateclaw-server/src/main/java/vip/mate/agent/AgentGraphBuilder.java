@@ -153,6 +153,9 @@ public class AgentGraphBuilder {
     /** Conversation→workspaceId lookup cache; see {@link #approvalGrantResolver}. */
     private final vip.mate.approval.grant.WorkspaceLookupCache workspaceLookupCache;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private List<vip.mate.plugin.api.agent.AgentPromptAugmenter> promptAugmenters = List.of();
+
     /**
      * Optional audit pipeline. Setter injection (rather than a constructor
      * parameter) keeps existing constructor-based wiring + tests intact.
@@ -492,6 +495,14 @@ public class AgentGraphBuilder {
         agent.maxInputTokens = effectiveMaxInputTokens;
         agent.topP = runtimeModel.getTopP();
         agent.toolCallingEnabled = toolCallingEnabled;
+        // 扩展点：模板绑定信息
+        agent.templateId = entity.getTemplateId() != null ? entity.getTemplateId() : "";
+        agent.profileId = entity.getProfileId() != null ? entity.getProfileId() : "";
+        agent.capabilityPackId = entity.getCapabilityPackId() != null ? entity.getCapabilityPackId() : "";
+        agent.pluginKey = entity.getPluginKey() != null ? entity.getPluginKey() : "";
+        agent.templateMetadataJson = entity.getTemplateMetadataJson() != null ? entity.getTemplateMetadataJson() : "";
+        agent.knowledgeBaseIdsJson = entity.getKnowledgeBaseIdsJson() != null ? entity.getKnowledgeBaseIdsJson() : "";
+        agent.runtimeMode = "default";
 
         // Agent-level override takes priority; a relative override is resolved
         // under the workspace basePath so admins can express agent directories
@@ -1687,8 +1698,20 @@ public class AgentGraphBuilder {
 
         // Wiki 知识库上下文注入
         String wikiContext = wikiContextService.buildWikiContext(entity.getId());
+        String prompt = basePrompt + ABOUT_YOU_BLOCK + toolGuidance + searchGuidance + wikiContext;
 
-        return basePrompt + ABOUT_YOU_BLOCK + toolGuidance + searchGuidance + wikiContext;
+        // 扩展点：提示词增强
+        vip.mate.plugin.api.agent.AgentContext ctx = vip.mate.plugin.api.agent.AgentContext.builder()
+                .agentId(String.valueOf(entity.getId()))
+                .agentName(entity.getName() != null ? entity.getName() : "")
+                .templateId(entity.getTemplateId()).profileId(entity.getProfileId())
+                .capabilityPackId(entity.getCapabilityPackId()).pluginKey(entity.getPluginKey())
+                .templateMetadataJson(entity.getTemplateMetadataJson())
+                .knowledgeBaseIdsJson(entity.getKnowledgeBaseIdsJson()).build();
+        for (vip.mate.plugin.api.agent.AgentPromptAugmenter a : promptAugmenters) {
+            if (a.supports(ctx)) prompt += a.augmentSystemPrompt(ctx);
+        }
+        return prompt;
     }
 
     /**

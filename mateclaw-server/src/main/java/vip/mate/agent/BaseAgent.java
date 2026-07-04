@@ -109,6 +109,26 @@ public abstract class BaseAgent {
      */
     protected ModelConfigEntity runtimeModelConfig;
 
+    /** 扩展点：模板绑定信息 + 运行时模式 */
+    protected String templateId;
+    protected String profileId;
+    protected String capabilityPackId;
+    protected String pluginKey;
+    protected String templateMetadataJson;
+    protected String knowledgeBaseIdsJson;
+    protected String runtimeMode;
+
+    public vip.mate.plugin.api.agent.AgentContext toAgentContext() {
+        return vip.mate.plugin.api.agent.AgentContext.builder()
+                .agentId(agentId != null ? agentId : "")
+                .agentName(agentName != null ? agentName : "")
+                .templateId(templateId).profileId(profileId).capabilityPackId(capabilityPackId)
+                .pluginKey(pluginKey).templateMetadataJson(templateMetadataJson)
+                .knowledgeBaseIdsJson(knowledgeBaseIdsJson)
+                .runtimeMode(runtimeMode != null ? runtimeMode : "default")
+                .build();
+    }
+
     /**
      * The agent's effective tool set. Lifted from subclasses so
      * {@link #buildUserMessage} can ask whether the agent has any media-capable

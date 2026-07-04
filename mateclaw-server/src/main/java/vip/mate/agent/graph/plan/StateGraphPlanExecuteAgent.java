@@ -49,6 +49,9 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
     /** Held only so context-window budget includes the tools schema. Nullable for legacy constructor. */
     private final vip.mate.agent.AgentToolSet toolSet;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private List<vip.mate.agent.interceptor.AgentExecutionInterceptor> interceptors = List.of();
+
     public StateGraphPlanExecuteAgent(ChatClient chatClient, ConversationService conversationService,
                                       CompiledGraph compiledGraph, PlanningService planningService,
                                       org.springframework.ai.chat.model.ChatModel chatModel,
@@ -81,6 +84,16 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
         setState(AgentState.RUNNING);
         try {
             log.info("[{}] Plan-Execute structured stream: conversationId={}", agentName, conversationId);
+            // 扩展点：执行拦截器
+            vip.mate.plugin.api.agent.AgentContext ctx = toAgentContext();
+            for (vip.mate.agent.interceptor.AgentExecutionInterceptor interceptor : interceptors) {
+                if (interceptor.supports(ctx)) {
+                    String transformed = interceptor.transformMessage(userMessage, conversationId, ctx);
+                    var shortcut = interceptor.beforeExecution(transformed, conversationId, ctx);
+                    if (shortcut.isPresent()) return shortcut.get();
+                    if (!transformed.equals(userMessage)) userMessage = transformed;
+                }
+            }
             Map<String, Object> inputs = buildInitialState(userMessage, conversationId);
             inputs.put(MateClawStateKeys.REQUESTER_ID, requesterId != null ? requesterId : "");
             return executeStream(inputs);

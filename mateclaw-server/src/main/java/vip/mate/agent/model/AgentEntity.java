@@ -147,6 +147,14 @@ public class AgentEntity {
     @TableField(value = "wiki_disabled")
     private Boolean wikiDisabled;
 
+    // ── 扩展点：模板绑定列 ──
+    @TableField(value = "template_id") private String templateId;
+    @TableField(value = "profile_id") private String profileId;
+    @TableField(value = "capability_pack_id") private String capabilityPackId;
+    @TableField(value = "plugin_key") private String pluginKey;
+    @TableField(value = "template_metadata_json") private String templateMetadataJson;
+    @TableField(value = "knowledge_base_ids_json") private String knowledgeBaseIdsJson;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 
