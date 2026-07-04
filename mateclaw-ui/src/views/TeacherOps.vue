@@ -223,11 +223,10 @@ function goBackToPlugins() {
 async function loadAll() {
   loading.value = true
   try {
-    const [rulePackRes, skillRes, bindingRes, draftRes]: any[] = await Promise.all([
-      teacherRulePackApi.list(),
-      teacherSkillApi.list(),
-      teacherSkillApi.bindings(),
-      teacherImprovementApi.list(),
+    const [rulePackRes, skillRes, bindingRes]: any[] = await Promise.all([
+      teacherRulePackApi.list().catch(() => ({ data: [] })),
+      teacherSkillApi.list().catch(() => ({ data: [] })),
+      teacherSkillApi.bindings().catch(() => ({ data: null })),
     ])
     rulePacks.value = rulePackRes.data || []
     skills.value = skillRes.data || []
@@ -235,7 +234,8 @@ async function loadAll() {
     selectedSkillIds.value = skillBindingView.value?.activeSkillIds?.length
       ? [...skillBindingView.value.activeSkillIds]
       : skills.value.map(skill => skill.id)
-    drafts.value = draftRes.data || []
+    // 改进草案模块独立加载，后端未部署时静默降级
+    try { const r: any = await teacherImprovementApi.list(); drafts.value = r.data || [] } catch { drafts.value = [] }
   } catch (error: any) {
     ElMessage.error(error?.message || '初中语文出题规则数据加载失败')
   } finally {

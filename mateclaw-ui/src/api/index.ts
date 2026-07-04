@@ -170,6 +170,16 @@ export const teacherSkillApi = {
   resetBindings: () => http.delete('/teacher/skills/bindings'),
 }
 
+export const teacherImprovementApi = {
+  list: () => http.get('/teacher/improvements'),
+  create: (harnessRunId: string, note = '') =>
+    http.post('/teacher/improvements', { harnessRunId, note }),
+  accept: (id: string, data: { note?: string; publish?: boolean; scope?: 'workspace' | 'global' }) =>
+    http.post(`/teacher/improvements/${encodeURIComponent(id)}/accept`, data),
+  reject: (id: string, note = '') =>
+    http.post(`/teacher/improvements/${encodeURIComponent(id)}/reject`, { note }),
+}
+
 // ==================== Chat ====================
 export const chatApi = {
   uploadFile: async (conversationId: string, file: File) => {

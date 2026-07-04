@@ -27,12 +27,12 @@
   --mc-radius-full: 9999px;
 
   /* brand */
-  --mc-primary: #d96d46;
-  --mc-primary-light: #ebb08f;
-  --mc-primary-hover: #bb4f27;
-  --mc-primary-bg: #f6e2d7;
-  --mc-accent: #184a45;
-  --mc-accent-soft: #dce8e4;
+  --mc-primary: #3b88ff;
+  --mc-primary-light: #8ab8ff;
+  --mc-primary-hover: #2f72de;
+  --mc-primary-bg: #e8f1ff;
+  --mc-accent: #214f9c;
+  --mc-accent-soft: #dce8ff;
 
   /* surfaces */
   --mc-bg: #f6f1ea;
@@ -51,9 +51,9 @@
   --mc-border-strong: #cdbdad;
 
   /* text */
-  --mc-text-primary: #1d1612;
-  --mc-text-secondary: #665245;
-  --mc-text-tertiary: #9b7d6c;
+  --mc-text-primary: #172033;
+  --mc-text-secondary: #4a5568;
+  --mc-text-tertiary: #718096;
   --mc-text-inverse: #ffffff;
 
   /* shadows */
@@ -146,7 +146,7 @@
   --mc-edge-strong: #8a7261;
 
   /* Element Plus light override */
-  --el-color-primary: #D97757;
+  --el-color-primary: #3b88ff;
   --el-font-family: var(--mc-font-body);
 
   color-scheme: light;
@@ -154,12 +154,12 @@
 
 html.dark {
   /* brand (lighter in dark bg context) */
-  --mc-primary: #eb8f65;
-  --mc-primary-light: #f1c3ab;
-  --mc-primary-hover: #d96d46;
-  --mc-primary-bg: rgba(224, 136, 96, 0.15);
-  --mc-accent: #5ca69d;
-  --mc-accent-soft: rgba(92, 166, 157, 0.12);
+  --mc-primary: #63a0ff;
+  --mc-primary-light: #9dc2ff;
+  --mc-primary-hover: #3b88ff;
+  --mc-primary-bg: rgba(59, 136, 255, 0.16);
+  --mc-accent: #7eb3ff;
+  --mc-accent-soft: rgba(126, 179, 255, 0.14);
 
   /* surfaces */
   --mc-bg: #17110e;
@@ -178,9 +178,9 @@ html.dark {
   --mc-border-strong: #4a392f;
 
   /* text */
-  --mc-text-primary: #F0EAE4;
-  --mc-text-secondary: #C4A898;
-  --mc-text-tertiary: #8A7060;
+  --mc-text-primary: #eef4ff;
+  --mc-text-secondary: #99b8e0;
+  --mc-text-tertiary: #5c7a9e;
   --mc-text-inverse: #1C1410;
 
   /* shadows */
@@ -1032,6 +1032,6 @@ html.dark {
   --el-fill-color: #2E2420;
   --el-fill-color-light: #2A211C;
   --el-fill-color-lighter: #231C17;
-  --el-color-primary: #E08860;
+  --el-color-primary: #63a0ff;
   --el-mask-color: rgba(0, 0, 0, 0.6);
 }
