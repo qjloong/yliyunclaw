@@ -117,6 +117,13 @@ const router = createRouter({
           component: () => import('@/views/Plugins.vue'),
           meta: { title: 'Plugins', requiredCapability: 'manage:settings' },
         },
+        {
+          path: 'teacher-ops',
+          name: 'TeacherOps',
+          component: () => import('@/views/TeacherOps.vue'),
+          meta: { title: '教师运维', requiredCapability: 'manage:settings' },
+        },
+
         // ==================== Settings (absorbs advanced pages) ====================
         {
           path: 'settings',
