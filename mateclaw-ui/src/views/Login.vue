@@ -2,8 +2,8 @@
   <div class="login-page">
     <div class="login-center">
       <div class="login-logo">
-        <img src="/logo/mateclaw_logo_s.png" alt="MateClaw" class="logo-image" />
-        <h1 class="logo-title">Mate<span class="logo-title-highlight">Claw</span></h1>
+        <img src="/logo/mateclaw_logo_s.png" alt="Meta Y" class="logo-image" />
+        <h1 class="logo-title">Meta <span class="logo-title-highlight">Y</span></h1>
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">
@@ -72,9 +72,9 @@
       <div v-if="bindDialog.visible" class="bind-dialog">
         <div class="bind-dialog-content">
           <h3 class="bind-title">首次使用 {{ bindDialog.provider }} 登录</h3>
-          <p class="bind-desc">请绑定你的 MateClaw 账号</p>
-          <input v-model="bindDialog.username" type="text" class="form-input" placeholder="MateClaw 用户名" autocomplete="username" />
-          <input v-model="bindDialog.password" type="password" class="form-input" placeholder="MateClaw 密码" autocomplete="current-password" />
+          <p class="bind-desc">请绑定你的 Meta Y 账号</p>
+          <input v-model="bindDialog.username" type="text" class="form-input" placeholder="Meta Y 用户名" autocomplete="username" />
+          <input v-model="bindDialog.password" type="password" class="form-input" placeholder="Meta Y 密码" autocomplete="current-password" />
           <div v-if="bindDialog.error" class="error-msg">{{ bindDialog.error }}</div>
           <button class="login-btn" :disabled="loading" @click="handleBind">绑定</button>
           <button class="bind-cancel" @click="cancelBind">取消</button>
@@ -240,13 +240,13 @@ function cancelBind() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #FAF5F0 0%, #F5EDE5 100%);
+  background: linear-gradient(160deg, #F0F5FF 0%, #E8EEF8 100%);
   padding: 24px;
 }
 
 :root.dark .login-page,
 html.dark .login-page {
-  background: linear-gradient(160deg, var(--mc-bg) 0%, #1A1210 100%);
+  background: linear-gradient(160deg, var(--mc-bg) 0%, #0D1117 100%);
 }
 
 .login-center {
@@ -319,7 +319,7 @@ html.dark .login-page {
 .form-input:focus {
   border-color: var(--mc-primary);
   background: var(--mc-bg-elevated);
-  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.08);
+  box-shadow: 0 0 0 3px rgba(59, 136, 255, 0.08);
 }
 
 .eye-btn {
@@ -372,7 +372,7 @@ html.dark .login-page {
 
 .login-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(217, 119, 87, 0.3);
+  box-shadow: 0 8px 20px rgba(59, 136, 255, 0.25);
 }
 
 .login-btn:disabled {
@@ -500,11 +500,11 @@ html.dark .login-page {
 @keyframes breathe {
   0%, 100% {
     transform: scale(1);
-    filter: drop-shadow(0 6px 20px rgba(217, 119, 87, 0.3));
+    filter: drop-shadow(0 6px 20px rgba(59, 136, 255, 0.25));
   }
   50% {
     transform: scale(1.06);
-    filter: drop-shadow(0 8px 28px rgba(217, 119, 87, 0.45));
+    filter: drop-shadow(0 8px 28px rgba(59, 136, 255, 0.4));
   }
 }
 
