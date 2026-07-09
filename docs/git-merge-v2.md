@@ -11,7 +11,7 @@
 | Teacher 业务模块 | 16 | 全新文件 | 无 |
 | Wiki 扩展 | 17 | 全新文件 | 无 |
 | SPI 架构 | 4 | 全新文件 | 无 |
-| DB 迁移 | 8 | 全新文件 (V100-V103) | 无 |
+| DB 迁移 | 12 | 全新文件 (V9001-V9006, H2+MySQL) | 无（V9xxx 系列永不冲突） |
 | UI 新增文件 | 2 | 全新文件 (TeacherOps.vue, ProjectChangesPanel.vue) | 无 |
 | UI API/Types 增强 | 2 | 追加代码块到上游文件末尾 | 低 |
 | 导出工具 | 2 | 全新文件 | 无 |
@@ -172,14 +172,16 @@ Teacher Controller 中使用了 dev-v1 的 `SystemSettingService.getRawValue()` 
 
 ## 八、DB 迁移
 
+> **编号规则**：采用 `V9001` 起独立编号，与上游 `V1-V999` 永不冲突，后续拉取更新无需处理迁移编号。
+
 | 编号 | 内容 |
 |------|------|
-| V100 | agent_template_binding_columns（新增 6 列：template_id, profile_id, capability_pack_id, plugin_key, template_metadata_json, knowledge_base_ids_json） |
-| V101 | wiki_business_metadata |
-| V102 | wiki_page_route_tags |
-| V103 | wiki_page_structure_metadata |
-
-> V101-V103 从 dev-v1 的 V109-V111 重新编号，避免与上游未来迁移冲突。
+| V9001 | agent_template_binding_columns（新增 6 列：template_id, profile_id, capability_pack_id, plugin_key, template_metadata_json, knowledge_base_ids_json） |
+| V9002 | wiki_business_metadata |
+| V9003 | wiki_page_route_tags |
+| V9004 | wiki_page_structure_metadata |
+| V9005 | register_html_render_tools |
+| V9006 | register_understand_anything_tool |
 
 ---
 
