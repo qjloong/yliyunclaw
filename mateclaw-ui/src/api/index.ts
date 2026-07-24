@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { handleAuthFailure, updateTokenFromHeader } from '@/utils/auth'
+import { WIKI_UPLOAD_TIMEOUT_MS } from '@/utils/wikiUpload'
 import type {
   ApprovalGrant,
   ApprovalGrantPage,
@@ -216,6 +217,13 @@ export const chatApi = {
 }
 
 // ==================== Conversation ====================
+// Content calendar (read-only) — produced 公众号 / 小红书 pieces + lifecycle status.
+export const contentItemApi = {
+  list: (params?: { page?: number; size?: number; platform?: string; status?: string }) =>
+    http.get('/content-items', { params }),
+  summary: () => http.get('/content-items/summary'),
+}
+
 export const conversationApi = {
   list: () => http.get('/conversations'),
   /**
@@ -233,6 +241,9 @@ export const conversationApi = {
     http.delete(`/conversations/${encId(conversationId)}`),
   clearMessages: (conversationId: string) =>
     http.delete(`/conversations/${encId(conversationId)}/messages`),
+  // messageId is a snowflake ID — keep it a string end-to-end (never Number()).
+  rewindMessage: (conversationId: string, messageId: string) =>
+    http.post(`/conversations/${encId(conversationId)}/messages/${messageId}/rewind`),
   rename: (conversationId: string, title: string) =>
     http.put(`/conversations/${encId(conversationId)}/title`, { title }),
   setPinned: (conversationId: string, pinned: boolean) =>
@@ -283,6 +294,18 @@ export const skillApi = {
   refreshRuntime: () => http.post('/skills/runtime/refresh'),
   exportWorkspace: (id: string | number) => http.post(`/skills/${id}/export-workspace`),
   getWorkspaceInfo: (id: string | number) => http.get(`/skills/${id}/workspace`),
+  /**
+   * Bundle files (scripts/ + references/ + templates/) — canonical rows in
+   * mate_skill_file; writes also materialize the workspace cache and
+   * re-resolve the skill.
+   */
+  listFiles: (id: string | number) => http.get(`/skills/${id}/files`),
+  getFileContent: (id: string | number, path: string) =>
+    http.get(`/skills/${id}/files/content`, { params: { path } }),
+  saveFileContent: (id: string | number, path: string, content: string) =>
+    http.put(`/skills/${id}/files/content`, { path, content }),
+  deleteFile: (id: string | number, path: string) =>
+    http.delete(`/skills/${id}/files`, { params: { path } }),
   // RFC-090 §7 + §11.4 — pre-flight requirements + LESSONS.md + reverse lookup
   requirements: (id: string | number) => http.get(`/skills/${id}/requirements`),
   getLessons: (id: string | number) => http.get(`/skills/${id}/lessons`),
@@ -853,12 +876,16 @@ export const wikiApi = {
   listFailures: (limit = 100) => http.get<{ data: WikiFailureItem[] }>(`/wiki/admin/failures?limit=${limit}`),
 
   // Raw Materials
-  listRaw: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/raw`),
+  listRaw: (
+    kbId: number,
+    filters?: { status?: string; sourceType?: string; keyword?: string; startTime?: string; endTime?: string },
+  ) => http.get(`/wiki/knowledge-bases/${kbId}/raw`, filters ? { params: filters } : undefined),
   addRawText: (kbId: number, data: { title: string; content: string }) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/text`, data),
   uploadRaw: (kbId: number, formData: FormData, onProgress?: (pct: number) => void) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: WIKI_UPLOAD_TIMEOUT_MS,
       onUploadProgress: onProgress
         ? (e) => { if (e.total) onProgress(Math.round((e.loaded / e.total) * 100)) }
         : undefined,
@@ -869,6 +896,16 @@ export const wikiApi = {
     http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/reprocess`),
   cancelRaw: (kbId: number, rawId: number) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/cancel`),
+  // Batch reprocess/delete. Select by explicit `ids` (Snowflake strings — never
+  // coerce to number) or by a `status` selector (e.g. retry all failed).
+  batchReprocessRaw: (
+    kbId: number,
+    body: { ids?: (string | number)[]; status?: string; force?: boolean },
+  ) => http.post(`/wiki/knowledge-bases/${kbId}/raw/batch/reprocess`, body),
+  batchDeleteRaw: (
+    kbId: number,
+    body: { ids?: (string | number)[]; status?: string },
+  ) => http.post(`/wiki/knowledge-bases/${kbId}/raw/batch/delete`, body),
   downloadRaw: (kbId: number, rawId: number) =>
     http.get<Blob>(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/download`, {
       responseType: 'blob',

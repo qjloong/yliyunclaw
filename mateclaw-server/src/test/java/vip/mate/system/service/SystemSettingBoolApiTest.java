@@ -14,6 +14,7 @@ import vip.mate.plugin.PluginManager;
 import vip.mate.system.model.SystemSettingEntity;
 import vip.mate.system.repository.SystemSettingMapper;
 import vip.mate.tool.search.SearchProviderRegistry;
+import vip.mate.workspace.core.config.WorkspaceSandboxProperties;
 
 import java.util.List;
 
@@ -46,7 +47,8 @@ class SystemSettingBoolApiTest {
 
     @BeforeEach
     void setUp() {
-        service = new SystemSettingService(mapper, new SearchProviderRegistry(List.of()), mock(PluginManager.class));
+        service = new SystemSettingService(mapper, new SearchProviderRegistry(List.of()),
+                new SettingCrypto("test-key"), new WorkspaceSandboxProperties(), mock(PluginManager.class));
     }
 
     private SystemSettingEntity row(String value) {

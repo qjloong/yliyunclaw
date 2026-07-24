@@ -24,6 +24,7 @@ MateClaw 不关心你用哪个 LLM。它通过五个协议适配器跟所有主�
 | **DeepSeek** | deepseek-chat、deepseek-coder、**DeepSeek V4 flash + pro**（支持思考模式） | openai | OpenAI 兼容 |
 | **Kimi（Moonshot）** | moonshot-v1-8k/32k/128k | openai | OpenAI 兼容 |
 | **智谱 AI** | GLM-5-Turbo、GLM-5V-Turbo、GLM-5、GLM-5.1、**GLM-5.2** | openai | OpenAI 兼容；中国区 + 国际区各一个 standard 端点，外加两个 Coding Plan 订阅端点 |
+| **火山方舟 Agent Plan** _(1.8.0+)_ | GLM-5.2（主模型）等 | openai | OpenAI 兼容；agent-plan 端点（`/api/plan/v3`） |
 | **MiniMax** | abab6.5、abab5.5；扩展视频模型目录 + 国内端点 | anthropic | Anthropic Messages API 兼容（端点 `/anthropic`） |
 | **SiliconFlow CN/INTL** | 托管路由推理 | openai | 双端点，OpenAI 兼容 |
 | **OpenCode** | 代码场景路由 | openai | OpenAI 兼容 |
@@ -197,6 +198,18 @@ token 持久化和刷新走的是和浏览器回调流**完全相同**的代码�
 - 逐个或批量添加
 
 对 OpenRouter 特别有用——**让 200+ 免费档模型全都可见**。挑一个免费模型零成本有一套能用的环境。
+
+### 自建供应商的模型发现
+
+自己「添加供应商」建的兼容端点（vLLM / Xinference / LocalAI / 各类兼容网关）默认按协议开启发现：`openai-compatible`、`dashscope-native`、`gemini-native`、`anthropic-messages` 会自动带上「发现模型」按钮；OAuth 类协议（ChatGPT OAuth、Claude Code OAuth）不带（它们的发现走专属登录回调，与 baseUrl 无关）。
+
+如果端点的模型列举路径不是标准的 `/v1/models`（例如反向代理加了前缀 `/openai/v1/models`），在「生成参数(JSON)」里加一行 `modelsPath` 覆盖即可：
+
+```json
+{ "modelsPath": "/openai/v1/models" }
+```
+
+同一个 JSON 里的 `completionsPath` 用来覆盖对话补全路径（默认 `/v1/chat/completions`），两者互不影响。若端点根本不提供 OpenAI 风格的列举接口，直接用「添加模型」手动录入模型 id。
 
 ### Ollama 启动时自动检测
 

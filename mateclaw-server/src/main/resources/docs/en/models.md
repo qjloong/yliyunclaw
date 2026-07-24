@@ -24,6 +24,7 @@ MateClaw doesn't care which LLM you use. It talks to every mainstream provider t
 | **DeepSeek** | deepseek-chat, deepseek-coder, **DeepSeek V4 flash + pro** (thinking-mode) | openai | OpenAI-compatible |
 | **Kimi (Moonshot)** | moonshot-v1-8k/32k/128k | openai | OpenAI-compatible |
 | **Zhipu AI** | GLM-5-Turbo, GLM-5V-Turbo, GLM-5, GLM-5.1, **GLM-5.2** | openai | OpenAI-compatible; CN + international standard endpoints plus two Coding Plan subscription endpoints |
+| **Volcano Engine Agent Plan** _(1.8.0+)_ | GLM-5.2 (primary) and more | openai | OpenAI-compatible; agent-plan endpoint (`/api/plan/v3`) |
 | **MiniMax** | abab6.5, abab5.5; expanded video catalog + CN endpoint | anthropic | Anthropic Messages API-compatible (endpoint `/anthropic`) |
 | **SiliconFlow CN/INTL** | Routed inference across hosted models | openai | Two endpoints, OpenAI-compatible |
 | **OpenCode** | Code-tuned routing | openai | OpenAI-compatible |
@@ -196,6 +197,18 @@ Providers that expose a model list (OpenAI, Ollama, LM Studio, OpenRouter, etc.)
 - Add them one by one or all at once
 
 For OpenRouter specifically, Model Discovery surfaces the **200+ free-tier models** — pick a free model and you have a working setup with zero cost.
+
+### Custom (self-added) providers
+
+Compatible endpoints you create via "Add provider" (vLLM / Xinference / LocalAI / gateways) enable discovery by protocol: `openai-compatible`, `dashscope-native`, `gemini-native`, and `anthropic-messages` get the **Discover models** button by default; OAuth protocols (ChatGPT OAuth, Claude Code OAuth) do not — their discovery runs through a dedicated sign-in callback, unrelated to `baseUrl`.
+
+If the endpoint's model-listing path is not the standard `/v1/models` (e.g. a reverse proxy adds a `/openai/v1/models` prefix), override it with a `modelsPath` entry in the provider's Generate Kwargs (JSON):
+
+```json
+{ "modelsPath": "/openai/v1/models" }
+```
+
+The sibling `completionsPath` key overrides the chat-completions path (default `/v1/chat/completions`); the two are independent. If the endpoint exposes no OpenAI-style listing at all, just use "Add model" to enter model ids manually.
 
 ### Ollama auto-detection on startup
 

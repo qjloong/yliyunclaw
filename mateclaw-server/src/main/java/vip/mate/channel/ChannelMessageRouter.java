@@ -15,12 +15,17 @@ import vip.mate.channel.event.ChannelMessageReceivedEvent;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.notification.ApprovalNotificationService;
 import vip.mate.channel.service.ChannelService;
+import vip.mate.channel.web.AgentStreamAccumulator;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.exception.MateClawException;
+import vip.mate.llm.model.ModelConfigEntity;
+import vip.mate.llm.service.ModelConfigService;
 import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.tts.TtsService;
 import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.model.MessageContentPart;
+import vip.mate.workspace.core.service.ChatUploadLocationResolver;
 import vip.mate.workspace.conversation.model.MessageEntity;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -32,6 +37,7 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -76,6 +82,22 @@ public class ChannelMessageRouter {
      *  still work; falls back to the legacy default dir when unset. */
     @Autowired(required = false)
     private vip.mate.workspace.core.service.ChatUploadLocationResolver chatUploadLocationResolver;
+
+    /** Field-injected for the same reason as {@link #events}: backs the
+     *  /model magic command (list + switch). Optional so tests that build
+     *  the router directly still work; when unset the command degrades to
+     *  a "service unavailable" reply instead of failing message intake. */
+    @Autowired(required = false)
+    private ModelConfigService modelConfigService;
+
+    /** Field-injected so the IM sync path can scrub hallucinated
+     *  {@code /api/v1/files/generated/{id}} URLs (LLM wrote a UUID-shaped
+     *  link without ever calling a render tool). The graph's FinalAnswerNode
+     *  already does this, but the IM sync path accumulates {@code delta.content()}
+     *  directly and bypasses FinalAnswerNode — without this scrub, the fake
+     *  URL reaches the IM channel as a clickable link that 404s. */
+    @Autowired(required = false)
+    private vip.mate.tool.document.GeneratedFileCache generatedFileCache;
 
     /** 队列条目：封装消息及其路由上下文 */
     private record QueueEntry(ChannelMessage message, ChannelAdapter adapter, ChannelEntity channelEntity) {}
@@ -146,30 +168,6 @@ public class ChannelMessageRouter {
     static long pickDebounceMs(int currentMergedLength) {
         return currentMergedLength > LONG_TEXT_THRESHOLD ? LONG_DEBOUNCE_MS : DEBOUNCE_MS;
     }
-
-    /**
-     * Plan-Execute SSE events that the Web Console mirror needs to see when
-     * a conversation runs through an IM channel.
-     * <p>
-     * The agent emits these via {@code GraphEventPublisher} and they ride on
-     * the {@code chatStructuredStream} Flux as {@code StreamDelta.event(...)}.
-     * Web direct chats already broadcast them via the ChatController
-     * accumulator. IM channels (DingTalk + the seven sync-path adapters)
-     * historically dropped them — DingTalk's {@code processStreamAsText}
-     * only consumes {@code delta.content()}, and the sync {@code chat()}
-     * collector explicitly filters {@code delta.isEvent()} out. The whitelist
-     * is applied in the IM stream path so PlanStepsPanel renders correctly
-     * when an operator monitors an IM conversation in the Web Console.
-     * <p>
-     * Whitelist (not pass-through) so Web-side accumulator-internal events
-     * like {@code _usage_final} or future agent-internal markers don't leak
-     * to subscribers.
-     */
-    private static final Set<String> MIRRORED_PLAN_EVENTS = Set.of(
-            "plan_created",
-            "plan_step_started",
-            "plan_step_completed"
-    );
 
     /** 是否已关闭 */
     private volatile boolean shutdown = false;
@@ -270,6 +268,11 @@ public class ChannelMessageRouter {
         }
         channelEntity = fresh;
 
+        String conversationId = buildConversationId(message, channelEntity.getId());
+        if (handleMagicCommand(message, adapter, channelEntity, conversationId)) {
+            return;
+        }
+
         // Fan out to the trigger pipeline FIRST — channel_message and
         // content_match triggers fire on every received message regardless
         // of whether the channel has an agent attached. If we returned
@@ -291,7 +294,6 @@ public class ChannelMessageRouter {
         }
 
         String channelType = adapter.getChannelType();
-        String conversationId = buildConversationId(message);
 
         log.info("[{}] Enqueuing message: sender={}, conversationId={}, agentId={}",
                 channelType, message.getSenderId(), conversationId, agentId);
@@ -466,7 +468,7 @@ public class ChannelMessageRouter {
                     continue; // 超时，重新检查 shutdown 标志
                 }
 
-                String conversationId = buildConversationId(entry.message());
+                String conversationId = buildConversationId(entry.message(), entry.channelEntity().getId());
                 ReentrantLock lock = sessionLocks.computeIfAbsent(conversationId, k -> new ReentrantLock());
 
                 lock.lock();
@@ -591,15 +593,21 @@ public class ChannelMessageRouter {
         }
         channelEntity = fresh;
         Long agentId = channelEntity.getAgentId();
-        if (agentId == null) {
-            log.warn("[{}] Channel {} has no associated agent at processing time; dropping message from {}",
-                    adapter.getChannelType(), channelEntity.getName(), message.getSenderId());
-            return;
-        }
         log.info("[{}] Processing message: sender={}, conversationId={}, agentId={}",
                 adapter.getChannelType(), message.getSenderId(), conversationId, agentId);
 
         try {
+            // Magic commands run before the agent-binding check so /help and
+            // /status still answer on a channel with no agent attached.
+            if (handleMagicCommand(message, adapter, channelEntity, conversationId)) {
+                return;
+            }
+            if (agentId == null) {
+                log.warn("[{}] Channel {} has no associated agent at processing time; dropping message from {}",
+                        adapter.getChannelType(), channelEntity.getName(), message.getSenderId());
+                return;
+            }
+
             // ======= 审批拦截层 =======
             String userText = message.getContent() != null ? message.getContent().trim() : "";
             PendingApproval pending = approvalService.findPendingByConversation(conversationId);
@@ -779,46 +787,72 @@ public class ChannelMessageRouter {
                 if (adapter instanceof StreamingChannelAdapter streamingAdapter) {
                     savedAssistantId = processWithStreaming(message, streamingAdapter, conversationId, agentId, promptText, channelEntity, chatOrigin);
                 } else {
-                    // Sync path for non-streaming IM adapters (feishu / wecom / weixin /
-                    // slack / discord / qq / telegram). We can't use agentService.chat()
+                    // Sync path for non-streaming IM adapters (weixin / slack /
+                    // discord / qq / telegram). We can't use agentService.chat()
                     // because its collector filters out `delta.isEvent()` deltas — that
-                    // would silently drop plan_created / plan_step_* events that the Web
-                    // Console mirror needs to render PlanStepsPanel. Instead we consume
-                    // chatStructuredStream directly: content gets accumulated for the IM
-                    // reply, and whitelisted plan events are mirrored to ChatStreamTracker
-                    // for any Web SSE viewer of the same conversationId.
-                    StringBuilder replyAccumulator = new StringBuilder();
+                    // would silently drop the tool/plan events the Web Console
+                    // mirror and the persisted execution metadata both need.
+                    // Instead we consume chatStructuredStream directly through
+                    // the shared accumulator (reply text, metadata, live mirror).
                     final String channelType = adapter.getChannelType();
-                    // Token usage + model attribution: capture _usage_final event emitted at stream end
-                    final int[] usage = {0, 0, 0, 0, 0}; // [prompt, completion, cacheRead, cacheWrite, reasoning]
-                    final String[] modelInfo = {null, null}; // [runtimeModel, runtimeProvider]
+                    // Channel-level toggle for relaying per-stage narration as
+                    // standalone messages mid-run. Shares the key the streaming
+                    // progress path uses so operators have one knob per channel.
+                    // Disabled → narration is dropped from the IM channel (it is
+                    // never part of the final reply either way; web observers
+                    // still see it via the live broadcast).
+                    final boolean relayNarration = channelConfigBoolean(
+                            channelEntity, "stream_progress", true);
+                    // Shared accumulator: builds the segments/toolCalls metadata
+                    // the Web console renders for history, mirrors events +
+                    // deltas to live Web observers, and captures token usage +
+                    // model attribution (_usage_final is consumed internally).
+                    // Reply text also comes from it — same semantics as the
+                    // legacy collector: persistOnly deltas included (DirectAnswerNode-
+                    // routed answers arrive as persistOnly when CONTENT_STREAMED=true
+                    // and IM channels still need the text for the outgoing reply),
+                    // segmentOnly narration excluded (issue #120).
+                    AgentStreamAccumulator accumulator = newAccumulator();
                     agentService.chatStructuredStream(agentId, promptText, conversationId,
                                     message.getSenderId(), chatOrigin)
                             .doOnNext(delta -> {
-                                if (delta.isEvent()) {
-                                    if ("_usage_final".equals(delta.eventType())) {
-                                        Map<String, Object> data = delta.eventData();
-                                        usage[0] = ((Number) data.getOrDefault("promptTokens", 0)).intValue();
-                                        usage[1] = ((Number) data.getOrDefault("completionTokens", 0)).intValue();
-                                        usage[2] = ((Number) data.getOrDefault("cacheReadTokens", 0)).intValue();
-                                        usage[3] = ((Number) data.getOrDefault("cacheWriteTokens", 0)).intValue();
-                                        usage[4] = ((Number) data.getOrDefault("reasoningTokens", 0)).intValue();
-                                        Object model = data.get("runtimeModelName");
-                                        Object provider = data.get("runtimeProviderId");
-                                        if (model != null) modelInfo[0] = model.toString();
-                                        if (provider != null) modelInfo[1] = provider.toString();
+                                accumulator.accept(delta, conversationId);
+                                if (!delta.isEvent() && delta.segmentOnly()) {
+                                    // Per-stage narration ("Let me look that up…"), emitted as
+                                    // one complete delta per agent loop iteration. Relay it
+                                    // immediately as its own outgoing message so the user sees
+                                    // progress mid-run.
+                                    String narration = delta.content() != null ? delta.content().trim() : "";
+                                    if (relayNarration && !narration.isEmpty() && replyTarget != null) {
+                                        try {
+                                            adapter.renderAndSend(replyTarget, narration);
+                                        } catch (Exception sendErr) {
+                                            // A failed progress send must not abort the agent
+                                            // run — the final reply still goes out below.
+                                            log.warn("[{}] Narration relay failed (non-fatal): {}",
+                                                    channelType, sendErr.getMessage());
+                                        }
                                     }
-                                    mirrorPlanEventToTracker(conversationId, delta, channelType);
-                                } else if (delta.content() != null) {
-                                    // Match the legacy agentService.chat() behavior: include
-                                    // persistOnly deltas too. DirectAnswerNode-routed answers
-                                    // arrive as persistOnly when CONTENT_STREAMED=true and IM
-                                    // channels still need the text for the outgoing reply.
-                                    replyAccumulator.append(delta.content());
                                 }
                             })
                             .blockLast(Duration.ofMinutes(10));
-                    String reply = replyAccumulator.toString();
+                    String reply = accumulator.getContent();
+
+                    // The IM sync path bypasses FinalAnswerNode, so hallucinated
+                    // /api/v1/files/generated/{id} URLs (LLM wrote a fake link
+                    // without calling a render tool) reach here verbatim. Scrub
+                    // them to the user-visible warning so IM clients don't see
+                    // a clickable link that 404s. Real tool-produced URLs are
+                    // left intact for the channel adapter's scrubber to upgrade
+                    // into native attachments.
+                    if (generatedFileCache != null) {
+                        String scrubbed = generatedFileCache.scrubMissingReferences(reply);
+                        if (!scrubbed.equals(reply)) {
+                            log.info("[{}] Scrubbed hallucinated generated-file URL(s) from IM reply ({} -> {} chars)",
+                                    adapter.getChannelType(), reply.length(), scrubbed.length());
+                            reply = scrubbed;
+                        }
+                    }
 
                     // 检查 chat 过程中是否产生了审批 pending
                     PendingApproval newPending = approvalService.findPendingByConversation(conversationId);
@@ -841,9 +875,19 @@ public class ChannelMessageRouter {
                         // error turns must not pollute memory extraction.
                         boolean isError = errorClassifier.isErrorReply(reply);
                         String status = isError ? "error" : "completed";
+                        // Persist the full execution record (parts + metadata)
+                        // so the Web console renders IM-routed turns exactly
+                        // like Web direct chats. The content column keeps the
+                        // scrubbed reply text that actually went out.
                         MessageEntity saved = conversationService.saveMessage(
-                                conversationId, "assistant", reply, null, status,
-                                usage[0], usage[1], usage[2], usage[3], usage[4], modelInfo[0], modelInfo[1], null);
+                                conversationId, "assistant", reply,
+                                accumulator.toAssistantParts(), status,
+                                accumulator.getPromptTokens(), accumulator.getCompletionTokens(),
+                                accumulator.getCacheReadTokens(), accumulator.getCacheWriteTokens(),
+                                accumulator.getReasoningTokens(),
+                                blankToNull(accumulator.getRuntimeModelName()),
+                                blankToNull(accumulator.getRuntimeProviderId()),
+                                accumulator.toMetadataJson());
                         savedAssistantId = saved != null ? saved.getId() : null;
                         if (!isError) {
                             publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply, chatOrigin);
@@ -910,6 +954,272 @@ public class ChannelMessageRouter {
     }
 
     /**
+     * Handle channel-native control commands before the message is persisted
+     * or forwarded to the agent. A recognized command is terminal for this
+     * inbound message: it never reaches the debounce queue or the LLM.
+     */
+    private boolean handleMagicCommand(ChannelMessage message, ChannelAdapter adapter,
+                                       ChannelEntity channelEntity, String conversationId) {
+        String userText = message != null ? message.getContent() : null;
+        ChannelMagicCommand.Parsed command = ChannelMagicCommand.parse(userText).orElse(null);
+        if (command == null) {
+            return false;
+        }
+        String replyTarget = resolveReplyTarget(message);
+        String reply = switch (command.type()) {
+            case CLEAR -> {
+                cancelPending(conversationId);
+                conversationService.clearMessages(conversationId);
+                yield ChannelMagicCommand.clearConfirmation();
+            }
+            case NEW -> {
+                // Channel conversation ids are deterministic (channelType:chatId),
+                // so "new session" cannot rotate the id — it clears the context
+                // like CLEAR and only differs in the confirmation wording.
+                cancelPending(conversationId);
+                conversationService.clearMessages(conversationId);
+                yield ChannelMagicCommand.newConfirmation();
+            }
+            case STOP -> {
+                cancelPending(conversationId);
+                boolean stopped = streamTracker.requestStop(conversationId);
+                yield stopped ? ChannelMagicCommand.stopConfirmation()
+                        : ChannelMagicCommand.stopNothingRunning();
+            }
+            case HELP -> ChannelMagicCommand.helpText();
+            case STATUS -> buildStatusReply(channelEntity, conversationId);
+            case MODEL -> handleModelCommand(channelEntity, conversationId, command.args());
+        };
+        if (replyTarget != null && reply != null) {
+            // renderAndSend (not sendMessage) so adapters that pre-post a
+            // "thinking..." placeholder on inbound (WeCom reply_stream)
+            // consume it here: the confirmation overwrites the placeholder
+            // bubble in place and the keepalive refresher is stopped.
+            // Plain sendMessage would leave the placeholder dangling forever.
+            adapter.renderAndSend(replyTarget, reply);
+        }
+        log.info("[{}] Magic command handled: {} conversationId={}, sender={}",
+                adapter.getChannelType(), command.type(), conversationId,
+                message != null ? message.getSenderId() : null);
+        return true;
+    }
+
+    /** Build the /status reply; every lookup degrades gracefully to keep the command side-effect free. */
+    private String buildStatusReply(ChannelEntity channelEntity, String conversationId) {
+        StringBuilder sb = new StringBuilder("📊 会话状态\n");
+        sb.append("- 会话: ").append(conversationId).append('\n');
+        Long agentId = channelEntity != null ? channelEntity.getAgentId() : null;
+        String[] pinned = findPinnedModel(conversationId);
+        if (agentId == null) {
+            sb.append("- 智能体: 未绑定\n");
+        } else {
+            try {
+                AgentEntity agent = agentService.getAgent(agentId);
+                if (agent != null) {
+                    sb.append("- 智能体: ").append(agent.getName()).append('\n');
+                    // Conversation-pinned model wins over the agent default —
+                    // mirrors the resolution order in AgentService, so /status
+                    // never contradicts what /model just switched to.
+                    if (pinned != null) {
+                        sb.append("- 模型: ").append(pinned[0]).append(':').append(pinned[1])
+                                .append("（会话指定）\n");
+                    } else if (agent.getModelName() != null && !agent.getModelName().isBlank()) {
+                        sb.append("- 模型: ").append(agent.getModelName()).append('\n');
+                    }
+                } else {
+                    sb.append("- 智能体: 未找到（id=").append(agentId).append("）\n");
+                }
+            } catch (Exception e) {
+                log.warn("Failed to load agent {} for /status: {}", agentId, e.getMessage());
+                sb.append("- 智能体: 查询失败\n");
+            }
+        }
+        try {
+            sb.append("- 历史消息数: ").append(conversationService.countMessages(conversationId)).append('\n');
+        } catch (Exception e) {
+            log.warn("Failed to count messages for /status: {}", e.getMessage());
+        }
+        boolean running = streamTracker.isRunning(conversationId);
+        sb.append("- 当前任务: ").append(running ? "进行中（可用 /stop 停止）" : "空闲");
+        return sb.toString();
+    }
+
+    /**
+     * Handle the /model command: list enabled chat models, pin one on this
+     * conversation, or reset to the agent default. Listing and resetting work
+     * without a bound agent; switching requires one because the pinned pair
+     * only takes effect when the agent graph is built.
+     */
+    private String handleModelCommand(ChannelEntity channelEntity, String conversationId, String args) {
+        if (modelConfigService == null) {
+            return "⚠️ 模型管理服务不可用，请稍后再试。";
+        }
+        String arg = args == null ? "" : args.trim();
+        if ("reset".equalsIgnoreCase(arg) || "恢复默认".equals(arg)) {
+            conversationService.clearConversationModel(conversationId);
+            return "✅ 已恢复默认模型（跟随智能体配置），下一条消息生效。";
+        }
+        List<ModelConfigEntity> models;
+        try {
+            models = modelConfigService.listEnabledModels();
+        } catch (Exception e) {
+            log.warn("Failed to list models for /model on {}: {}", conversationId, e.getMessage());
+            return "⚠️ 查询模型列表失败，请稍后再试。";
+        }
+        if (arg.isEmpty() || "list".equalsIgnoreCase(arg)) {
+            return buildModelListReply(models, conversationId);
+        }
+        return switchConversationModel(channelEntity, conversationId, arg, models);
+    }
+
+    /** Max rows shown by /model list — a full catalog can exceed 180 rows,
+     *  which segments into several IM bubbles and buries the usage hint. */
+    private static final int MODEL_LIST_MAX_ROWS = 20;
+
+    private String buildModelListReply(List<ModelConfigEntity> models, String conversationId) {
+        if (models.isEmpty()) {
+            return "当前没有已启用的对话模型，请先在控制台配置。";
+        }
+        String[] pinned = findPinnedModel(conversationId);
+        StringBuilder sb = new StringBuilder("🧠 可用模型（/model <名称> 切换，/model reset 恢复默认）：\n");
+        int shown = 0;
+        for (ModelConfigEntity m : models) {
+            if (shown >= MODEL_LIST_MAX_ROWS) {
+                break;
+            }
+            sb.append("- ").append(m.getProvider()).append(':').append(m.getModelName());
+            if (pinned != null && pinned[0].equalsIgnoreCase(String.valueOf(m.getProvider()))
+                    && pinned[1].equalsIgnoreCase(String.valueOf(m.getModelName()))) {
+                sb.append("  ✅ 当前");
+            }
+            sb.append('\n');
+            shown++;
+        }
+        if (models.size() > MODEL_LIST_MAX_ROWS) {
+            sb.append("…共 ").append(models.size())
+                    .append(" 个已启用模型，仅展示前 ").append(MODEL_LIST_MAX_ROWS)
+                    .append(" 个；发送 /model <关键词> 搜索其余模型。\n");
+        }
+        sb.append(pinned == null
+                ? "当前：跟随智能体默认模型"
+                : "当前会话已指定：" + pinned[0] + ":" + pinned[1]);
+        return sb.toString();
+    }
+
+    private String switchConversationModel(ChannelEntity channelEntity, String conversationId,
+                                           String arg, List<ModelConfigEntity> models) {
+        if (channelEntity == null || channelEntity.getAgentId() == null) {
+            return "⚠️ 当前渠道未绑定智能体，请先在控制台绑定后再切换模型。";
+        }
+        String wantedProvider = null;
+        String wantedName = arg;
+        int colon = arg.indexOf(':');
+        if (colon > 0 && colon < arg.length() - 1) {
+            wantedProvider = arg.substring(0, colon).trim();
+            wantedName = arg.substring(colon + 1).trim();
+        }
+        final String fProvider = wantedProvider;
+        final String fName = wantedName;
+        List<ModelConfigEntity> matches = models.stream()
+                .filter(m -> fName.equalsIgnoreCase(m.getModelName()))
+                .filter(m -> fProvider == null || fProvider.equalsIgnoreCase(m.getProvider()))
+                .toList();
+        if (matches.isEmpty()) {
+            // No exact hit — treat the arg as a search keyword so users can
+            // discover models the capped /model list didn't show.
+            String keyword = fName.toLowerCase(Locale.ROOT);
+            List<ModelConfigEntity> fuzzy = models.stream()
+                    .filter(m -> String.valueOf(m.getModelName()).toLowerCase(Locale.ROOT).contains(keyword)
+                            || String.valueOf(m.getProvider()).toLowerCase(Locale.ROOT).contains(keyword))
+                    .limit(MODEL_LIST_MAX_ROWS)
+                    .toList();
+            if (fuzzy.isEmpty()) {
+                return "⚠️ 未找到已启用的模型「" + arg + "」，发送 /model 查看可用列表。";
+            }
+            StringBuilder sb = new StringBuilder("未找到精确匹配「").append(arg)
+                    .append("」，相近的可用模型：\n");
+            for (ModelConfigEntity m : fuzzy) {
+                sb.append("- /model ").append(m.getProvider()).append(':')
+                        .append(m.getModelName()).append('\n');
+            }
+            return sb.toString().stripTrailing();
+        }
+        if (matches.size() > 1) {
+            StringBuilder sb = new StringBuilder("⚠️ 模型「").append(fName)
+                    .append("」在多个 provider 下存在，请带上前缀再试：\n");
+            for (ModelConfigEntity m : matches) {
+                sb.append("- /model ").append(m.getProvider()).append(':').append(m.getModelName()).append('\n');
+            }
+            return sb.toString().stripTrailing();
+        }
+        ModelConfigEntity target = matches.get(0);
+        try {
+            // The magic-command layer runs before processMessage's
+            // get-or-create, so a /model sent as the very first message must
+            // create the conversation row itself — updateConversationModel
+            // silently no-ops on a missing row.
+            conversationService.getOrCreateSharedConversation(
+                    conversationId, channelEntity.getAgentId(), channelEntity.getWorkspaceId());
+            conversationService.updateConversationModel(
+                    conversationId, target.getProvider(), target.getModelName());
+        } catch (Exception e) {
+            log.warn("Failed to pin model {} on {}: {}", arg, conversationId, e.getMessage());
+            return "⚠️ 切换失败，请稍后再试。";
+        }
+        return "✅ 本会话模型已切换为 " + target.getProvider() + ":" + target.getModelName()
+                + "，下一条消息生效。发送 /model reset 可恢复默认。";
+    }
+
+    /** Conversation-pinned (provider, model) pair, or null when unpinned/unavailable. */
+    private String[] findPinnedModel(String conversationId) {
+        try {
+            ConversationEntity conv = conversationService.findByConversationId(conversationId);
+            if (conv != null
+                    && conv.getModelProvider() != null && !conv.getModelProvider().isBlank()
+                    && conv.getModelName() != null && !conv.getModelName().isBlank()) {
+                return new String[]{conv.getModelProvider(), conv.getModelName()};
+            }
+        } catch (Exception e) {
+            log.debug("Failed to load pinned model for {}: {}", conversationId, e.getMessage());
+        }
+        return null;
+    }
+
+    private void cancelPending(String conversationId) {
+        PendingMessage pending;
+        synchronized (pendingMessages) {
+            pending = pendingMessages.remove(conversationId);
+        }
+        if (pending != null && pending.timer != null) {
+            pending.timer.cancel(false);
+        }
+    }
+
+    /**
+     * Build a per-turn accumulator wired to the stream tracker, so live Web
+     * observers of an IM conversation receive the same event fan-out as Web
+     * direct chats, and the persisted metadata matches byte-for-byte.
+     */
+    private AgentStreamAccumulator newAccumulator() {
+        return new AgentStreamAccumulator(objectMapper, new AgentStreamAccumulator.Sink() {
+            @Override
+            public void broadcast(String conversationId, String eventName, Object payload) {
+                streamTracker.broadcastObject(conversationId, eventName, payload);
+            }
+
+            @Override
+            public void updatePhase(String conversationId, String phase) {
+                streamTracker.updatePhase(conversationId, phase);
+            }
+        });
+    }
+
+    /** Map the accumulator's empty-string defaults back to SQL NULL. */
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
+    }
+
+    /**
      * 流式处理路径（渠道无关）
      * <p>
      * 事件流与渲染分离：
@@ -917,30 +1227,6 @@ public class ChannelMessageRouter {
      * - StreamingChannelAdapter 负责渲染（AI Card / 卡片更新 / 文本累积等）
      * - Router 负责后续的审批检查、消息持久化、事件发布
      */
-    /**
-     * Forward whitelisted Plan-Execute SSE events to ChatStreamTracker so a
-     * Web Console viewer of an IM-routed conversation sees PlanStepsPanel.
-     * <p>
-     * Bounded to {@link #MIRRORED_PLAN_EVENTS} — see the constant's javadoc
-     * for why this is a whitelist rather than a pass-through. Failures here
-     * are best-effort and never propagate, since dropping a UI update is
-     * preferable to derailing the channel reply.
-     */
-    private void mirrorPlanEventToTracker(String conversationId,
-                                          AgentService.StreamDelta delta,
-                                          String channelTypeForLog) {
-        String eventType = delta.eventType();
-        if (eventType == null || !MIRRORED_PLAN_EVENTS.contains(eventType)) {
-            return;
-        }
-        try {
-            streamTracker.broadcastObject(conversationId, eventType, delta.eventData());
-        } catch (Exception ex) {
-            log.debug("[{}] Failed to mirror plan event {}: {}",
-                    channelTypeForLog, eventType, ex.getMessage());
-        }
-    }
-
     private Long processWithStreaming(ChannelMessage message, StreamingChannelAdapter streamingAdapter,
                                       String conversationId, Long agentId, String promptText,
                                       ChannelEntity channelEntity, ChatOrigin chatOrigin) {
@@ -948,33 +1234,22 @@ public class ChannelMessageRouter {
         log.info("[{}] Streaming processing started: conversationId={}", channelType, conversationId);
 
         try {
-            // Step 1: 产生事件流（RFC-063r §2.5: forward ChatOrigin so tools see channelId）
+            // Step 1: 产生事件流（forward ChatOrigin so tools see channelId）
             Flux<AgentService.StreamDelta> stream = agentService.chatStructuredStream(
                     agentId, promptText, conversationId, message.getSenderId(), chatOrigin);
 
-            // Mirror plan-execute SSE events to ChatStreamTracker before the
-            // adapter consumes the Flux. DingTalkChannelAdapter.processStreamAsText
-            // only reads `delta.content()` and would otherwise eat plan_created /
-            // plan_step_* events, leaving the Web Console mirror with no
-            // PlanStepsPanel for IM-routed conversations.
-            // Token usage + model attribution: capture _usage_final event emitted at stream end
-            final int[] usage = {0, 0, 0, 0, 0}; // [prompt, completion, cacheRead, cacheWrite, reasoning]
-            final String[] modelInfo = {null, null}; // [runtimeModel, runtimeProvider]
-            Flux<AgentService.StreamDelta> mirroredStream = stream.doOnNext(delta -> {
-                if (delta.isEvent() && "_usage_final".equals(delta.eventType())) {
-                    Map<String, Object> data = delta.eventData();
-                    usage[0] = ((Number) data.getOrDefault("promptTokens", 0)).intValue();
-                    usage[1] = ((Number) data.getOrDefault("completionTokens", 0)).intValue();
-                    usage[2] = ((Number) data.getOrDefault("cacheReadTokens", 0)).intValue();
-                    usage[3] = ((Number) data.getOrDefault("cacheWriteTokens", 0)).intValue();
-                    usage[4] = ((Number) data.getOrDefault("reasoningTokens", 0)).intValue();
-                    Object model = data.get("runtimeModelName");
-                    Object provider = data.get("runtimeProviderId");
-                    if (model != null) modelInfo[0] = model.toString();
-                    if (provider != null) modelInfo[1] = provider.toString();
-                }
-                mirrorPlanEventToTracker(conversationId, delta, channelType);
-            });
+            // Feed every delta through the shared accumulator before the
+            // adapter consumes the Flux. The accumulator builds the same
+            // segments/toolCalls metadata the Web SSE path persists (so the
+            // console renders the execution timeline for IM-routed turns),
+            // mirrors tool/plan/content events to any live Web observer of
+            // this conversation, and captures token usage + model
+            // attribution. Internal bookkeeping events (_usage_final,
+            // _routing_decision) are consumed inside the accumulator and
+            // never reach subscribers.
+            AgentStreamAccumulator accumulator = newAccumulator();
+            Flux<AgentService.StreamDelta> mirroredStream = stream.doOnNext(delta ->
+                    accumulator.accept(delta, conversationId));
 
             // Step 2: 委托渠道渲染（渠道内部消费 Flux 并处理 UI 更新）
             String finalContent = streamingAdapter.processStream(mirroredStream, message, conversationId);
@@ -993,9 +1268,20 @@ public class ChannelMessageRouter {
             } else if (finalContent != null && !finalContent.isBlank()) {
                 boolean isError = errorClassifier.isErrorReply(finalContent);
                 String status = isError ? "error" : "completed";
+                // Persist the full execution record — parts (text/thinking/
+                // tool_call) and metadata (segments/toolCalls/plan/…) — so
+                // the Web console renders IM-routed turns exactly like Web
+                // direct chats. The content column keeps the adapter's final
+                // text (the adapter may have post-processed it).
                 MessageEntity saved = conversationService.saveMessage(
-                        conversationId, "assistant", finalContent, null, status,
-                        usage[0], usage[1], usage[2], usage[3], usage[4], modelInfo[0], modelInfo[1], null);
+                        conversationId, "assistant", finalContent,
+                        accumulator.toAssistantParts(), status,
+                        accumulator.getPromptTokens(), accumulator.getCompletionTokens(),
+                        accumulator.getCacheReadTokens(), accumulator.getCacheWriteTokens(),
+                        accumulator.getReasoningTokens(),
+                        blankToNull(accumulator.getRuntimeModelName()),
+                        blankToNull(accumulator.getRuntimeProviderId()),
+                        accumulator.toMetadataJson());
                 if (!isError) {
                     publishConversationCompletedEvent(agentId, conversationId, promptText, finalContent, chatOrigin);
                 }
@@ -1201,7 +1487,7 @@ public class ChannelMessageRouter {
             return Flux.error(new IllegalStateException("Channel has no associated agent"));
         }
 
-        String conversationId = buildConversationId(message);
+        String conversationId = buildConversationId(message, channelEntity.getId());
         String username = message.getSenderName() != null ? message.getSenderName() : message.getSenderId();
 
         conversationService.getOrCreateConversation(conversationId, agentId, username, channelEntity.getWorkspaceId());
@@ -1318,9 +1604,26 @@ public class ChannelMessageRouter {
      * 格式：{channelType}:{chatId 或 senderId}
      * 格式采用 {channelType}:{identifier} 命名规则
      */
-    private String buildConversationId(ChannelMessage message) {
+    /**
+     * Build the conversation id for an inbound channel message.
+     *
+     * <p>The id is scoped by {@code channelId} so the same sender reaching two
+     * different workspaces' same-type channels (e.g. two separate wecom channels)
+     * no longer collapses into one shared conversation row. {@code channelId} is
+     * the {@code ChannelEntity} primary key, which binds to exactly one workspace.
+     *
+     * <p>Format: {@code {channelType}:{channelId}:{chatId|senderId}}. When
+     * {@code channelId} is null (defensive; the routed channel row always has an
+     * id) the legacy {@code {channelType}:{identifier}} form is used so nothing
+     * NPEs — those ids remain workspace-ambiguous but that path is not reachable
+     * for a persisted channel.
+     */
+    private String buildConversationId(ChannelMessage message, Long channelId) {
         String identifier = message.getChatId() != null ? message.getChatId() : message.getSenderId();
-        return message.getChannelType() + ":" + identifier;
+        if (channelId == null) {
+            return message.getChannelType() + ":" + identifier;
+        }
+        return message.getChannelType() + ":" + channelId + ":" + identifier;
     }
 
     /**
@@ -1539,16 +1842,18 @@ public class ChannelMessageRouter {
      */
     private Path resolveVoiceReplyAudio(String conversationId, String fileName) {
         if (chatUploadLocationResolver != null) {
-            for (Path root : chatUploadLocationResolver.resolveCandidateUploadRoots(conversationId)) {
-                Path candidate = root.resolve(conversationId).resolve(fileName);
+            for (Path dir : chatUploadLocationResolver.resolveCandidateConversationDirs(conversationId)) {
+                Path candidate = dir.resolve(fileName);
                 if (Files.exists(candidate)) {
                     return candidate;
                 }
             }
         }
         // Fallback to the legacy default dir when the resolver is absent
-        // (e.g. direct-construction unit tests).
-        Path legacy = Paths.get("data", "chat-uploads", conversationId, fileName);
+        // (e.g. direct-construction unit tests). Sanitize the id for the path
+        // segment so it matches the write side.
+        Path legacy = Paths.get("data", "chat-uploads",
+                ChatUploadLocationResolver.sanitizeSegment(conversationId), fileName);
         return Files.exists(legacy) ? legacy : null;
     }
 
@@ -1572,6 +1877,18 @@ public class ChannelMessageRouter {
 
         // 4. auto 模式：仅当用户通过语音输入时回语音
         return "auto".equals(voiceMode) && "voice".equals(message.getInputMode());
+    }
+
+    /**
+     * Boolean lookup on the channel's configJson. Accepts Boolean or String
+     * values, mirroring the adapter-side config parsing rules, so the router
+     * and the adapters read the same key identically.
+     */
+    private boolean channelConfigBoolean(ChannelEntity channelEntity, String key, boolean defaultValue) {
+        Object value = parseChannelConfig(channelEntity.getConfigJson()).get(key);
+        if (value instanceof Boolean b) return b;
+        if (value instanceof String s && !s.isBlank()) return Boolean.parseBoolean(s.trim());
+        return defaultValue;
     }
 
     /**

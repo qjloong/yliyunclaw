@@ -2,11 +2,16 @@ package vip.mate.skill.workspace;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.stereotype.Component;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.model.SkillFileEntity;
 import vip.mate.skill.service.SkillFileService;
 import vip.mate.skill.service.SkillService;
+import vip.mate.skill.workspace.bundle.ClasspathBundleSource;
+import vip.mate.skill.workspace.bundle.SkillBundleFiles;
+import vip.mate.skill.workspace.bundle.SkillBundleSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -15,18 +20,22 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * Mirrors canonical {@code mate_skill_file} rows down to each node's local
- * workspace cache so {@code scripts/} and {@code references/} files exist
- * on disk wherever the skill might run.
+ * workspace cache so {@code scripts/}, {@code references/} and
+ * {@code templates/} files exist on disk wherever the skill might run.
  *
  * <p>Also runs a one-time backfill: for any skill that has on-disk files
  * but no DB rows (typically pre-V112 installs), the local files are read
- * up into the DB so the canonical store catches up to reality. Backfill
- * is content-hash idempotent and safe to invoke repeatedly.
+ * up into the DB so the canonical store catches up to reality. Builtin
+ * skills with neither DB rows nor on-disk files fall back to re-reading
+ * the classpath bundle. Backfill is content-hash idempotent and safe to
+ * invoke repeatedly.
  *
  * <p>Triggered:
  * <ul>
@@ -45,6 +54,7 @@ public class SkillFileSyncer {
     private final SkillService skillService;
     private final SkillFileService skillFileService;
     private final SkillWorkspaceManager workspaceManager;
+    private final SkillWorkspaceProperties workspaceProperties;
 
     /** Aggregate counters for one full sync pass. */
     public record SyncReport(int skillsConsidered,
@@ -99,6 +109,9 @@ public class SkillFileSyncer {
         int backfilled = 0;
         if (dbFiles.isEmpty()) {
             backfilled = backfillFromDiskIfNeeded(skill, workspaceDir);
+            if (backfilled == 0 && Boolean.TRUE.equals(skill.getBuiltin())) {
+                backfilled = backfillFromClasspathIfNeeded(skill);
+            }
             if (backfilled > 0) {
                 didBackfill = true;
                 dbFiles = skillFileService.listBySkillId(skill.getId());
@@ -120,14 +133,42 @@ public class SkillFileSyncer {
         return new PerSkillReport(materialized, alreadyCurrent, backfilled, didBackfill);
     }
 
+    /**
+     * Backfills builtin skill bundle files from the classpath when both the
+     * DB and the local workspace are empty — the state left behind by an
+     * install whose jar shipped without {@code scripts/}/{@code references/}.
+     */
+    private int backfillFromClasspathIfNeeded(SkillEntity skill) {
+        String bundledPath = workspaceProperties.getBundledSkillsPath();
+        if (bundledPath == null || bundledPath.isBlank()) return 0;
+
+        ResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+        SkillBundleSource source = new ClasspathBundleSource(resolver,
+                bundledPath + "/" + skill.getName());
+
+        Map<String, String> ingested;
+        try {
+            ingested = SkillBundleFiles.readDbEligible(source);
+        } catch (IOException e) {
+            log.warn("Failed to backfill builtin skill '{}' from classpath: {}", skill.getName(), e.getMessage());
+            return 0;
+        }
+        if (ingested.isEmpty()) return 0;
+
+        skillFileService.applyBundleFiles(skill.getId(), ingested, false);
+        log.info("Backfilled {} bundle file(s) from classpath into mate_skill_file for builtin skill '{}' (id={})",
+                ingested.size(), skill.getName(), skill.getId());
+        return ingested.size();
+    }
+
     private enum MaterializeOutcome { WROTE, CURRENT, SKIPPED }
 
     private MaterializeOutcome materializeOne(Path workspaceDir, SkillFileEntity row) {
         String relative = row.getFilePath();
         if (relative == null || relative.isBlank()) return MaterializeOutcome.SKIPPED;
-        if (!relative.startsWith("references/") && !relative.startsWith("scripts/")) {
-            log.warn("Skipping skill_file row {} — path outside scripts/ or references/: {}",
-                    row.getId(), relative);
+        if (!SkillBundleFiles.isDbEligible(relative)) {
+            log.warn("Skipping skill_file row {} — path outside the DB-persisted buckets ({}): {}",
+                    row.getId(), SkillBundleFiles.DB_BUCKET_PREFIXES, relative);
             return MaterializeOutcome.SKIPPED;
         }
         if (relative.contains("..")) {
@@ -167,14 +208,14 @@ public class SkillFileSyncer {
     private int backfillFromDiskIfNeeded(SkillEntity skill, Path workspaceDir) {
         if (!Files.exists(workspaceDir) || !Files.isDirectory(workspaceDir)) return 0;
 
-        List<Path> roots = new ArrayList<>(2);
-        Path scripts = workspaceDir.resolve("scripts");
-        Path references = workspaceDir.resolve("references");
-        if (Files.isDirectory(scripts)) roots.add(scripts);
-        if (Files.isDirectory(references)) roots.add(references);
+        List<Path> roots = new ArrayList<>(SkillBundleFiles.DB_BUCKET_PREFIXES.size());
+        for (String prefix : SkillBundleFiles.DB_BUCKET_PREFIXES) {
+            Path root = workspaceDir.resolve(prefix.substring(0, prefix.length() - 1));
+            if (Files.isDirectory(root)) roots.add(root);
+        }
         if (roots.isEmpty()) return 0;
 
-        java.util.Map<String, String> ingested = new java.util.LinkedHashMap<>();
+        Map<String, String> ingested = new LinkedHashMap<>();
         Set<String> seen = new HashSet<>();
         for (Path root : roots) {
             String prefix = workspaceDir.relativize(root).toString().replace('\\', '/') + "/";

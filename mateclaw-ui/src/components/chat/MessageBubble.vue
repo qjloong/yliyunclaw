@@ -257,6 +257,20 @@
         </div>
 
         <!--
+          Runtime warning chips (metadata.warnings): loop-guard interventions
+          and other backend runtime notices. Populated live via the 'warning'
+          SSE event (useChat merges it into metadata.warnings) and persisted by
+          the stream accumulator, so streaming and history reload render the
+          same chips. Message text arrives pre-localized from the backend.
+        -->
+        <div v-if="runtimeWarnings.length" class="runtime-warnings">
+          <div v-for="(warning, wIdx) in runtimeWarnings" :key="wIdx" class="runtime-warning-chip">
+            <el-icon class="runtime-warning-chip__icon"><WarningFilled /></el-icon>
+            <span class="runtime-warning-chip__text">{{ warning }}</span>
+          </div>
+        </div>
+
+        <!--
           feedback_event card: recovery affordances for turns that ended
           in a non-transient error. Backend's NodeStreamingChatHelper
           handles transient TLS / IO retries silently; this card only
@@ -351,11 +365,16 @@
             :key="attachment.storedName"
             class="message-attachment"
             type="button"
-            @click="downloadFile(attachment)"
+            @click="openFileAttachment(attachment)"
           >
             <el-icon class="message-attachment__icon"><Document /></el-icon>
             <span class="message-attachment__name">{{ attachment.name }}</span>
             <span class="message-attachment__meta">{{ formatFileSize(attachment.size) }}</span>
+            <el-icon
+              class="message-attachment__download"
+              :title="$t('chat.preview.download')"
+              @click.stop="downloadFile(attachment)"
+            ><Download /></el-icon>
           </button>
         </div>
       </div>
@@ -393,15 +412,26 @@
             <el-icon v-else-if="ttsState === 'playing'"><VideoPause /></el-icon>
             <el-icon v-else><Microphone /></el-icon>
           </button>
-          <!-- 重新生成（仅 assistant） -->
+          <!-- 重新生成（仅会话末尾的 assistant 回答；服务端只支持对末条回答重生成） -->
           <button
-            v-if="role === 'assistant' && !isGenerating"
+            v-if="role === 'assistant' && !isGenerating && isLast"
             class="action-btn"
             type="button"
             :title="$t('chat.regenerate')"
             @click="$emit('regenerate')"
           >
             <el-icon><RefreshRight /></el-icon>
+          </button>
+          <!-- 回退到此处：删除本条及之后的所有消息。仅已持久化的消息可回退
+               （客户端临时 id 带下划线，持久化雪花 id 是纯数字） -->
+          <button
+            v-if="!isGenerating && canRewind"
+            class="action-btn"
+            type="button"
+            :title="$t('chat.rewindHere')"
+            @click="$emit('rewind')"
+          >
+            <el-icon><RefreshLeft /></el-icon>
           </button>
           <!-- Reply model attribution (assistant only) -->
           <span
@@ -525,10 +555,12 @@ import {
   CloseBold,
   CopyDocument,
   Document,
+  Download,
   InfoFilled,
   Loading,
   Microphone,
   Opportunity,
+  RefreshLeft,
   RefreshRight,
   Select,
   Tools,
@@ -537,11 +569,14 @@ import {
 } from '@element-plus/icons-vue'
 import { useStreamingMarkdown } from '@/composables/useStreamingMarkdown'
 import { buildGeneratedFileNameMap, linkifyGeneratedFileUrls } from '@/utils/generatedFileLinks'
+import { ensureModelViewer } from '@/utils/lazyModelViewer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
 import { useToolLabel } from '@/composables/useToolLabel'
 import { http } from '@/api'
 import { copyToClipboard } from '@/utils/clipboard'
 import TypingCursor from './TypingCursor.vue'
+import { previewKindOf } from './preview/previewKind'
+import { openFilePreview } from './preview/previewBus'
 import BrowserTimeline from './BrowserTimeline.vue'
 import ToolCallSegment from './ToolCallSegment.vue'
 import ThinkingSegment from './ThinkingSegment.vue'
@@ -560,6 +595,16 @@ const { t, locale } = useI18n()
 const { getToolLabel } = useToolLabel()
 const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, loadAllModels, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
+// Document attachments: preview in the global dialog when the format is
+// supported, otherwise fall back to the legacy download behavior.
+function openFileAttachment(attachment: ChatAttachment) {
+  if (previewKindOf(attachment)) {
+    openFilePreview(attachment)
+  } else {
+    void downloadFile(attachment)
+  }
+}
+
 interface Props {
   message: Message
   isLast?: boolean
@@ -577,6 +622,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   regenerate: []
+  rewind: []
   'toggle-thinking': [expanded: boolean]
   approve: [pendingId: string]
   deny: [pendingId: string]
@@ -586,6 +632,9 @@ const emit = defineEmits<{
 const role = computed(() => props.message.role)
 const status = computed(() => props.message.status)
 const isGenerating = computed(() => status.value === 'generating' || status.value === 'awaiting_approval')
+// Only persisted messages can be rewound: DB snowflake ids are pure digits,
+// client temp ids carry an underscore (`${Date.now()}_${random}`).
+const canRewind = computed(() => /^\d+$/.test(String(props.message.id ?? '')))
 const hovered = ref(false)
 
 const avatarIcon = computed(() => {
@@ -901,9 +950,14 @@ watch(audioAttachments, (atts) => {
   if (atts.length > 0) loadAllAudios(atts)
 }, { immediate: true })
 // 3D models also need the auth-blob loader — <model-viewer src> doesn't carry
-// the Authorization header any more than <img>/<audio> do.
+// the Authorization header any more than <img>/<audio> do. The heavy
+// @google/model-viewer Web Component is lazy-loaded here (only when a bubble
+// actually has a 3D attachment) instead of eagerly in main.ts.
 watch(model3dAttachments, (atts) => {
-  if (atts.length > 0) loadAllModels(atts)
+  if (atts.length > 0) {
+    ensureModelViewer()
+    loadAllModels(atts)
+  }
 }, { immediate: true })
 
 // --- 时间 ---
@@ -1044,11 +1098,19 @@ const segments = computed<MessageSegment[]>(() => {
       }
     }
 
-    // 去重：相同 toolName + toolArgs 的 tool_call segment 只保留第一个
+    // 去重 tool_call segment。优先用 LLM 提供的 toolCallId —— 它端到端稳定
+    // （live 流与持久化两侧都带，见 useChat handleToolCallStarted / 后端
+    // accumulator），既能正确识别"同一次调用被 live+reload 渲染两遍"（两侧
+    // toolArgs 序列化可能有空白/键序差异，用 toolName::toolArgs 会漏判 → 重复
+    // 显示，issue #521），又不会把"同名同参的多次真实调用"（如重试 shell/python）
+    // 误合并成一次。仅当没有 toolCallId（历史/遗留 segment）时才退回
+    // toolName::toolArgs。
     const seenToolCalls = new Set<string>()
     const deduped = segs.filter(seg => {
       if (seg.type !== 'tool_call') return true
-      const key = `${seg.toolName}::${seg.toolArgs || ''}`
+      const key = seg.toolCallId
+        ? `id::${seg.toolCallId}`
+        : `na::${seg.toolName}::${seg.toolArgs || ''}`
       if (seenToolCalls.has(key)) return false
       seenToolCalls.add(key)
       return true
@@ -1230,6 +1292,20 @@ const isIncomplete = computed<boolean>(() => {
 const isEvidenceInsufficient = computed<boolean>(() => {
   if (props.message.role !== 'assistant') return false
   return parsedMetadata.value?.finishReason === 'evidence_insufficient'
+})
+
+/**
+ * Backend runtime warnings for this turn (metadata.warnings) — e.g. the
+ * tool-call loop guard flagging repeated identical failures or a forced
+ * wrap-up. Strings arrive pre-localized from the backend; live streaming
+ * pushes them via the 'warning' SSE event and history reload reads the
+ * persisted metadata, so both paths converge here.
+ */
+const runtimeWarnings = computed<string[]>(() => {
+  if (props.message.role !== 'assistant') return []
+  const raw = parsedMetadata.value?.warnings
+  if (!Array.isArray(raw)) return []
+  return raw.filter((w: unknown): w is string => typeof w === 'string' && w.trim().length > 0)
 })
 
 /**
@@ -2069,6 +2145,39 @@ watch(isGenerating, (generating) => {
   border-color: color-mix(in srgb, var(--mc-danger) 50%, transparent);
 }
 
+/* ==================== 运行时警示条（循环守卫等 metadata.warnings） ==================== */
+.runtime-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.runtime-warning-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 8%, var(--mc-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 25%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 560px;
+  color: var(--mc-text-secondary);
+}
+
+.runtime-warning-chip__icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--mc-warning, #d97706);
+}
+
+.runtime-warning-chip__text {
+  word-break: break-word;
+}
+
 /* ==================== INCOMPLETE 截断卡片（重复检测 / thinking-only 软上限） ==================== */
 .incomplete-card {
   margin-top: 8px;
@@ -2382,6 +2491,16 @@ watch(isGenerating, (generating) => {
 .message-attachment__icon {
   flex-shrink: 0;
   opacity: 0.76;
+}
+
+.message-attachment__download {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.message-attachment__download:hover {
+  opacity: 1;
 }
 
 /* ==================== Markdown 样式 ==================== */

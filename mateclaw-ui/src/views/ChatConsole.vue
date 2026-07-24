@@ -113,6 +113,7 @@
         :subtitle="blockingPrompt ? modelPromptText.desc : $t('chat.subtitle')"
         :suggestions="blockingPrompt ? [] : suggestions"
         @regenerate="handleRegenerate"
+        @rewind="handleRewind"
         @suggestion-click="sendSuggestion"
         @toggle-thinking="handleToggleThinking"
         @approve="handleApprove"
@@ -211,6 +212,11 @@
         :capabilities="agentCapabilities"
       />
 
+      <!-- 上下文占用（估算）：点击展开分项面板 -->
+      <div v-if="contextUsage" class="ctx-usage-row">
+        <ContextUsagePanel :usage="contextUsage" />
+      </div>
+
       <!-- 使用组件化的 ChatInput -->
       <ChatInput
         ref="chatInputRef"
@@ -268,13 +274,14 @@ let cachedAgents: import('@/types').Agent[] = []
 </script>
 
 <script setup lang="ts">
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
 import { ChatDotRound, Delete, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { conversationApi, agentApi, modelApi, chatApi, cronJobApi, approvalApi } from '@/api/index'
-import { ElMessage } from 'element-plus'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useFileDrop } from '@/composables/useFileDrop'
 import { useIsMobile, useMediaQuery, BREAKPOINTS } from '@/composables/useBreakpoint'
@@ -294,6 +301,7 @@ import { agentIconColor } from '@/utils/agentIconColor'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import MultimodalRoutingHint from '@/components/chat/MultimodalRoutingHint.vue'
 import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
+import ContextUsagePanel from '@/components/chat/ContextUsagePanel.vue'
 import TalkMode from '@/components/chat/TalkMode.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { useEChartsRenderer } from '@/composables/useEChartsRenderer'
@@ -398,6 +406,12 @@ const enabledModels = ref<ModelConfig[]>([])
 const activeModels = ref<ActiveModelsInfo | null>(null)
 // Global default model — seeds the selector for conversations with no pin yet.
 const globalDefaultModel = ref<{ providerId: string; model: string } | null>(null)
+// True once the user manually picks a model for the CURRENT conversation.
+// Guards the agent-capability re-seed (see the selectedAgentId watcher) from
+// clobbering that pick during the window where the async capability fetch
+// resolves after a fresh conversation was already seeded. Reset whenever we
+// move to a different conversation.
+const userPickedModel = ref(false)
 const pendingAttachments = ref<ChatAttachment[]>([])
 const uploadingAttachment = ref(false)
 
@@ -439,6 +453,9 @@ function onAgentPicked(value: string | number | null) {
 function selectModel(value: string) {
   const [providerId, model] = value.split('::')
   if (!providerId || !model) return
+  // Remember the explicit pick so a late-arriving agent-capability fetch
+  // doesn't re-seed over it on a not-yet-persisted conversation.
+  userPickedModel.value = true
   // Per-conversation model: switching here only affects THIS conversation.
   // We update the selector + the local list entry immediately so the UI is
   // responsive, then persist the pin to the server right away IF the
@@ -508,13 +525,62 @@ function selectModel(value: string) {
 }
 
 /**
- * Point the model selector at a conversation's pinned model, or the global
- * default when the conversation has no pin yet (fresh chat, IM, cron).
+ * The selected agent's model override, as a (provider, model) pair — or null
+ * when the agent has no usable override.
+ *
+ * Two sources, in order:
+ *   1. agentCapabilities — the backend-resolved pair from /agents/{id}/capabilities.
+ *      Authoritative: it runs the same resolveModel the runtime uses (honouring
+ *      disabled→default fallback and provider disambiguation). But it arrives
+ *      via an async fetch that resolves AFTER the synchronous seeding on an
+ *      agent switch / deep-link, and is lost entirely if that fetch fails.
+ *   2. currentAgent.modelName resolved against the enabled-model list — a
+ *      SYNCHRONOUS fallback so an agent switch, a capability-fetch failure, or a
+ *      not-yet-hydrated deep-link still honour the per-agent override instead of
+ *      silently dropping to the global default (which handleSendMessage would
+ *      then pin, re-introducing the very clobber this whole change fixes).
+ *
+ * enabledModels is viewer-accessible (/models/enabled) and loaded at mount, so
+ * the fallback works for viewers too.
+ */
+function agentSeedModel(): { providerId: string; model: string } | null {
+  const cap = agentCapabilities.value
+  if (cap?.providerId && cap?.modelName) {
+    return { providerId: cap.providerId, model: cap.modelName }
+  }
+  const name = currentAgent.value?.modelName
+  if (name) {
+    const hit = enabledModels.value.find(m => m.modelName === name)
+    if (hit?.provider) {
+      return { providerId: hit.provider, model: hit.modelName }
+    }
+  }
+  return null
+}
+
+/**
+ * Point the model selector at the model this conversation should run, honouring
+ * the same precedence the backend uses when it resolves the runtime model
+ * (see AgentGraphBuilder.resolveRuntimeBaseModel):
+ *
+ *   conversation pin  >  selected agent's model override  >  global default
+ *
+ * The middle tier is the fix for the "I set the agent's model but chat used
+ * another one" bug: without it a fresh conversation seeded the global default,
+ * and handleSendMessage then PINNED that default onto the conversation row —
+ * which outranks the agent override and silently clobbered it.
  */
 function applyConversationModel(conv?: Conversation | null) {
   if (conv?.modelProvider && conv?.modelName) {
     activeModels.value = { activeLlm: { providerId: conv.modelProvider, model: conv.modelName } }
-  } else if (globalDefaultModel.value) {
+    return
+  }
+  const agentModel = agentSeedModel()
+  if (agentModel) {
+    activeModels.value = { activeLlm: { providerId: agentModel.providerId, model: agentModel.model } }
+    return
+  }
+  if (globalDefaultModel.value) {
     activeModels.value = { activeLlm: { ...globalDefaultModel.value } }
   }
 }
@@ -675,6 +741,7 @@ const {
   queueSize,
   heartbeat,
   compactStatus,
+  contextUsage,
   lifecycleStage,
   sendMessage: sendChatMessage,
   stopGeneration: stopChatGeneration,
@@ -880,6 +947,7 @@ const modelPromptText = computed<{ title: string; desc: string }>(() => {
     case 'unprobed':
       return { title: t('chat.prompt.unprobed.title'), desc: t('chat.prompt.unprobed.desc') }
     case 'no-models':
+    default:
       return {
         title: t('chat.prompt.noModels.title', { name: p?.name || '' }),
         desc:  t('chat.prompt.noModels.desc'),
@@ -1188,6 +1256,12 @@ onActivated(async () => {
   startECharts()
   startKatex()
   startMermaid()
+  // Issue #538: ChatConsole is kept alive by the router (meta.keepAlive), so
+  // navigating away and back only fires onActivated, not onMounted — an
+  // agent created/edited/deleted elsewhere (e.g. the Employees page) never
+  // reached this component's own `agents` list otherwise, and stayed
+  // invisible in the picker until a full page reload forced a fresh mount.
+  await loadAgents()
   activityPollTimer = window.setInterval(pollActivity, ACTIVITY_POLL_MS)
   elapsedTickTimer = window.setInterval(() => {
     if (activeCronRuns.value.length > 0) elapsedNow.value = Date.now()
@@ -1361,6 +1435,17 @@ watch(selectedAgentId, async (id) => {
   try {
     const res: any = await agentApi.getCapabilities(id)
     agentCapabilities.value = res.data || null
+    // The capability fetch is async and typically resolves AFTER the
+    // synchronous newConversation()/applyConversationModel() that ran on this
+    // same agent switch (which fell back to the global default because caps
+    // weren't loaded yet). Re-seed now that we know the agent's resolved model
+    // — but only for a conversation with no server-side pin and where the user
+    // hasn't manually picked a model, so we never clobber an explicit choice.
+    const conv = conversations.value.find(c => c.conversationId === currentConversationId.value)
+    const hasServerPin = !!(conv?.modelProvider && conv?.modelName)
+    if (!hasServerPin && !userPickedModel.value) {
+      applyConversationModel(conv)
+    }
   } catch {
     agentCapabilities.value = null
   }
@@ -1586,6 +1671,9 @@ async function selectConversation(conv: Conversation) {
   }
   currentConversationId.value = conv.conversationId
   selectedAgentId.value = conv.agentId || selectedAgentId.value
+  // Opening another conversation: its pin (or the agent/global fallback) is
+  // authoritative, so clear the previous conversation's manual-pick guard.
+  userPickedModel.value = false
   // Restore this conversation's pinned model into the selector.
   applyConversationModel(conv)
   // Reset cron placeholder state up front; the immediate fetch below repopulates
@@ -1720,7 +1808,9 @@ function newConversation() {
   resetForNewConversation()
   currentConversationId.value = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   messages.value = []
-  // A fresh conversation starts on the global default model.
+  // A fresh conversation defers to the selected agent's model (then the global
+  // default) until the user explicitly picks one.
+  userPickedModel.value = false
   applyConversationModel()
 }
 
@@ -1733,6 +1823,11 @@ function onConversationsDeleted(ids: string[]) {
     resetStreamingState()
     messages.value = []
     currentConversationId.value = ''
+    // Deleting the open conversation drops us back to a blank slate — clear the
+    // manual-pick guard so the next message (which mints a fresh conversation)
+    // seeds from the agent override again instead of inheriting the deleted
+    // conversation's pick. Mirrors newConversation()/selectConversation().
+    userPickedModel.value = false
   }
 }
 
@@ -1915,21 +2010,60 @@ function handleStopStream() {
   stopChatGeneration()
 }
 
-function handleRegenerate(message: Message) {
-  if (isGenerating.value) return
+async function handleRegenerate(message: Message) {
+  if (isGenerating.value || !currentConversationId.value || !selectedAgentId.value) return
   const idx = messages.value.indexOf(message)
   if (idx >= 0) {
-    messages.value.splice(idx, 1)
+    // The server drops the trailing assistant block and reuses the persisted
+    // seed user message (no duplicate user row) — mirror the truncation locally.
+    messages.value.splice(idx)
   }
-  const lastUserMsg = messages.value.findLast(m => m.role === 'user')
-  if (!lastUserMsg) return
+  try {
+    await sendChatMessage('', {
+      conversationId: currentConversationId.value,
+      agentId: selectedAgentId.value,
+      contentParts: [],
+      thinkingLevel: thinkingLevel.value,
+      modelProvider: activeModels.value?.activeLlm?.providerId,
+      modelName: activeModels.value?.activeLlm?.model,
+      regenerate: true,
+    })
+  } catch (e: any) {
+    console.error('Regenerate failed:', e)
+    mcToast.error(e?.message || t('chat.regenerateFailed'))
+  }
+}
 
-  const text = lastUserMsg.contentParts
-    .filter(p => p.type === 'text')
-    .map(p => p.text || '')
-    .join('\n') || lastUserMsg.content || ''
-
-  handleSendMessage(text)
+async function handleRewind(message: Message) {
+  if (isGenerating.value || !currentConversationId.value) return
+  const idx = messages.value.indexOf(message)
+  if (idx < 0) return
+  const count = messages.value.length - idx
+  try {
+    await ElMessageBox.confirm(
+      t('chat.rewindConfirm', { count }),
+      t('chat.rewindHere'),
+      { type: 'warning' }
+    )
+  } catch {
+    return // user cancelled
+  }
+  try {
+    const res = await conversationApi.rewindMessage(
+      currentConversationId.value,
+      String(message.id)
+    )
+    messages.value.splice(idx)
+    // Sync the sidebar entry from the server-recomputed aggregates.
+    const data = res.data as { deletedCount: number; messageCount: number; lastMessage: string | null } | undefined
+    const conv = conversations.value.find(c => c.conversationId === currentConversationId.value)
+    if (conv && data) {
+      conv.lastMessage = data.lastMessage ?? ''
+      conv.messageCount = data.messageCount
+    }
+  } catch (e: any) {
+    mcToast.error(e?.message || t('chat.rewindFailed'))
+  }
 }
 
 function sendSuggestion(text: string) {
@@ -1969,7 +2103,10 @@ async function handleApproveAlways(
   } else if (payload.scope === 'AGENT') {
     scopeId = String(currentAgent.value?.id ?? '')
   } else if (payload.scope === 'USER') {
-    const me = localStorage.getItem('mc-user-id')
+    // Login persists the id under 'userId' (see Login.vue); the old 'mc-user-id'
+    // key was never written, so USER-scope always-approve silently failed to
+    // resolve a scopeId and fell back to a one-shot /approve without a grant.
+    const me = localStorage.getItem('userId')
     if (me) scopeId = me
   }
   if (!scopeId) {
@@ -2250,6 +2387,11 @@ function handleCodeCopy(e: MouseEvent) {
 </script>
 
 <style scoped>
+.ctx-usage-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 4px 4px;
+}
 .cron-running-bar {
   display: flex;
   flex-direction: column;

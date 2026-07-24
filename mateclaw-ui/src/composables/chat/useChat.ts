@@ -59,6 +59,30 @@ export interface CompactStatusEvent {
   fromCache?: boolean
 }
 
+/**
+ * Snapshot of a {@code context_usage} SSE event. Mirrors the payload built by
+ * ConversationWindowManager.broadcastContextUsage: how much of the effective
+ * input window the next LLM call occupies, split by source. All values are
+ * TokenEstimator heuristics — a gauge, not a bill.
+ */
+export interface ContextUsageEvent {
+  /** Effective input window (tokens) of the active model. */
+  windowTokens: number
+  /** system + tools + history + current, in tokens. */
+  usedTokens: number
+  systemTokens: number
+  /** Tool / skill schemas advertised to the model (includes MCP tools). */
+  toolsTokens: number
+  historyTokens: number
+  /** Current user input (plus per-message overhead). */
+  currentTokens: number
+  /** usedTokens / windowTokens (may exceed 1 before compaction runs). */
+  ratio: number
+  /** True when this pass will trigger history compaction. */
+  willCompact: boolean
+  timestamp?: number
+}
+
 export interface UseChatOptions {
   /** Base API URL */
   baseUrl: string
@@ -112,6 +136,11 @@ export interface UseChatReturn {
    */
   compactStatus: import('vue').Ref<CompactStatusEvent | null>
   /**
+   * Latest context_usage SSE event. Persists between turns (occupancy stays
+   * meaningful after a reply lands); reset only when switching conversations.
+   */
+  contextUsage: import('vue').Ref<ContextUsageEvent | null>
+  /**
    * Fine-grained pre-token lifecycle stage. Drives the loading bar copy in the
    * window between "send pressed" and "first delta arrived". `null` once a
    * delta is observed (StreamLoadingBar then falls back to `phase`-derived text).
@@ -154,6 +183,12 @@ export interface SendMessageOptions {
   modelProvider?: string
   /** Model id picked for this conversation. Paired with modelProvider. */
   modelName?: string
+  /**
+   * Regenerate mode: the server deletes the trailing assistant reply block and
+   * reuses the persisted seed user message as this turn's input — no new user
+   * row is inserted and `content` is ignored server-side.
+   */
+  regenerate?: boolean
 }
 
 export function useChat(options: UseChatOptions): UseChatReturn {
@@ -188,6 +223,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
    * immediately, so the user gets a chance to see the result.
    */
   const compactStatus = ref<CompactStatusEvent | null>(null)
+
+  /** Latest context-usage snapshot; kept across turns, cleared on conversation switch. */
+  const contextUsage = ref<ContextUsageEvent | null>(null)
 
   /** All segments of the current assistant message (for segmented display) */
   const currentSegments = ref<MessageSegment[]>([])
@@ -926,6 +964,21 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   stream.on('tool_call_started', handleToolCallStarted)
   stream.on('tool_call_completed', handleToolCallCompleted)
 
+  // MCP long-running tool progress: update the matching tool_call segment's
+  // progress field so ToolCallSegment can render a progress bar.
+  stream.on('tool_call_progress', (data: any) => {
+    if (isStaleEvent(data)) return
+    if (!data?.toolCallId) return
+    const segs = currentSegments.value
+    const toolSeg = segs.find((s: MessageSegment) =>
+      s.type === 'tool_call' && s.status === 'running' && s.toolCallId === data.toolCallId)
+    if (toolSeg) {
+      toolSeg.progress = data.percent
+      toolSeg.progressMessage = data.message
+      toolSeg.progressStage = data.stage
+    }
+  })
+
   // ===== Browser action events =====
 
   stream.on('browser_action', (data) => {
@@ -986,6 +1039,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   stream.on('compact_status', (data) => {
     if (isStaleEvent(data)) return
     compactStatus.value = { ...data } as CompactStatusEvent
+  })
+
+  // Context-window occupancy snapshot, fired once per window-fit pass and
+  // again after compaction. Drives the occupancy chip next to the input.
+  stream.on('context_usage', (data) => {
+    if (isStaleEvent(data)) return
+    contextUsage.value = { ...data } as ContextUsageEvent
   })
 
   stream.on('phase', (data) => {
@@ -1877,7 +1937,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     lifecycleStage.value = { stage: 'connecting', since: Date.now() }
 
     try {
-      if (!isApprovalCommand) {
+      if (!isApprovalCommand && !options.regenerate) {
+        // Regenerate reuses the seed user message already in the list — only
+        // a fresh send needs a new local user bubble.
         createUserMessage(content, contentParts, conversationId)
       }
 
@@ -1901,6 +1963,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (options.modelProvider && options.modelName) {
         body.modelProvider = options.modelProvider
         body.modelName = options.modelName
+      }
+      if (options.regenerate) {
+        body.regenerate = true
       }
       await stream.connect(body)
     } catch (e) {
@@ -2158,27 +2223,23 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
   }
 
-  // Regenerate a message
+  // Regenerate the trailing assistant reply. The server owns the data change:
+  // it drops the trailing assistant block and reuses the persisted seed user
+  // message, so no duplicate user row is created — the local list just mirrors
+  // that truncation before reconnecting.
   const regenerate = async (messageId: string | number) => {
     const message = getMessage(messageId)
-    if (!message) return
+    if (!message || message.role !== 'assistant') return
 
     const index = messages.value.findIndex(m => m.id === messageId)
-    if (index <= 0) return
+    if (index < 0) return
 
-    const userMessage = messages.value[index - 1]
-    if (userMessage.role !== 'user') return
+    messages.value = messages.value.slice(0, index)
 
-    messages.value = messages.value.filter(m => m.id !== messageId)
-
-    const text = userMessage.contentParts
-      .filter(p => p.type === 'text')
-      .map(p => p.text || '')
-      .join('\n') || userMessage.content || ''
-
-    await sendMessage(text, {
-      conversationId: userMessage.conversationId,
+    await sendMessage('', {
+      conversationId: message.conversationId,
       agentId: '',
+      regenerate: true,
     })
   }
 
@@ -2192,6 +2253,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamPhase.value = 'idle'
     phaseInfo.value = null
     compactStatus.value = null
+    contextUsage.value = null
     lifecycleStage.value = null
     error.value = null
     messageQueue.clear()
@@ -2212,6 +2274,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     queueSize: messageQueue.queueSize,
     heartbeat,
     compactStatus,
+    contextUsage,
     lifecycleStage,
     sendMessage,
     stopGeneration,

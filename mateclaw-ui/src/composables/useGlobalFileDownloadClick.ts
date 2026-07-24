@@ -23,6 +23,8 @@ import { onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { fetchAuthenticatedBlob } from '@/api/index'
 import { mcToast } from '@/composables/useMcToast'
+import { previewKindOf } from '@/components/chat/preview/previewKind'
+import { openFilePreview } from '@/components/chat/preview/previewBus'
 
 // Matches every backend-served file path: in-memory generated files
 // (`/api/v1/files/generated/<id>`) and conversation-scoped media/attachments
@@ -46,25 +48,54 @@ export function useGlobalFileDownloadClick() {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
     const target = e.target as HTMLElement | null
     if (!target) return
+
+    // Inline generated images (rendered by useMarkdownRenderer.link() as
+    // <img data-generated-image>) open full-size in a new tab on click, so the
+    // user can zoom without the picture ever becoming a download.
+    const genImg = target.closest<HTMLImageElement>('img[data-generated-image]')
+    if (genImg) {
+      const src = genImg.getAttribute('src')
+      if (src) {
+        e.preventDefault()
+        e.stopPropagation()
+        window.open(src, '_blank', 'noopener,noreferrer')
+        return
+      }
+    }
+
     const anchor = target.closest<HTMLAnchorElement>('a[href]')
     if (!anchor) return
 
-    // Only same-origin file-API links; leave everything else to the browser.
+    // Match our backend file-API links by PATH, on any origin. Generated-file
+    // tools mint absolute URLs against the backend base (in dev that is a
+    // different port than the SPA); matching by path catches those too. We
+    // always act on the RELATIVE path below, so the fetch hits our own origin
+    // (prod) or the vite proxy (dev) — never a foreign host.
     let url: URL
     try {
       url = new URL(anchor.href, window.location.href)
     } catch {
       return
     }
-    if (url.origin !== window.location.origin || !FILE_PATH_RE.test(url.pathname)) return
+    if (!FILE_PATH_RE.test(url.pathname)) return
 
     // From here the link is ours: never let it become a full-page navigation.
     e.preventDefault()
     e.stopPropagation()
 
     const name = filenameFor(anchor, url.pathname)
+    const relPath = url.pathname + url.search
+
+    // Previewable formats (AI-generated docx/xlsx/pdf/…) open in the global
+    // preview dialog instead of downloading. Unknown formats fall through to
+    // the authenticated download below.
+    if (previewKindOf({ name, contentType: '' })) {
+      openFilePreview({ name, url: relPath })
+      return
+    }
+
     try {
-      const blob = await fetchAuthenticatedBlob(url.href)
+      const blob = await fetchAuthenticatedBlob(relPath)
       const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = objectUrl

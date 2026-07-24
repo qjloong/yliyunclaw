@@ -8,6 +8,9 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import vip.mate.tool.builtin.ToolExecutionContext;
 import vip.mate.tool.disclosure.ToolUsageRecencyTracker;
+import vip.mate.tool.mcp.runtime.McpProgressContext;
+import vip.mate.tool.mcp.runtime.McpToolNameResolver;
+import vip.mate.tool.mcp.runtime.ProgressAwareMcpToolCallback;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.context.ChatOrigin;
@@ -255,8 +258,15 @@ public class ToolExecutionExecutor {
     /** Optional recency feed for budget-driven tool-disclosure demotion. */
     private ToolUsageRecencyTracker usageRecencyTracker;
 
+    /** Optional MCP progress context for long-running tool progress relay. */
+    private McpProgressContext progressContext;
+
     public void setUsageRecencyTracker(ToolUsageRecencyTracker tracker) {
         this.usageRecencyTracker = tracker;
+    }
+
+    public void setProgressContext(McpProgressContext ctx) {
+        this.progressContext = ctx;
     }
 
     public void setSkillRuntimeService(vip.mate.skill.runtime.SkillRuntimeService s) {
@@ -882,14 +892,31 @@ public class ToolExecutionExecutor {
             // not yet migrated to ToolContext keep working unchanged.
             ToolExecutionContext.set(pc.conversationId, pc.requesterId, pc.workspaceBasePath);
             String result;
+            String progressToken = null;
             try {
                 ChatOrigin runtimeOrigin = pc.origin != null ? pc.origin : ChatOrigin.EMPTY;
                 runtimeOrigin = runtimeOrigin
                         .withConversationId(pc.conversationId)
                         .withWorkspace(runtimeOrigin.workspaceId(), pc.workspaceBasePath);
                 ToolContext toolContext = runtimeOrigin.toToolContext();
+
+                // MCP progress: generate progressToken and inject into ToolContext
+                // so ProgressAwareMcpToolCallback can include it in tools/call _meta.
+                if (progressContext != null) {
+                    progressToken = UUID.randomUUID().toString();
+                    progressContext.register(progressToken,
+                            new McpProgressContext.ProgressEntry(pc.conversationId, pc.toolCall.id(), toolName));
+                    Map<String, Object> ctxMap = new HashMap<>(toolContext.getContext());
+                    ctxMap.put(ProgressAwareMcpToolCallback.MCP_PROGRESS_TOKEN_KEY, progressToken);
+                    toolContext = new ToolContext(ctxMap);
+                }
+
                 result = pc.callback.call(pc.arguments, toolContext);
             } finally {
+                if (progressToken != null) {
+                    progressContext.remove(progressToken);
+                    progressContext.removeSnapshot(pc.conversationId, pc.toolCall.id());
+                }
                 ToolExecutionContext.clear();
             }
 
@@ -1008,7 +1035,10 @@ public class ToolExecutionExecutor {
                 .withWorkspaceBasePath(origin != null ? origin.workspaceBasePath() : null);
 
         if (toolGuardService != null) {
-            GuardEvaluation evaluation = toolGuardService.evaluate(guardCtx);
+            // Defer the NEEDS_APPROVAL audit row: it is written below, once, after
+            // the auto-grant decision, so it carries the resolution outcome
+            // (AUTO_GRANT / SEVERITY_CEILING / NO_GRANT / …) and the pendingId.
+            GuardEvaluation evaluation = toolGuardService.evaluate(guardCtx, true);
 
             if (evaluation.shouldBlock()) {
                 log.warn("[ToolExecutor] Tool call BLOCKED: tool={}, summary={}", toolName, evaluation.summary());
@@ -1022,6 +1052,7 @@ public class ToolExecutionExecutor {
                 // HARD_BLOCK short-circuits to a blocked decision (no approval banner).
                 // APPROVED skips createPending() and lets the tool run as normal.
                 // REQUIRES_HUMAN falls through to the existing manual approval path.
+                String autoOutcome = null;
                 if (autoGrantWired) {
                     AutoApproveResult auto = approvalGrantResolver.tryAutoApprove(guardCtx, evaluation);
                     if (auto.isHardBlocked()) {
@@ -1030,29 +1061,34 @@ public class ToolExecutionExecutor {
                                 + "Please use a safer alternative.";
                         log.warn("[ToolExecutor] Auto-grant HARD_BLOCK: tool={}, reason={}", toolName, auto.reason());
                         events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
+                        toolGuardService.recordApprovalAudit(guardCtx, evaluation, null, "HARD_BLOCK");
                         return GuardDecision.blocked(msg);
                     }
                     if (auto.isApproved()) {
                         log.info("[ToolExecutor] Auto-grant APPROVED: tool={}, grantId={}", toolName, auto.grantId());
+                        toolGuardService.recordApprovalAudit(guardCtx, evaluation, null, "AUTO_GRANT");
                         return GuardDecision.allowed();
                     }
-                    // requiresHuman → fall through to legacy human-approval path below.
+                    // requiresHuman → fall through to legacy human-approval path below,
+                    // carrying the denial reason for the audit row.
+                    autoOutcome = auto.reason();
                 }
 
                 // No human can resolve an approval in a non-interactive (scheduled-job)
                 // run, so a pending request would hang the turn until it times out with
                 // no answer. Deny immediately with an actionable message instead.
                 if (origin != null && origin.cronOrigin()) {
+                    toolGuardService.recordApprovalAudit(guardCtx, evaluation, null, autoOutcome);
                     return denyNonInteractiveApproval(toolCall, toolName, events);
                 }
 
                 List<AssistantMessage.ToolCall> remaining = allToolCalls.subList(currentIndex + 1, allToolCalls.size());
-                String approvalResponse = ToolExecutionGuardHelper.handleToolApproval(
+                ToolExecutionGuardHelper.ApprovalRequest approval = ToolExecutionGuardHelper.handleToolApproval(
                         toolCall, toolName, arguments, evaluation,
                         conversationId, agentId, requesterId, approvalService, streamTracker,
                         events, remaining);
-                // Extract pendingId from response (format: "[APPROVAL_PENDING] tool=xxx awaiting user decision")
-                return GuardDecision.needsApproval(approvalResponse, extractPendingId(approvalResponse));
+                toolGuardService.recordApprovalAudit(guardCtx, evaluation, approval.pendingId(), autoOutcome);
+                return GuardDecision.needsApproval(approval.response(), approval.pendingId());
             }
         } else if (toolGuard != null) {
             ToolGuardResult guardResult = toolGuard.check(toolName, arguments);
@@ -1073,7 +1109,9 @@ public class ToolExecutionExecutor {
                         toolCall, toolName, arguments, guardResult,
                         conversationId, agentId, requesterId, approvalService, streamTracker,
                         events, remaining);
-                return GuardDecision.needsApproval(approvalResponse, extractPendingId(approvalResponse));
+                // Legacy path never persisted a pendingId to carry here; the value
+                // is unused downstream (only the boolean awaitingApproval is read).
+                return GuardDecision.needsApproval(approvalResponse, null);
             }
         }
 
@@ -1170,14 +1208,6 @@ public class ToolExecutionExecutor {
     }
 
     /**
-     * 从 approval response 中提取 pendingId（best-effort）
-     */
-    private String extractPendingId(String approvalResponse) {
-        // handleToolApproval 内部已经创建了 pending，这里只做标记
-        return approvalResponse;
-    }
-
-    /**
      * Issue #46 — when a tool callback miss happens, check whether the
      * unrecognized name actually matches an active skill. If it does, return
      * a precise hint telling the LLM the right invocation pattern instead
@@ -1264,7 +1294,79 @@ public class ToolExecutionExecutor {
                 log.debug("[ToolExecutor] skill-aware hint check failed: {}", e.getMessage());
             }
         }
-        return "Tool not found: " + toolName;
+        return buildMcpAwareNotFoundMessage(toolName);
+    }
+
+    /**
+     * Build a "Tool not found" message that surfaces candidate MCP tools
+     * when the LLM appears to have confused two servers' tools.
+     *
+     * <p>Background: MCP tool names are {@code mcp_<serverId>_<slug>_<hash6>}.
+     * The {@code serverId} is an opaque 19-digit Snowflake ID. When a task
+     * mixes tools from multiple MCP servers, the LLM often reconstructs a
+     * tool name by taking a remembered slug and swapping it onto the
+     * serverId of a previously-successful call — producing a non-existent
+     * name like {@code mcp_<serverA>_fetch_xxx} when {@code fetch} actually
+     * lives under serverB. Without candidate suggestions, the LLM gets
+     * "Tool not found: ..." with no recovery signal and keeps retrying the
+     * same wrong name until it hits max iterations.
+     *
+     * <p>This method parses the requested name, and if it looks like an
+     * MCP tool, searches {@link #toolCallbackMap} for registered tools
+     * whose slug OR hash6 matches (cross-server). Matching by slug catches
+     * "same raw tool name on a different server"; matching by hash6
+     * catches "same raw tool name with the LLM remembering the hash but
+     * not the serverId". Returns at most 5 candidates to keep the message
+     * bounded.
+     *
+     * <p>If no candidates are found, falls back to the plain
+     * "Tool not found: ..." message.
+     */
+    private String buildMcpAwareNotFoundMessage(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return "Tool not found: " + toolName;
+        }
+
+        McpToolNameResolver.ParsedRef ref = McpToolNameResolver.parse(toolName);
+        if (ref == null) {
+            // Not an MCP-prefixed name — no candidate heuristic applies.
+            return "Tool not found: " + toolName;
+        }
+
+        // Search for registered tools with matching slug or hash6 on OTHER servers.
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+        for (String registered : toolCallbackMap.keySet()) {
+            McpToolNameResolver.ParsedRef r = McpToolNameResolver.parse(registered);
+            if (r == null || r.serverId() == ref.serverId()) {
+                continue;  // same server, or not an MCP tool — skip
+            }
+            boolean slugMatch = r.slug().equals(ref.slug());
+            boolean hashMatch = r.hash6().equals(ref.hash6());
+            if (slugMatch || hashMatch) {
+                candidates.add(registered);
+                if (candidates.size() >= 5) {
+                    break;  // bound the list
+                }
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            return "Tool not found: " + toolName
+                    + "\n(This name looks like an MCP tool on server " + ref.serverId()
+                    + ", but no tool with slug '" + ref.slug() + "' is registered on any server."
+                    + " Check the tool list for the correct name.)";
+        }
+
+        StringBuilder sb = new StringBuilder("Tool not found: ").append(toolName).append('\n');
+        sb.append("The name looks like an MCP tool on server ").append(ref.serverId())
+          .append(", but no tool with that slug/hash is registered there.\n");
+        sb.append("Did you mean one of these (same slug or hash on other servers)?\n");
+        for (String c : candidates) {
+            sb.append("  - ").append(c).append('\n');
+        }
+        sb.append("\nUse the exact name from above. Do NOT reconstruct tool names from memory — ")
+          .append("always copy verbatim from the tool list or from this suggestion.");
+        return sb.toString();
     }
 
     /**

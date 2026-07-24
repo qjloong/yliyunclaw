@@ -10,6 +10,13 @@ public class SystemSettingsDTO {
     private Boolean debugMode;
     private Boolean stateGraphEnabled;
 
+    /**
+     * Default workspace storage root (global fallback sandbox root). Empty
+     * string = not overridden, fall back to the yml/env configuration. Null on
+     * save = field not submitted (partial payloads keep the stored value).
+     */
+    private String workspaceStorageRoot;
+
     // ===== 搜索服务配置 =====
     private Boolean searchEnabled;
     /** serper / tavily */
@@ -33,6 +40,14 @@ public class SystemSettingsDTO {
     // 用于前端回显脱敏后的 API Key
     private String serperApiKeyMasked;
     private String tavilyApiKeyMasked;
+
+    // ===== WeChat Official Account (公众号) publish credentials =====
+    /** 公众号 AppID (plain — not sensitive). */
+    private String weixinoaAppId;
+    /** 公众号 AppSecret — write-only from the client; never echoed in plaintext. */
+    private String weixinoaAppSecret;
+    /** Masked AppSecret for display. */
+    private String weixinoaAppSecretMasked;
 
     // ===== 视频生成配置 =====
     /** 是否启用视频生成能力 */

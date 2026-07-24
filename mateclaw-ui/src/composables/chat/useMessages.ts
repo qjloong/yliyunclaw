@@ -37,7 +37,6 @@ export interface UseMessagesReturn {
   /** 追加消息内容 */
   appendMessageContent: (id: string | number, content: string, type?: 'text' | 'thinking') => void
   /** 删除消息 */
-  removeMessage: (id: string | number) => void
   /** 清空消息 */
   clearMessages: () => void
   /** 设置消息状态 */
@@ -132,7 +131,7 @@ export function useMessages(options: UseMessagesOptions = {}): UseMessagesReturn
     if (!message) return
 
     // 获取或创建对应类型的 contentPart
-    let contentParts = [...(message.contentParts || [])]
+    const contentParts = [...(message.contentParts || [])]
     const partIndex = contentParts.findLastIndex(p => p.type === type)
 
     if (partIndex === -1) {
@@ -162,15 +161,6 @@ export function useMessages(options: UseMessagesOptions = {}): UseMessagesReturn
       contentParts,
       content: textContent,
     })
-  }
-
-  // 删除消息
-  const removeMessage = (id: string | number) => {
-    const index = messages.value.findIndex(m => m.id === id)
-    if (index === -1) return
-    
-    messages.value = messages.value.filter(m => m.id !== id)
-    onUpdate?.(messages.value)
   }
 
   // 清空消息
@@ -238,7 +228,6 @@ export function useMessages(options: UseMessagesOptions = {}): UseMessagesReturn
     addMessage,
     updateMessage,
     appendMessageContent,
-    removeMessage,
     clearMessages,
     setMessageStatus,
     getMessage,
