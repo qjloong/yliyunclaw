@@ -1,6 +1,7 @@
 package vip.mate.agent.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -118,6 +119,35 @@ public class TemplateService {
         agent.setMaxIterations(template.getMaxIterations());
         if (template.getSystemPrompt() != null && !template.getSystemPrompt().isBlank()) {
             agent.setSystemPrompt(template.getSystemPrompt());
+        }
+        // === MetaY custom start === 拷贝聊天首页配置（副标题 + 快捷入口）
+        if (template.getHomeSubtitle() != null && !template.getHomeSubtitle().isBlank()) {
+            agent.setHomeSubtitle(template.getHomeSubtitle());
+        }
+        if (template.getHomeQuickStarts() != null && !template.getHomeQuickStarts().isEmpty()) {
+            try {
+                agent.setHomeQuickStartsJson(objectMapper.writeValueAsString(template.getHomeQuickStarts()));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize homeQuickStarts for template {}", templateId, e);
+            }
+        }
+        // === MetaY custom end ===
+        // === MetaY custom === 模板绑定元数据：template / profile / capability / plugin
+        // 缺失则不调用 setter（MyBatis-Plus 默认 NULL 行为），保持已有数据兼容。
+        if (template.getId() != null && !template.getId().isBlank()) {
+            agent.setTemplateId(template.getId());
+        }
+        if (template.getProfileId() != null && !template.getProfileId().isBlank()) {
+            agent.setProfileId(template.getProfileId());
+        }
+        if (template.getCapabilityPackId() != null && !template.getCapabilityPackId().isBlank()) {
+            agent.setCapabilityPackId(template.getCapabilityPackId());
+        }
+        if (template.getPluginKey() != null && !template.getPluginKey().isBlank()) {
+            agent.setPluginKey(template.getPluginKey());
+        }
+        if (template.getTemplateMetadataJson() != null && !template.getTemplateMetadataJson().isBlank()) {
+            agent.setTemplateMetadataJson(template.getTemplateMetadataJson());
         }
         agent.setWorkspaceId(workspaceId);
         agent.setCreatorUserId(creatorUserId);

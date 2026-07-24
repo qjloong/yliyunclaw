@@ -26,6 +26,34 @@ VALUES (1000000003, '推理分析师', '分步思考、推理过程清晰可见�
         NULL, 100, TRUE, 'pi:cpu', 'react,reasoning,tools', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
+-- ==================== 内置定制 Agent（dev1 定制，MetaY） ====================
+-- 名师出题助手（教师领域，绑定 teacher_exam 插件）
+INSERT INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, template_id, template_version, template_category, template_domain, profile_id, capability_pack_id, plugin_key, knowledge_base_ids_json, home_subtitle, home_quick_starts_json, create_time, update_time, deleted)
+VALUES (1000000010, '名师出题助手', '初中语文中考名著阅读命题助手，基于知识库出题、给答案与采分点。', 'plan_execute',
+        '你是 MateClaw 的「名师出题助手」，一名初中语文中考名著阅读命题专家。事实必须来自指定知识库或会话材料，不得编造；先规划再出题，主观题默认给答案与采分点；输出前自审来源、难度、考点覆盖与采分可操作性。',
+        NULL, 8, TRUE, '📚', 'education,exam,teacher,builtin',
+        'builtin.teacher_exam_assistant', 'v1', 'education', 'junior_chinese_exam',
+        'teacher_exam_assistant_profile', 'capability.education.junior_chinese_exam', 'builtin.teacher_exam',
+        NULL,
+        '基于知识库与上传材料，生成有来源、有答案、有采分点的中考名著阅读试题。',
+        '[{"title":"按名著出一套模拟题","prompt":"请基于《西游记》为我出一套中考名著阅读模拟题，含答案与采分点。"},{"title":"给出现代文阅读题","prompt":"请生成一篇初中现代文阅读题，含参考答案和采分标准。"},{"title":"文言文断句与翻译题","prompt":"请出一道文言文断句与翻译题，并给出采分点。"},{"title":"古诗词赏析题","prompt":"请出一道古诗词赏析题，附答案解析与评分参考。"}]',
+        NOW(), NOW(), 0)
+ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), template_id=VALUES(template_id), template_version=VALUES(template_version), template_category=VALUES(template_category), template_domain=VALUES(template_domain), profile_id=VALUES(profile_id), capability_pack_id=VALUES(capability_pack_id), plugin_key=VALUES(plugin_key), knowledge_base_ids_json=VALUES(knowledge_base_ids_json), home_subtitle=VALUES(home_subtitle), home_quick_starts_json=VALUES(home_quick_starts_json), update_time=VALUES(update_time), deleted=VALUES(deleted);
+
+-- 编码工程助手（Codex 风格，绑定 coding_agent 插件）
+INSERT INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, template_id, template_version, template_category, template_domain, profile_id, capability_pack_id, plugin_key, knowledge_base_ids_json, home_subtitle, home_quick_starts_json, create_time, update_time, deleted)
+VALUES (1000000011, '编码工程助手', '面向真实仓库的编码助手：理解代码、制定计划、修改测试、总结审核。', 'plan_execute',
+        '你是 MateClaw 的「编码工程助手」，一个面向真实代码仓库的工程型编程智能体。先读上下文，再给最小必要修改，最后用测试、diff 与清晰总结证明工作；高风险 shell、依赖安装、网络访问、删除文件、git push、PR 创建必须按策略审批；不读、不输出、不传播密钥与生产配置。',
+        NULL, 12, TRUE, '💻', 'coding,developer,builtin',
+        'builtin.coding_agent', 'v1', 'developer', 'codex_workspace',
+        'coding_agent_profile', 'capability.developer.codex_workspace', 'builtin.coding_agent',
+        NULL,
+        '面向真实代码仓库的编码助手：理解、规划、修改、测试与审查。',
+        '[{"title":"解释这段代码","prompt":"请解释当前工作区中 main 函数的逻辑与作用。"},{"title":"制定修改计划","prompt":"我想给项目增加一个新的 REST 接口，请先制定修改计划。"},{"title":"修复一个 bug","prompt":"运行测试时出现了失败，请帮我定位并修复相关 bug。"},{"title":"审查本次改动","prompt":"请审查我当前未提交的改动，指出风险与改进点。"}]',
+        NOW(), NOW(), 0)
+ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), template_id=VALUES(template_id), template_version=VALUES(template_version), template_category=VALUES(template_category), template_domain=VALUES(template_domain), profile_id=VALUES(profile_id), capability_pack_id=VALUES(capability_pack_id), plugin_key=VALUES(plugin_key), knowledge_base_ids_json=VALUES(knowledge_base_ids_json), home_subtitle=VALUES(home_subtitle), home_quick_starts_json=VALUES(home_quick_starts_json), update_time=VALUES(update_time), deleted=VALUES(deleted);
+ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), update_time=VALUES(update_time), deleted=VALUES(deleted);
+
 -- ==================== 本地模型 Provider（优先展示） ====================
 
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)

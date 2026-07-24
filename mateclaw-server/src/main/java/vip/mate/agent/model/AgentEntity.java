@@ -155,6 +155,15 @@ public class AgentEntity {
     @TableField(value = "template_metadata_json") private String templateMetadataJson;
     @TableField(value = "knowledge_base_ids_json") private String knowledgeBaseIdsJson;
 
+    // ── 扩展点：聊天首页配置（dev1 定制，MetaY） ──
+    /** 聊天首页副标题 */
+    @TableField(value = "home_subtitle", updateStrategy = FieldStrategy.ALWAYS)
+    private String homeSubtitle;
+
+    /** 聊天首页快捷聊天入口（JSON 数组：[{title, prompt}]），可空 */
+    @TableField(value = "home_quick_starts_json", updateStrategy = FieldStrategy.ALWAYS)
+    private String homeQuickStartsJson;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

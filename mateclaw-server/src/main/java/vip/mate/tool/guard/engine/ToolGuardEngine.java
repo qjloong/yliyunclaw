@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import vip.mate.tool.guard.guardian.ToolGuardGuardian;
 import vip.mate.tool.guard.model.*;
+import vip.mate.workspace.core.model.WorkspacePolicyEntity;
+import vip.mate.workspace.core.service.WorkspacePolicyService;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -25,13 +27,21 @@ public class ToolGuardEngine {
 
     private final List<ToolGuardGuardian> guardians;
     private final ToolPolicyResolver policyResolver;
+    // === MetaY custom start === 工作区策略服务（D2 运行时接线）
+    private final WorkspacePolicyService policyService;
+    // === MetaY custom end ===
 
-    public ToolGuardEngine(List<ToolGuardGuardian> guardians, ToolPolicyResolver policyResolver) {
+    public ToolGuardEngine(List<ToolGuardGuardian> guardians, ToolPolicyResolver policyResolver,
+                           // === MetaY custom === 工作区策略服务
+                           WorkspacePolicyService policyService) {
         // 按 priority 降序排列
         this.guardians = guardians.stream()
                 .sorted(Comparator.comparingInt(ToolGuardGuardian::priority).reversed())
                 .toList();
         this.policyResolver = policyResolver;
+        // === MetaY custom start ===
+        this.policyService = policyService;
+        // === MetaY custom end ===
         log.info("[ToolGuardEngine] Initialized with {} guardians: {}",
                 this.guardians.size(),
                 this.guardians.stream().map(ToolGuardGuardian::name).toList());
@@ -69,6 +79,18 @@ public class ToolGuardEngine {
 
         // 通过 policy resolver 产出最终裁决
         GuardDecision decision = policyResolver.resolve(allFindings, context);
+        // === MetaY custom start === 工作区策略叠加（D2 运行时接线）
+        // 策略为 null（无配置或 workspaceId 缺失）时原样返回，不破坏既有链路。
+        WorkspacePolicyEntity wsPolicy = policyService.getByWorkspaceId(context.workspaceId());
+        if (wsPolicy != null) {
+            GuardDecision fortified = policyResolver.applyWorkspacePolicy(decision, wsPolicy);
+            if (fortified != decision) {
+                log.info("[ToolGuardEngine] workspace policy fortified decision for tool={}: {} -> {}",
+                        context.toolName(), decision, fortified);
+            }
+            decision = fortified;
+        }
+        // === MetaY custom end ===
         GuardSeverity maxSeverity = computeMaxSeverity(allFindings);
         String summary = policyResolver.buildSummary(allFindings, decision);
 

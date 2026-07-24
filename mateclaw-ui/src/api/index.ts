@@ -1110,6 +1110,18 @@ export const workspaceTeamApi = {
     http.delete(`/workspaces/${id}/members/${memberId}`),
 }
 
+// ==================== Workspace Policy & Project Permission (dev1 定制，MetaY) ====================
+export const workspacePolicyApi = {
+  getPolicy: (workspaceId: string | number) => http.get(`/workspaces/${workspaceId}/policy`),
+  savePolicy: (workspaceId: string | number, data: any) => http.put(`/workspaces/${workspaceId}/policy`, data),
+  listProjectPermissions: (workspaceId: string | number) =>
+    http.get(`/workspaces/${workspaceId}/project-permissions`),
+  addProjectPermission: (workspaceId: string | number, data: any) =>
+    http.post(`/workspaces/${workspaceId}/project-permissions`, data),
+  deleteProjectPermission: (workspaceId: string | number, permId: string | number) =>
+    http.delete(`/workspaces/${workspaceId}/project-permissions/${permId}`),
+}
+
 // ==================== Agent Binding ====================
 export const agentBindingApi = {
   listSkills: (agentId: string | number) => http.get(`/agents/${agentId}/skills`),

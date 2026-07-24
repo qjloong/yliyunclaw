@@ -60,6 +60,12 @@
                     <path d="M9 6V4h6v2"/>
                   </svg>
                 </button>
+                <!-- MetaY custom: 策略/权限配置入口 -->
+                <button class="action-btn" @click="openPolicyDialog(ws)" :title="t('security.workspaces.actions.policy', '策略与权限')">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                  </svg>
+                </button>
               </div>
             </td>
           </tr>
@@ -132,6 +138,31 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- MetaY custom: 工作区策略与项目权限 -->
+    <Teleport to="body">
+      <div v-if="showPolicyDialog" class="modal-overlay">
+        <div class="modal policy-modal">
+          <div class="modal-header">
+            <h3>{{ t('security.workspaces.policy.title', '策略与权限') }} · {{ policyWs?.name }}</h3>
+            <button class="modal-close" @click="showPolicyDialog = false">&times;</button>
+          </div>
+          <div class="modal-body policy-modal__body">
+            <section class="policy-section">
+              <h4>{{ t('security.workspaces.policy.heading', '工作区策略') }}</h4>
+              <PolicyPanel :workspace-id="policyWsId" />
+            </section>
+            <section class="policy-section">
+              <h4>{{ t('security.workspaces.projectPermission.heading', '项目权限') }}</h4>
+              <ProjectPermissionPanel :workspace-id="policyWsId" />
+            </section>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-secondary" @click="showPolicyDialog = false">{{ t('common.close') }}</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -141,6 +172,8 @@ import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
 import { workspaceTeamApi } from '@/api/index'
 import { useWorkspaceStore, type Workspace } from '@/stores/useWorkspaceStore'
+import PolicyPanel from './PolicyPanel.vue'
+import ProjectPermissionPanel from './ProjectPermissionPanel.vue'
 
 const { t } = useI18n()
 const wsStore = useWorkspaceStore()
@@ -152,6 +185,16 @@ const showDialog = ref(false)
 const showDeleteConfirm = ref(false)
 const editingWs = ref<Workspace | null>(null)
 const deletingWs = ref<Workspace | null>(null)
+
+// === MetaY custom start === 策略与权限对话框
+const showPolicyDialog = ref(false)
+const policyWs = ref<Workspace | null>(null)
+const policyWsId = computed(() => policyWs.value?.id ?? currentWorkspaceId.value)
+function openPolicyDialog(ws: Workspace) {
+  policyWs.value = ws
+  showPolicyDialog.value = true
+}
+// === MetaY custom end ===
 
 const form = ref({
   name: '',
@@ -321,4 +364,16 @@ function formatDate(dateStr?: string) {
   background: var(--mc-danger, #ef4444) !important;
 }
 .btn-danger-fill:hover { opacity: 0.9; }
+
+/* === MetaY custom === 策略与权限对话框 */
+.policy-modal { max-width: 760px; width: 92vw; }
+.policy-modal__body { display: flex; flex-direction: column; gap: 20px; }
+.policy-section { display: flex; flex-direction: column; gap: 10px; }
+.policy-section h4 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--mc-text-primary, #1e293b);
+  border-left: 3px solid var(--mc-primary, #D97757);
+  padding-left: 8px;
+}
 </style>

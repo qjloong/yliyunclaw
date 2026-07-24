@@ -8,7 +8,14 @@
       <!-- 空状态 -->
       <div v-if="messages.length === 0 && !loading" class="empty-state">
         <slot name="empty" :title="title" :subtitle="subtitle" :suggestions="suggestions">
-          <div class="welcome-screen">
+          <!-- MetaY custom: 自定义聊天首页（副标题 + 快捷入口） -->
+          <ChatHome
+            v-if="homeSubtitle || (homeQuickStarts && homeQuickStarts.length)"
+            :subtitle="homeSubtitle"
+            :quick-starts="homeQuickStarts"
+            @select="$emit('suggestion-click', $event)"
+          />
+          <div v-else class="welcome-screen">
             <div class="welcome-logo">
               <div class="welcome-logo__glow"></div>
               <img src="/logo/mateclaw_logo_s.png" alt="MateClaw" class="welcome-logo__icon" />
@@ -120,8 +127,9 @@ import { ArrowDown, ChatDotRound, DataLine, EditPen, Monitor, Right } from '@ele
 const { t } = useI18n()
 import MessageBubble from './MessageBubble.vue'
 import CompressionSummary from './CompressionSummary.vue'
+import ChatHome from './ChatHome.vue'
 import { useStickToBottom } from '@/composables/chat/useStickToBottom'
-import type { Message } from '@/types'
+import type { Message, AgentHomeQuickStart } from '@/types'
 
 interface Props {
   /** 消息列表 */
@@ -138,6 +146,10 @@ interface Props {
   subtitle?: string
   /** 建议提示（空状态） */
   suggestions?: string[]
+  /** 聊天首页副标题（MetaY custom） */
+  homeSubtitle?: string
+  /** 聊天首页快捷入口（MetaY custom） */
+  homeQuickStarts?: AgentHomeQuickStart[]
   /** 是否自动滚动到底部 */
   autoScroll?: boolean
   /** 是否还有更早的消息可加载 */

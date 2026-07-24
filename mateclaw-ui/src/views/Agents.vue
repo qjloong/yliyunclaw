@@ -267,6 +267,10 @@
               <span v-if="form.wikiDisabled" class="tab-badge tab-badge--off">{{ t('agents.binding.disableAllWikiBadge') }}</span>
               <span v-else-if="selectedKbIds.length" class="tab-badge">{{ selectedKbIds.length }}</span>
             </button>
+            <!-- MetaY custom: 聊天首页配置 Tab -->
+            <button v-if="editingAgent" class="modal-tab" :class="{ active: modalTab === 'home' }" @click="modalTab = 'home'">
+              {{ t('agents.tabs.home', '聊天首页') }}
+            </button>
           </div>
 
           <!-- Basic Tab -->
@@ -705,6 +709,25 @@
               </div>
             </template>
           </div>
+          <!-- MetaY custom: 聊天首页配置面板 -->
+          <div v-else-if="modalTab === 'home'" class="form-grid">
+            <div class="form-group full-width">
+              <label class="form-label">{{ t('agents.home.subtitle', '首页副标题') }}</label>
+              <input v-model="form.homeSubtitle" class="form-input" :placeholder="t('agents.home.subtitlePlaceholder', '进入该 Agent 会话时显示的引导语')" />
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label">{{ t('agents.home.quickStarts', '快捷聊天入口') }}</label>
+              <div class="home-quickstarts">
+                <div v-for="(q, i) in homeQuickStartsDraft" :key="i" class="home-quickstart-row">
+                  <input v-model="q.title" class="form-input" :placeholder="t('agents.home.quickTitle', '标题')" @input="syncHomeQuickStarts" />
+                  <input v-model="q.prompt" class="form-input" :placeholder="t('agents.home.quickPrompt', '点击后发送的提示词')" @input="syncHomeQuickStarts" />
+                  <button type="button" class="home-quickstart-remove" @click="removeHomeQuickStart(i)" :title="t('common.remove')">×</button>
+                </div>
+                <button type="button" class="btn-secondary home-quickstart-add" @click="addHomeQuickStart">{{ t('agents.home.addQuickStart', '添加快捷入口') }}</button>
+              </div>
+              <p class="form-hint">{{ t('agents.home.quickHint', '为空则使用默认欢迎页') }}</p>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
@@ -724,7 +747,7 @@ import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
 import { mcConfirm } from '@/components/common/useConfirm'
 import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, liveApi, wikiApi } from '@/api/index'
-import type { Agent } from '@/types/index'
+import type { Agent, AgentHomeQuickStart } from '@/types/index'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SkillIconPicker from '@/components/common/SkillIconPicker.vue'
 import LivePanel from '@/components/live/LivePanel.vue'
@@ -755,7 +778,7 @@ const activeFilter = ref('all')
 const activeTags = ref<string[]>([])
 const showModal = ref(false)
 const editingAgent = ref<Agent | null>(null)
-const modalTab = ref<'basic' | 'skills' | 'tools' | 'providers' | 'wiki'>('basic')
+const modalTab = ref<'basic' | 'skills' | 'tools' | 'providers' | 'wiki' | 'home'>('basic')
 /** RFC-090 §9.2 调整 B — Tool picker is an Advanced bypass; collapsed by
  *  default but stays open as soon as the agent has any direct tool
  *  bindings, so existing users don't lose visibility on their picks. */
@@ -999,10 +1022,43 @@ const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: s
   // selection alone would fall through to "inherit workspace-wide", so an
   // operator who wants zero KBs in the context needs this dedicated bit.
   wikiDisabled: false,
+  // === MetaY custom === 聊天首页配置
+  homeSubtitle: '',
+  homeQuickStartsJson: '',
 })
 
 const form = ref(defaultForm())
 const iconPickerVisible = ref(false)
+
+// === MetaY custom start === 聊天首页快捷入口草稿编辑
+const homeQuickStartsDraft = ref<AgentHomeQuickStart[]>([])
+
+function parseHomeQuickStarts(raw?: string | null): AgentHomeQuickStart[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as AgentHomeQuickStart[]) : []
+  } catch {
+    return []
+  }
+}
+
+function syncHomeQuickStarts() {
+  form.value.homeQuickStartsJson = homeQuickStartsDraft.value.length
+    ? JSON.stringify(homeQuickStartsDraft.value)
+    : ''
+}
+
+function addHomeQuickStart() {
+  homeQuickStartsDraft.value.push({ title: '', prompt: '' })
+  syncHomeQuickStarts()
+}
+
+function removeHomeQuickStart(i: number) {
+  homeQuickStartsDraft.value.splice(i, 1)
+  syncHomeQuickStarts()
+}
+// === MetaY custom end ===
 
 // Chip-style tag editor (#145). `form.tags` stays the comma-separated string
 // source of truth for the API; the chips render a derived array. The input
@@ -1237,6 +1293,7 @@ function openBlankCreateModal() {
   tagInput.value = ''
   recentlyRemovedTag.value = null
   profileForm.value = emptyProfile()
+  homeQuickStartsDraft.value = []
   modalTab.value = 'basic'
   skillBindingSearch.value = ''
   toolBindingSearch.value = ''
@@ -1346,7 +1403,12 @@ async function openEditModal(agent: Agent) {
     skillsDisabled: agent.skillsDisabled === true,
     toolsDisabled: agent.toolsDisabled === true,
     wikiDisabled: (agent as any).wikiDisabled === true,
+    // === MetaY custom === 聊天首页配置
+    homeSubtitle: (agent as any).homeSubtitle || '',
+    homeQuickStartsJson: (agent as any).homeQuickStartsJson || '',
   }
+  // === MetaY custom === 解析快捷入口到草稿
+  homeQuickStartsDraft.value = parseHomeQuickStarts((agent as any).homeQuickStartsJson)
   tagInput.value = ''
   recentlyRemovedTag.value = null
   profileForm.value = parsePrompt(agent.systemPrompt)
@@ -1537,6 +1599,40 @@ async function toggleAgent(agent: Agent) {
 
 <style scoped>
 .agents-page { gap: 18px; }
+
+/* === MetaY custom === 聊天首页快捷入口编辑器 */
+.home-quickstarts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.home-quickstart-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.home-quickstart-row .form-input {
+  flex: 1;
+}
+.home-quickstart-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--mc-border, #e2e8f0);
+  background: var(--mc-bg-elevated, #f8fafc);
+  color: var(--mc-text-secondary, #64748b);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.home-quickstart-remove:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+.home-quickstart-add {
+  align-self: flex-start;
+}
 
 .header-right {
   display: flex;

@@ -3,6 +3,7 @@ package vip.mate.tool.guard.engine;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import vip.mate.tool.guard.model.*;
+import vip.mate.workspace.core.model.WorkspacePolicyEntity;
 
 import java.util.List;
 
@@ -75,6 +76,23 @@ public class ToolPolicyResolver {
             return GuardDecision.NEEDS_APPROVAL;
         }
         return GuardDecision.ALLOW;
+    }
+
+    /**
+     * 将工作区策略叠加到基础裁决上（dev1 定制，MetaY）。
+     * <p>策略为 null 时原样返回，不破坏既有链路。执行器可在得到基础裁决后
+     * 调用本方法完成策略收紧（如审批策略 ALWAYS / 沙箱 ENFORCED）。
+     */
+    public GuardDecision applyWorkspacePolicy(GuardDecision base, WorkspacePolicyEntity policy) {
+        if (policy == null) return base;
+        GuardDecision result = base;
+        if ("ALWAYS".equalsIgnoreCase(policy.getApprovalPolicy()) && result == GuardDecision.ALLOW) {
+            result = GuardDecision.NEEDS_APPROVAL;
+        }
+        if ("ENFORCED".equalsIgnoreCase(policy.getSandboxMode()) && result == GuardDecision.ALLOW) {
+            result = GuardDecision.NEEDS_APPROVAL;
+        }
+        return result;
     }
 
     /**

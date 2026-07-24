@@ -112,6 +112,8 @@
         :title="blockingPrompt ? modelPromptText.title : $t('app.title')"
         :subtitle="blockingPrompt ? modelPromptText.desc : $t('chat.subtitle')"
         :suggestions="blockingPrompt ? [] : suggestions"
+        :home-subtitle="currentAgentHomeSubtitle"
+        :home-quick-starts="currentAgentHomeQuickStarts"
         @regenerate="handleRegenerate"
         @rewind="handleRewind"
         @suggestion-click="sendSuggestion"
@@ -217,15 +219,17 @@
         <ContextUsagePanel :usage="contextUsage" />
       </div>
 
-      <!-- 使用组件化的 ChatInput -->
-      <ChatInput
+      <!-- 组件化的 ChatInput（MetaY: 替换为 ChatInputWorkspaceBar） -->
+      <ChatInputWorkspaceBar
         ref="chatInputRef"
         v-model="inputText"
         :loading="isGenerating && !hasPendingApproval"
+        :workspace-name="workspaceBarName"
+        :workspace-base-path="workspaceBarPath"
+        :model-label="activeModelLabel"
         :disabled="blockingPrompt || !currentAgent"
         :skills-enabled="!!currentAgent && !currentAgent.skillsDisabled"
         :placeholder="$t('chat.messagePlaceholder')"
-        :hint="currentRuntimeModel"
         :attachments="pendingAttachments"
         :uploading="uploadingAttachment"
         :max-length="10240"
@@ -246,6 +250,9 @@
         :thinking-supported="currentModelSupportsThinking"
         @toggle-thinking="thinkingEnabled = !thinkingEnabled"
         @talk="showTalkMode = true"
+        @switch-workspace="openWorkspacePermission"
+        @open-permission="openWorkspacePermission"
+        @open-plugins="openPluginsPage"
       />
     </div>
 
@@ -289,11 +296,12 @@ import { useChat } from '@/composables/chat/useChat'
 import RunOverviewPanel from '@/components/chat/RunOverviewPanel.vue'
 import { reconstructErrorInfo } from '@/types/chatError'
 import { reconcileMessages, extractMessages } from '@/utils/messageReconcile'
-import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, ChatAttachment, MessageContentPart, Message, ToolCallMeta, StreamPhase } from '@/types'
+import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, ChatAttachment, MessageContentPart, Message, ToolCallMeta, StreamPhase, AgentHomeQuickStart } from '@/types'
 
 // 导入组件化组件
 import MessageList from '@/components/chat/MessageList.vue'
 import RecoverableModelBanner from '@/components/chat/RecoverableModelBanner.vue'
+import ChatInputWorkspaceBar from '@/components/chat/ChatInputWorkspaceBar.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import ConversationSidebar from '@/components/chat/ConversationSidebar.vue'
 import DropdownMenu, { type DropdownMenuItem } from '@/components/common/DropdownMenu.vue'
@@ -370,6 +378,20 @@ const suggestions = computed(() => {
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
+const wsStore = useWorkspaceStore()
+
+// === MetaY custom start === 会话内工作区权限配置入口
+function openWorkspacePermission() {
+  router.push('/settings/workspaces')
+}
+
+function openPluginsPage() {
+  router.push('/plugins')
+}
+
+const workspaceBarName = computed(() => wsStore.currentWorkspace?.name || '')
+const workspaceBarPath = computed(() => wsStore.currentWorkspace?.basePath || '')
+// === MetaY custom end ===
 
 const agents = ref<Agent[]>(cachedAgents.length > 0 ? [...cachedAgents] : [])
 const conversations = ref<Conversation[]>([])
@@ -715,7 +737,7 @@ async function collectFilesFromEntries(dirEntries: FileSystemDirectoryEntry[]): 
 }
 
 const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
-const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
+const chatInputRef = ref<InstanceType<typeof ChatInputWorkspaceBar> | null>(null)
 
 // Post-render augmentations (ECharts, KaTeX, Mermaid) all watch the same
 // MessageList container — placeholders emitted by useMarkdownRenderer get
@@ -795,6 +817,20 @@ const connectionStatusLabel = computed(() => {
 
 // ============ 计算属性 ============
 const currentAgent = computed(() => agents.value.find(a => String(a.id) === String(selectedAgentId.value)))
+
+// === MetaY custom start === 当前 Agent 的聊天首页配置（副标题 + 快捷入口）
+const currentAgentHomeSubtitle = computed(() => currentAgent.value?.homeSubtitle || '')
+const currentAgentHomeQuickStarts = computed<AgentHomeQuickStart[]>(() => {
+  const raw = currentAgent.value?.homeQuickStartsJson
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as AgentHomeQuickStart[]) : []
+  } catch {
+    return []
+  }
+})
+// === MetaY custom end ===
 
 /** Human label for the agent's runtime mode — surfaces in the badge tooltip
  *  only, never in the visible header. */
@@ -2469,10 +2505,10 @@ function handleCodeCopy(e: MouseEvent) {
   align-items: center;
   gap: 12px;
   padding: 40px 60px;
-  border: 2px dashed var(--mc-primary, #D97757);
+  border: 2px dashed var(--mc-primary);
   border-radius: 16px;
-  background: var(--mc-bg-elevated, #f8fafc);
-  color: var(--mc-primary, #D97757);
+  background: var(--mc-bg-elevated);
+  color: var(--mc-primary);
   font-size: 16px;
   font-weight: 500;
 }
@@ -2505,6 +2541,8 @@ function handleCodeCopy(e: MouseEvent) {
   min-width: 0;
   gap: 10px;
 }
+
+
 
 .chat-header-right {
   display: flex;

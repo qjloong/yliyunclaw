@@ -66,8 +66,18 @@ export interface Agent {
    * returns an empty list. Defaults to `false`. Issue #304.
    */
   wikiDisabled?: boolean
+  /** 聊天首页副标题（dev1 定制，MetaY） */
+  homeSubtitle?: string | null
+  /** 聊天首页快捷入口 JSON 字符串（dev1 定制，MetaY） */
+  homeQuickStartsJson?: string | null
   createTime?: string
   updateTime?: string
+}
+
+// ==================== 聊天首页快捷入口（dev1 定制，MetaY） ====================
+export interface AgentHomeQuickStart {
+  title: string
+  prompt: string
 }
 
 // 兼容旧代码

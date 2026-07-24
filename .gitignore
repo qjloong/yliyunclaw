@@ -64,6 +64,7 @@ Servers
 .metadata
 upload
 gen_code
+.env
 
 ### node ###
 node_modules
@@ -129,3 +130,4 @@ yarn.lock
 # are executed. Never commit or sync these.
 __pycache__/
 *.pyc
+/output/
