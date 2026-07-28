@@ -241,6 +241,7 @@
         @stop="handleStopStream"
         @cancel-queued="handleCancelQueued"
         @file-select="handleFileSelect"
+        @add-attachments="handleAddAttachments"
         @attachment-remove="removeAttachment"
         @approve="handleApprove"
         @approve-always="handleApproveAlways"
@@ -1684,6 +1685,50 @@ async function hydrateStateFromRoute() {
   if (!selectedAgentId.value && agents.value.length > 0) {
     selectedAgentId.value = agents.value[0].id
   }
+
+  // Yliyun 云盘集成：从 URL 参数加载文件/文件夹上下文
+  const fileId = route.query.fileId as string | undefined
+  const fileName = route.query.fileName as string | undefined
+  const folderId = route.query.folderId as string | undefined
+  const folderName = route.query.folderName as string | undefined
+
+  if (fileId || folderId) {
+    if (!currentConversationId.value) newConversation()
+
+    if (fileId && fileName) {
+      // 添加云盘文件为上下文附件
+      pendingAttachments.value.push({
+        name: fileName,
+        size: 0,
+        contentType: 'application/octet-stream',
+        storedName: `cloud:${fileId}`,
+        path: `yliyun://file/${fileId}`,
+        url: '',
+        source: 'yliyun-mcp',
+      } as any)
+    }
+
+    if (folderId && folderName) {
+      // 添加文件夹为上下文引用（仅列出，不建 KB）
+      pendingAttachments.value.push({
+        name: folderName,
+        size: 0,
+        contentType: 'inode/directory',
+        storedName: `cloud-folder:${folderId}`,
+        path: `yliyun://folder/${folderId}`,
+        url: '',
+        source: 'yliyun-mcp',
+      } as any)
+    }
+
+    // 清理 URL 中的文件参数，避免刷新后重复添加
+    const cleanQuery = { ...route.query }
+    delete cleanQuery.fileId
+    delete cleanQuery.fileName
+    delete cleanQuery.folderId
+    delete cleanQuery.folderName
+    router.replace({ path: '/chat', query: cleanQuery })
+  }
 }
 
 function syncRouteState() {
@@ -2198,6 +2243,23 @@ function resetStreamingState() {
 }
 
 // ============ 附件处理 ============
+
+/** @ 云盘文件：直接加到附件列表（不需要上传，MCP工具读取） */
+function handleAddAttachments(cloudFiles: Array<{ name: string; size: number; contentType: string; storedName: string; path: string; source: string }>) {
+  if (!currentConversationId.value) newConversation()
+  for (const f of cloudFiles) {
+    pendingAttachments.value.push({
+      name: f.name,
+      size: f.size,
+      contentType: f.contentType,
+      storedName: f.storedName,
+      path: f.path,
+      url: '',
+      source: 'yliyun-mcp',
+    } as any)
+  }
+}
+
 async function handleFileSelect(files: File[]) {
   if (!currentConversationId.value) {
     newConversation()

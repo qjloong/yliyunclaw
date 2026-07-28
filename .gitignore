@@ -131,3 +131,8 @@ yarn.lock
 __pycache__/
 *.pyc
 /output/
+
+.release
+render-dist
+/mateclaw-desktop/renderer-dist/
+/mateclaw-server/${project.build.directory}/

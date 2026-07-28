@@ -74,8 +74,8 @@ public class SecurityConfig {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .headers(headers -> headers
-                // 允许同源 frame 嵌入（Electron 桌面应用、H2 Console 均需要）
-                .frameOptions(frame -> frame.sameOrigin())
+                // V1: 允许 iframe 嵌入（云盘嵌入 MateClaw 需要跨端口）
+                .frameOptions(frame -> frame.disable())
             )
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> {
@@ -86,6 +86,7 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/api/v1/auth/login",
                     "/api/v1/auth/sso/**",
+                    "/api/v1/auth/yliyun/**",
                     "/api/v1/agents/*/chat/stream",
                     "/api/v1/chat/stream",
                     "/api/v1/chat/*/stop",

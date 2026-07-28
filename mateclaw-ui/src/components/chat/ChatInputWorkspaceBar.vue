@@ -147,6 +147,12 @@
         @select="handleSkillSelect"
         @close="handleSlashClose"
       />
+      <CloudFilePicker
+        v-if="atActive"
+        :visible="atActive"
+        @select="handleCloudFileSelect"
+        @close="handleAtClose"
+      />
       <textarea
         ref="textareaRef"
         v-model="inputValue"
@@ -252,6 +258,10 @@
           <button class="composer-menu-item" type="button" @click="onPickAttach('file')">
             <span class="composer-menu-item__icon">📎</span>
             <span>{{ t('chat.composer.attachFile', '添加图片和文件') }}</span>
+          </button>
+          <button class="composer-menu-item" type="button" @click="onPickAttach('cloud')">
+            <span class="composer-menu-item__icon">☁️</span>
+            <span>选择云盘文件</span>
           </button>
           <button
             class="composer-menu-item composer-menu-item--toggle"
@@ -371,6 +381,7 @@ import { useI18n } from 'vue-i18n'
 import { ArrowDown, CloseBold, MagicStick, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
 import { useToolLabel } from '@/composables/useToolLabel'
 import SkillSlashMenu from '@/components/chat/SkillSlashMenu.vue'
+import CloudFilePicker from '@/components/chat/CloudFilePicker.vue'
 import type { ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage, Skill } from '@/types'
 
 interface Props {
@@ -476,6 +487,7 @@ const emit = defineEmits<{
   'switch-permission-level': [level: 'full' | 'limited']
   'toggle-plan-mode': [enabled: boolean]
   'open-plugins': []
+  'add-attachments': [attachments: Array<{ name: string; size: number; contentType: string; storedName: string; path: string; source: string }>]
 }>()
 
 const { t } = useI18n()
@@ -789,10 +801,24 @@ function onToggleAddMenu() {
   addMenuOpen.value = !wasOpen
 }
 
-function onPickAttach(kind: 'file') {
+function onPickAttach(kind: 'file' | 'cloud') {
   closeAllComposerMenus()
   if (kind === 'file') openFilePicker()
+  else if (kind === 'cloud') { atDismissed.value = false; showCloudPicker.value = true }
 }
+
+// ---- Cloud file @ mention ----
+const showCloudPicker = ref(false)
+const atDismissed = ref(false)
+const atMatch = computed(() => { const m = /@([^\s]*)$/.exec(props.modelValue); return m ? m[1] : null })
+const atActive = computed(() => (atMatch.value !== null || showCloudPicker.value) && !atDismissed.value && !props.disabled && !props.pendingApproval)
+watch(atMatch, (val) => { if (val === null && !showCloudPicker.value) atDismissed.value = false })
+function handleCloudFileSelect(files: Array<{ id: number; name: string; size: number; mimeType: string }>) {
+  emit('add-attachments', files.map(f => ({ name: f.name, size: f.size, contentType: f.mimeType || 'application/octet-stream', storedName: `cloud:${f.id}`, path: `yliyun://file/${f.id}`, source: 'yliyun-mcp' as const })))
+  emit('update:modelValue', props.modelValue.replace(/@[^\s]*$/, ''))
+  showCloudPicker.value = false
+}
+function handleAtClose() { atDismissed.value = true; showCloudPicker.value = false }
 
 function onTogglePlanMode() {
   planMode.value = !planMode.value

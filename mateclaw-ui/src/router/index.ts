@@ -373,6 +373,17 @@ const router = createRouter({
 // false; we await refreshAccess so the decision is made on real data).
 router.beforeEach(async (to) => {
   if (import.meta.env.VITE_SKIP_AUTH === 'true') return true
+
+  // Yliyun ticket 认证：从 URL query 中提取 token 并持久化
+  const urlToken = to.query.token as string | undefined
+  if (urlToken) {
+    localStorage.setItem('token', urlToken)
+    // 清理 URL 中的 token，保留文件上下文参数
+    const cleanQuery = { ...to.query }
+    delete cleanQuery.token
+    return { path: to.path, query: cleanQuery, replace: true }
+  }
+
   const token = localStorage.getItem('token')
 
   if (to.name === 'Login' && token) return { path: '/' }
