@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import vip.mate.exception.MateClawException;
+import vip.mate.llm.workspace.WorkspaceModelScope;
 
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -60,6 +61,7 @@ public class OpenAIDeviceCodeService {
 
     private final OpenAIOAuthService oauthService;
     private final ObjectMapper objectMapper;
+    private final WorkspaceModelScope workspaceModelScope;
 
     private RestClient restClient = RestClient.create();
 
@@ -117,7 +119,8 @@ public class OpenAIDeviceCodeService {
         sessions.put(deviceAuthId, new DeviceCodeSession(
                 deviceAuthId, userCode,
                 now + expiresIn * 1000L,
-                now));
+                now,
+                workspaceModelScope.currentWorkspaceId()));
 
         log.info("Device code session started: deviceAuthId prefix={}, expires_in={}s",
                 deviceAuthId.substring(0, Math.min(8, deviceAuthId.length())), expiresIn);
@@ -194,7 +197,9 @@ public class OpenAIDeviceCodeService {
         }
 
         try {
-            oauthService.exchangeTokenWithVerifier(authorizationCode, codeVerifier, DEVICE_REDIRECT_URI);
+            workspaceModelScope.withWorkspace(session.workspaceId(),
+                    () -> oauthService.exchangeTokenWithVerifier(
+                            authorizationCode, codeVerifier, DEVICE_REDIRECT_URI));
             sessions.remove(deviceAuthId);
             log.info("Device code session completed: deviceAuthId prefix={}",
                     deviceAuthId.substring(0, Math.min(8, deviceAuthId.length())));
@@ -284,10 +289,11 @@ public class OpenAIDeviceCodeService {
             String deviceAuthId,
             String userCode,
             long expiresAt,
-            long lastPollAt) {
+            long lastPollAt,
+            long workspaceId) {
 
         DeviceCodeSession withLastPollAt(long now) {
-            return new DeviceCodeSession(deviceAuthId, userCode, expiresAt, now);
+            return new DeviceCodeSession(deviceAuthId, userCode, expiresAt, now, workspaceId);
         }
     }
 

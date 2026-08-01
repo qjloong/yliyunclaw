@@ -12,12 +12,11 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.model.ModelProviderEntity;
-import vip.mate.llm.repository.ModelProviderMapper;
 import vip.mate.llm.service.ModelProviderService;
+import vip.mate.llm.workspace.WorkspaceModelScope;
 
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -76,13 +75,13 @@ public class OpenAIOAuthService {
     private static final int CALLBACK_PORT = 1455;
     private static final String DEFAULT_CALLBACK_BIND_HOST = "127.0.0.1";
 
-    private final ModelProviderMapper modelProviderMapper;
     private final ObjectMapper objectMapper;
     private final ModelProviderService modelProviderService;
+    private final WorkspaceModelScope workspaceModelScope;
     private final RestClient restClient = RestClient.create();
 
     /** state → code_verifier 缓存 */
-    private final ConcurrentHashMap<String, String> pendingStates = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, PendingState> pendingStates = new ConcurrentHashMap<>();
 
     /** 当前运行中的回调服务器（用于启动新服务器前关闭旧的） */
     private volatile HttpServer activeCallbackServer;
@@ -118,7 +117,8 @@ public class OpenAIOAuthService {
         String codeVerifier = generateCodeVerifier();
         String codeChallenge = generateCodeChallenge(codeVerifier);
         String state = generateState();
-        pendingStates.put(state, codeVerifier);
+        pendingStates.put(state, new PendingState(
+                codeVerifier, workspaceModelScope.currentWorkspaceId()));
 
         if (mode == OAuthFlowMode.LOCAL) {
             boolean serverStarted = startCallbackServer(state);
@@ -369,11 +369,12 @@ public class OpenAIOAuthService {
 
     /** PKCE callback path — looks up the verifier by state and delegates. */
     private void exchangeToken(String code, String state) {
-        String codeVerifier = pendingStates.remove(state);
-        if (codeVerifier == null) {
+        PendingState pending = pendingStates.remove(state);
+        if (pending == null) {
             throw new MateClawException("err.llm.oauth_state_invalid", "无效的 OAuth state，可能已过期或重复使用");
         }
-        exchangeTokenWithVerifier(code, codeVerifier, REDIRECT_URI);
+        workspaceModelScope.withWorkspace(pending.workspaceId(),
+                () -> exchangeTokenWithVerifier(code, pending.codeVerifier(), REDIRECT_URI));
     }
 
     /**
@@ -423,8 +424,12 @@ public class OpenAIOAuthService {
         if (!StringUtils.hasText(accountId) && StringUtils.hasText(provider.getOauthAccessToken())) {
             accountId = extractAccountIdFromJwt(provider.getOauthAccessToken());
             if (StringUtils.hasText(accountId)) {
-                provider.setOauthAccountId(accountId);
-                modelProviderMapper.updateById(provider);
+                modelProviderService.updateOAuthCredentials(
+                        PROVIDER_ID,
+                        provider.getOauthAccessToken(),
+                        provider.getOauthRefreshToken(),
+                        provider.getOauthExpiresAt(),
+                        accountId);
                 log.info("从已有 token 重新解析并保存 accountId={}", accountId);
             }
         }
@@ -436,12 +441,7 @@ public class OpenAIOAuthService {
      */
     public void revokeToken() {
         // MyBatis Plus updateById 默认跳过 null 字段，必须用 LambdaUpdateWrapper 显式置空
-        modelProviderMapper.update(null, new LambdaUpdateWrapper<ModelProviderEntity>()
-                .eq(ModelProviderEntity::getProviderId, PROVIDER_ID)
-                .set(ModelProviderEntity::getOauthAccessToken, null)
-                .set(ModelProviderEntity::getOauthRefreshToken, null)
-                .set(ModelProviderEntity::getOauthExpiresAt, null)
-                .set(ModelProviderEntity::getOauthAccountId, null));
+        modelProviderService.clearOAuthCredentials(PROVIDER_ID);
         log.info("OpenAI OAuth 凭证已清除");
     }
 
@@ -449,7 +449,12 @@ public class OpenAIOAuthService {
      * 获取 OAuth 连接状态
      */
     public OAuthStatusResult getStatus() {
-        ModelProviderEntity provider = modelProviderMapper.selectById(PROVIDER_ID);
+        ModelProviderEntity provider;
+        try {
+            provider = getProvider();
+        } catch (MateClawException e) {
+            provider = null;
+        }
         if (provider == null || !StringUtils.hasText(provider.getOauthAccessToken())) {
             return new OAuthStatusResult(false, false, null);
         }
@@ -486,16 +491,12 @@ public class OpenAIOAuthService {
 
         String accountId = extractAccountIdFromJwt(accessToken);
 
-        ModelProviderEntity provider = getProvider();
-        provider.setOauthAccessToken(accessToken);
-        if (StringUtils.hasText(refreshToken)) {
-            provider.setOauthRefreshToken(refreshToken);
-        }
-        provider.setOauthExpiresAt(System.currentTimeMillis() + (long) expiresIn * 1000);
-        if (StringUtils.hasText(accountId)) {
-            provider.setOauthAccountId(accountId);
-        }
-        modelProviderMapper.updateById(provider);
+        modelProviderService.updateOAuthCredentials(
+                PROVIDER_ID,
+                accessToken,
+                refreshToken,
+                System.currentTimeMillis() + (long) expiresIn * 1000,
+                accountId);
         modelProviderService.activateFirstModelIfDefaultUnavailable(PROVIDER_ID);
         log.info("OpenAI OAuth token 已保存，expires_in={}s, accountId={}", expiresIn, accountId);
     }
@@ -525,7 +526,7 @@ public class OpenAIOAuthService {
     }
 
     private ModelProviderEntity getProvider() {
-        ModelProviderEntity provider = modelProviderMapper.selectById(PROVIDER_ID);
+        ModelProviderEntity provider = modelProviderService.getProviderConfig(PROVIDER_ID);
         if (provider == null) {
             throw new MateClawException("err.llm.chatgpt_not_configured", "OpenAI ChatGPT provider 未配置，请检查数据库初始化");
         }
@@ -614,6 +615,8 @@ public class OpenAIOAuthService {
      * @param state PKCE state（前端可不关心）
      * @param mode 通知前端用哪种 UX：LOCAL 自动 callback / MANUAL_PASTE 引导粘贴
      */
+    private record PendingState(String codeVerifier, long workspaceId) {}
+
     public record OAuthAuthorizeResult(String authorizeUrl, String state, OAuthFlowMode mode) {
         /** Backwards-compatible 2-arg constructor (defaults to LOCAL). */
         public OAuthAuthorizeResult(String authorizeUrl, String state) {

@@ -11,6 +11,7 @@ declare module 'vue-router' {
     keepAlive?: boolean
     requireAdmin?: boolean
     requiredCapability?: Capability
+    embedded?: boolean
   }
 }
 
@@ -356,6 +357,16 @@ const router = createRouter({
       ],
     },
     {
+      path: '/embed/cloud-agent',
+      name: 'CloudAgentEmbed',
+      component: () => import('@/views/CloudAgentEmbed.vue'),
+      meta: {
+        title: 'Cloud Agent',
+        requiredCapability: 'chat',
+        embedded: true,
+      },
+    },
+    {
       path: '/login',
       name: 'Login',
       component: () => import('@/views/Login.vue'),
@@ -366,6 +377,49 @@ const router = createRouter({
     },
   ],
 })
+
+type CookieSession = {
+  id?: string | number
+  username?: string
+  nickname?: string
+  displayName?: string
+  role?: string
+  authSource?: string
+  cloudUserId?: string
+  cloudTenantId?: string
+  tenantName?: string
+}
+
+let cookieSession: CookieSession | null = null
+
+async function probeCookieSession(): Promise<CookieSession | null> {
+  try {
+    const response = await fetch('/api/v1/auth/session', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) return null
+    const payload = await response.json()
+    if (payload?.code !== 200 || !payload?.data?.username) return null
+    return payload.data as CookieSession
+  } catch {
+    return null
+  }
+}
+
+function applyCookieSession(session: CookieSession) {
+  if (session.id != null) localStorage.setItem('userId', String(session.id))
+  if (session.username) localStorage.setItem('username', session.username)
+  if (session.displayName) localStorage.setItem('displayName', session.displayName)
+  else localStorage.removeItem('displayName')
+  if (session.role) localStorage.setItem('role', session.role)
+  if (session.tenantName) localStorage.setItem('tenantName', session.tenantName)
+  else localStorage.removeItem('tenantName')
+  if (session.cloudUserId) localStorage.setItem('cloudUserId', session.cloudUserId)
+  else localStorage.removeItem('cloudUserId')
+  if (session.cloudTenantId) localStorage.setItem('cloudTenantId', session.cloudTenantId)
+  else localStorage.removeItem('cloudTenantId')
+}
 
 // Auth + capability guard. Order matters: bail to /login before we touch the
 // workspace store, and never let an uninitialized capability set fall through
@@ -384,10 +438,34 @@ router.beforeEach(async (to) => {
     return { path: to.path, query: cleanQuery, replace: true }
   }
 
+  // 云盘 ticket 把 JWT 写入 HttpOnly Cookie。清理可能残留的本地账号 token，
+  // 再用受保护的 session 端点确认 Cookie，避免 Bearer 优先级覆盖正确的云盘会话。
+  if (to.query.authSource === 'yliyun') {
+    localStorage.removeItem('token')
+    localStorage.removeItem('userId')
+    localStorage.removeItem('username')
+    localStorage.removeItem('displayName')
+    localStorage.removeItem('role')
+    localStorage.removeItem('tenantName')
+    localStorage.removeItem('cloudUserId')
+    localStorage.removeItem('cloudTenantId')
+    localStorage.removeItem('mc-workspace-id')
+    cookieSession = await probeCookieSession()
+    if (!cookieSession) return { name: 'Login' }
+    applyCookieSession(cookieSession)
+    const cleanQuery = { ...to.query }
+    delete cleanQuery.authSource
+    return { path: to.path, query: cleanQuery, replace: true }
+  }
+
   const token = localStorage.getItem('token')
 
   if (to.name === 'Login' && token) return { path: '/' }
-  if (to.name !== 'Login' && !token) return { name: 'Login' }
+  if (to.name !== 'Login' && !token) {
+    cookieSession = cookieSession || await probeCookieSession()
+    if (!cookieSession) return { name: 'Login' }
+    applyCookieSession(cookieSession)
+  }
   if (to.name === 'Login' || to.name === 'Forbidden') return true
 
   const store = useWorkspaceStore()

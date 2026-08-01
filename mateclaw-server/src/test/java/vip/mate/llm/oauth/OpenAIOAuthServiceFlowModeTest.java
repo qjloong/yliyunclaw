@@ -7,6 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.oauth.OpenAIOAuthService.OAuthFlowMode;
+import vip.mate.llm.workspace.WorkspaceModelScope;
 
 import java.lang.reflect.Method;
 
@@ -32,7 +33,8 @@ class OpenAIOAuthServiceFlowModeTest {
         // null collaborators OK because the helpers we exercise (resolveFlowMode,
         // completeFromPastedUrl up to state validation) don't touch them. The
         // compile-time @RequiredArgsConstructor accepts nulls.
-        service = new OpenAIOAuthService(null, new ObjectMapper(), null);
+        service = new OpenAIOAuthService(
+                new ObjectMapper(), null, new WorkspaceModelScope());
     }
 
     @AfterEach

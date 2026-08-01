@@ -103,6 +103,7 @@ public class AgentGraphBuilder {
     private final ConversationService conversationService;
     private final ModelConfigService modelConfigService;
     private final ModelProviderService modelProviderService;
+    private final vip.mate.llm.workspace.WorkspaceModelScope workspaceModelScope;
     private final ModelContextWindowResolver contextWindowResolver;
     private final PrefixBudgetPlanner prefixBudgetPlanner;
     private final ToolUsageRecencyTracker toolUsageRecencyTracker;
@@ -258,6 +259,8 @@ public class AgentGraphBuilder {
      * the Agent's model override, then the global default.</p>
      */
     public BaseAgent build(AgentEntity entity, String modelProvider, String modelName) {
+        try (vip.mate.llm.workspace.WorkspaceModelScope.Scope ignored =
+                     workspaceModelScope.open(entity.getWorkspaceId())) {
         AgentToolSet toolSet = toolRegistry.getEnabledToolSet();
 
         // Move 6 — Permission flattening at build time.
@@ -541,6 +544,7 @@ public class AgentGraphBuilder {
                 entity.getName(), entity.getAgentType(), protocol.getId(),
                 toolSet.size(), agent.toolCallingEnabled);
         return agent;
+        }
     }
 
     // ==================== Agent 构建方法 ====================
@@ -613,10 +617,15 @@ public class AgentGraphBuilder {
                                          Long agentId, SkillCatalogRenderer skillCatalogRenderer) {
         try {
             List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig, agentId);
+            // Tenant workspaces own provider credentials and availability.
+            // Never let a process-global probe/cooldown for the same provider
+            // id evict a tenant's independently configured provider.
+            boolean workspaceScopedProviders = modelProviderService.isWorkspaceScoped();
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
-                    streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
+                    streamTracker, fallbackChain, llmCacheMetricsAggregator,
+                    workspaceScopedProviders ? null : providerHealthTracker,
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
-                    providerPool);
+                    workspaceScopedProviders ? null : providerPool);
             if (primaryModelConfig != null) {
                 // Feed "prompt too long" rejections back into the window resolver
                 // so the next turn budgets against the server-reported limit.
@@ -910,10 +919,14 @@ public class AgentGraphBuilder {
                                    PrefixBudgetPlan prefixBudgetPlan, Set<String> autoDemotedTools) {
         try {
             List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig, agentId);
+            // See the plan-execute path above: provider health is tenant-local
+            // whenever a workspace model scope is active.
+            boolean workspaceScopedProviders = modelProviderService.isWorkspaceScoped();
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
-                    streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
+                    streamTracker, fallbackChain, llmCacheMetricsAggregator,
+                    workspaceScopedProviders ? null : providerHealthTracker,
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
-                    providerPool);
+                    workspaceScopedProviders ? null : providerPool);
             if (primaryModelConfig != null) {
                 // Feed "prompt too long" rejections back into the window resolver
                 // so the next turn budgets against the server-reported limit.
@@ -1340,7 +1353,8 @@ public class AgentGraphBuilder {
             // walker re-checks pool membership per request, so a provider that
             // re-enters the pool later still gets used (graph rebuilt on
             // ModelConfigChangedEvent).
-            if (providerPool != null && !providerPool.contains(pid)) {
+            if (!modelProviderService.isWorkspaceScoped()
+                    && providerPool != null && !providerPool.contains(pid)) {
                 log.debug("[LlmFailover] skipping provider {} — not in available pool", pid);
                 continue;
             }

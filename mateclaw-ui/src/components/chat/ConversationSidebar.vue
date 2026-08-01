@@ -45,16 +45,6 @@
       />
     </div>
 
-    <div
-      v-if="(!collapsed || isMobile) && agentFilterOptions.length > 1"
-      class="conv-filter"
-    >
-      <select v-model="convAgentFilter" class="conv-filter-select">
-        <option value="">{{ t('chat.allAgents') }}</option>
-        <option v-for="opt in agentFilterOptions" :key="opt.id" :value="opt.id">{{ opt.name }}</option>
-      </select>
-    </div>
-
     <div class="conversation-list">
       <template v-for="group in groupedConversations" :key="group.label">
         <div v-if="!collapsed || isMobile" class="conv-group-title">{{ group.label }}</div>
@@ -234,22 +224,6 @@ function onAgentChange(value: string | number | null) {
   emit('agent-picked', value)
 }
 
-// ==================== Agent filter ====================
-// Narrow the list down to a single agent's conversations.
-const convAgentFilter = ref('')
-
-// Distinct agents present in the conversation list — drives the filter
-// dropdown. Hidden when fewer than two agents have conversations.
-const agentFilterOptions = computed(() => {
-  const seen = new Map<string, string>()
-  for (const conv of props.conversations) {
-    if (conv.agentId == null || conv.agentId === '') continue
-    const id = String(conv.agentId)
-    if (!seen.has(id)) seen.set(id, conv.agentName || id)
-  }
-  return [...seen.entries()].map(([id, name]) => ({ id, name }))
-})
-
 // ==================== Grouping ====================
 const groupedConversations = computed(() => {
   const now = new Date()
@@ -269,9 +243,7 @@ const groupedConversations = computed(() => {
     { label: t('chat.dateEarlier'), items: [] },
   ]
 
-  const agentFilter = convAgentFilter.value
   for (const conv of props.conversations) {
-    if (agentFilter && String(conv.agentId ?? '') !== agentFilter) continue
     if ((conv.conversationId && conv.conversationId.startsWith('tasks_')) || conv.pinned) {
       pinned.push(conv)
       continue
@@ -604,27 +576,6 @@ function onMenuSelect(item: DropdownMenuItem) {
   padding: 10px 12px 12px;
   border-bottom: 1px solid var(--mc-border-light);
   position: relative;
-}
-
-/* Agent filter dropdown above the conversation list. */
-.conv-filter {
-  padding: 8px 12px 0;
-}
-
-.conv-filter-select {
-  width: 100%;
-  font-size: 12px;
-  color: var(--mc-text-secondary);
-  background: var(--mc-bg-elevated);
-  border: 1px solid var(--mc-border);
-  border-radius: 8px;
-  padding: 6px 8px;
-  cursor: pointer;
-  outline: none;
-}
-
-.conv-filter-select:focus {
-  border-color: var(--mc-primary);
 }
 
 .conversation-list {

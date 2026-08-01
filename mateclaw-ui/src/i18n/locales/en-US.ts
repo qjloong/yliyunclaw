@@ -327,6 +327,7 @@ export default {
     },
     uploadFailed: 'File upload failed',
     dropToUpload: 'Drop files or folders here',
+    cloudAttachment: 'Cloud attachment',
     copyFailed: 'Copy failed',
     datePinned: 'Pinned',
     dateToday: 'Today',
@@ -2085,6 +2086,26 @@ export default {
     actions: {
       test: 'Test Connection',
       testing: 'Testing...',
+      diagnose: 'Run diagnostics',
+    },
+    diagnostics: {
+      title: 'Cloud Drive MCP Diagnostics',
+      running: 'Checking configuration, transport, protocol, current-user identity, and read access…',
+      allPassed: 'All checks passed. The current user can call the cloud drive MCP.',
+      hasFailures: 'Some checks failed. Follow the suggestion shown for each failed stage.',
+      suggestion: 'Suggestion',
+      rerun: 'Run again',
+      requestFailed: 'Failed to start MCP diagnostics',
+      traceId: 'Correlation trace ID',
+      includeWrite: 'Include a recoverable write check on the next run (create one temporary folder, then move it to trash)',
+      stages: {
+        config: 'Connection configuration',
+        transport: 'Network and transport',
+        protocol: 'MCP protocol and tool discovery',
+        identity: 'Current-user identity',
+        read: 'Read-tool access',
+        write: 'Recoverable write access',
+      },
     },
     testResult: {
       success: 'Connection successful',
@@ -4307,6 +4328,8 @@ export default {
     list_workspace_memory_files: 'List Memory Files',
 
     // Files & shell
+    yliyun_attachment_read: 'Read Cloud Attachment',
+    yliyun_attachment_list: 'Read Cloud Folder',
     read_file: 'Read File',
     execute_shell_command: 'Execute Command',
     extract_document_text: 'Extract Document',

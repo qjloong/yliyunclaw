@@ -15,6 +15,11 @@
 
     <div class="picker__body">
       <div v-if="loading" class="picker__state">加载中...</div>
+      <div v-else-if="errorMessage" class="picker__state picker__state--error">
+        <strong>云盘搜索失败</strong>
+        <span>{{ errorMessage }}</span>
+        <button type="button" class="picker__retry" @click="retrySearch">重试</button>
+      </div>
       <div v-else-if="items.length === 0" class="picker__state">
         {{ keyword ? '没有匹配的文件' : '输入关键词搜索云盘文件' }}
       </div>
@@ -38,7 +43,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue'
+import { ref, watch, nextTick } from 'vue'
+import { mcpApi } from '@/api'
 
 interface CloudFile {
   id: number; name: string; isFolder: boolean; size: number; mimeType: string;
@@ -52,6 +58,7 @@ const emit = defineEmits<{ close: []; select: [files: CloudFile[]] }>()
 
 const keyword = ref('')
 const loading = ref(false)
+const errorMessage = ref('')
 const items = ref<CloudFile[]>([])
 const selectedFiles = ref<CloudFile[]>([])
 const activeIndex = ref(-1)
@@ -60,39 +67,87 @@ const searchTimer = ref<ReturnType<typeof setTimeout>>()
 
 async function search(query: string) {
   loading.value = true
+  errorMessage.value = ''
   try {
-    // 优先使用外部 searchFn，降级直接调 MCP HTTP
+    // 优先使用外部 searchFn，降级走 MateClaw 的认证 MCP 代理。
     if (props.searchFn) {
       items.value = await props.searchFn(query)
     } else {
       items.value = await searchViaHttp(query)
     }
-  } catch {
+  } catch (error) {
     items.value = []
+    errorMessage.value = toUserMessage(error)
   } finally {
     loading.value = false
   }
 }
 
-// 通过 MateClaw 后端 MCP 代理调用（无 CORS 问题）
+// 通过共享 API 客户端调用 MateClaw MCP 代理。这样既兼容普通 Bearer
+// 登录，也兼容云盘 SSO 写入的 HttpOnly Cookie，不要求前端读取 token。
 async function searchViaHttp(query: string): Promise<CloudFile[]> {
-  const token = localStorage.getItem('token') || ''
-  const resp = await fetch(`/api/v1/mcp/proxy/file.search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({ query, maxResults: 20 }),
+  const response = await mcpApi.callYliyunTool('file.search', {
+    query,
+    maxResults: 20,
   })
-  const json = await resp.json()
-  if (json.code !== 200 || !json.data) return []
-  const data = JSON.parse(json.data)
-  return (data.files || data.items || []).map((f: any) => ({
-    id: f.id, name: f.name, isFolder: f.isFolder || f.type === 'directory', size: f.size || 0, mimeType: f.mimeType || ''
-  }))
+  if (!response.data) return []
+
+  let data: unknown = response.data
+  try {
+    data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+  } catch {
+    throw new Error('云盘 MCP 返回了无法解析的文件列表。')
+  }
+
+  const payload = asRecord(data)
+  const rawItems = Array.isArray(payload?.files)
+    ? payload.files
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : []
+  return rawItems
+    .map(toCloudFile)
+    .filter((file): file is CloudFile => file !== null)
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function toCloudFile(value: unknown): CloudFile | null {
+  const file = asRecord(value)
+  if (!file) return null
+
+  const id = Number(file.id)
+  const name = typeof file.name === 'string' ? file.name : ''
+  if (!Number.isSafeInteger(id) || id <= 0 || !name) return null
+
+  const size = Number(file.size)
+  return {
+    id,
+    name,
+    isFolder: file.isFolder === true || file.type === 'directory',
+    size: Number.isFinite(size) && size > 0 ? size : 0,
+    mimeType: typeof file.mimeType === 'string' ? file.mimeType : '',
+  }
+}
+
+function retrySearch() {
+  const query = keyword.value.trim()
+  if (query) search(query)
+}
+
+function toUserMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  return '请检查 MCP 连接、当前用户身份映射和云盘服务状态。'
 }
 
 function onSearch() {
   clearTimeout(searchTimer.value)
   activeIndex.value = -1
+  errorMessage.value = ''
   if (!keyword.value.trim()) { items.value = []; return }
   searchTimer.value = setTimeout(() => search(keyword.value.trim()), 300)
 }
@@ -130,7 +185,7 @@ function formatSize(bytes: number): string {
 
 watch(() => props.visible, async (v) => {
   if (v) {
-    selectedFiles.value = []; keyword.value = ''; items.value = []; activeIndex.value = -1
+    selectedFiles.value = []; keyword.value = ''; items.value = []; errorMessage.value = ''; activeIndex.value = -1
     nextTick(() => searchRef.value?.focus())
   }
 })
@@ -156,6 +211,12 @@ watch(() => props.visible, async (v) => {
 }
 .picker__body { flex: 1; overflow-y: auto; }
 .picker__state { padding: 20px; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
+.picker__state--error { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--el-color-danger); }
+.picker__state--error span { color: var(--el-text-color-secondary); overflow-wrap: anywhere; }
+.picker__retry {
+  margin-top: 4px; padding: 4px 12px; border: 1px solid var(--el-color-primary);
+  border-radius: 6px; background: transparent; color: var(--el-color-primary); cursor: pointer;
+}
 .picker__list { list-style: none; margin: 0; padding: 4px 0; }
 .picker__item {
   display: flex; align-items: center; gap: 8px;

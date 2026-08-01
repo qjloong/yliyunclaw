@@ -99,6 +99,14 @@ public class ProviderInitProbe {
     @Async
     @EventListener(ModelConfigChangedEvent.class)
     public void onModelConfigChanged(ModelConfigChangedEvent event) {
+        // Tenant providers are deliberately outside the process-global pool.
+        // Re-probing here would lose the request ThreadLocal on the async thread
+        // and, worse, could mutate global liveness for an unrelated tenant.
+        if (event.reason() != null && event.reason().contains(":workspace=")) {
+            log.debug("[ProviderInitProbe] skipping workspace-scoped config event ({})",
+                    event.reason());
+            return;
+        }
         log.info("[ProviderInitProbe] re-probing after ModelConfigChangedEvent (reason={})", event.reason());
         probeAllConfigured();
     }

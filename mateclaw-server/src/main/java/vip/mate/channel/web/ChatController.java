@@ -19,6 +19,7 @@ import vip.mate.common.result.R;
 import vip.mate.workspace.core.service.ChatUploadLocationResolver;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.model.AgentEntity;
+import vip.mate.auth.yliyun.YliyunCloudAttachmentService;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.approval.MetadataDecision;
 import vip.mate.approval.PendingApproval;
@@ -65,6 +66,7 @@ public class ChatController {
     private final vip.mate.memory.identity.MemoryOwnerResolver memoryOwnerResolver;
     private final vip.mate.workspace.core.service.ChatUploadLocationResolver uploadLocationResolver;
     private final vip.mate.tool.document.preview.OfficePreviewService officePreviewService;
+    private final YliyunCloudAttachmentService yliyunCloudAttachmentService;
 
     // Virtual thread per SSE task: matches the app-wide virtual-thread model
     // (spring.threads.virtual.enabled=true) and, unlike a cached platform-thread
@@ -579,6 +581,44 @@ public class ChatController {
                 List<MessageContentPart> requestParts = regenerateSeed != null
                         ? regenerateSeed.parts()
                         : normalizeRequestParts(request);
+                // A yliyun:// reference is not a local path. Resolve it
+                // deterministically through the shared MCP runtime with this
+                // authenticated user's OBO identity before saving/running the
+                // turn, rather than hoping the model elects to call file.read.
+                vip.mate.agent.context.ChatOrigin webOrigin =
+                        memoryOrigin(conversationId, username, requesterUserIdOf(auth), workspaceId, request.getEndUserId())
+                                .withBaseUrl(requestBaseUrl);
+                yliyunCloudAttachmentService.enrich(requestParts, webOrigin,
+                        new YliyunCloudAttachmentService.TraceListener() {
+                            @Override
+                            public void onStarted(String toolCallId, String toolName, String arguments) {
+                                accumulator.accept(AgentService.StreamDelta.event(
+                                        YliyunCloudAttachmentService.EVENT_ATTACHMENT_STARTED,
+                                        Map.of(
+                                                "toolCallId", toolCallId,
+                                                "toolName", toolName,
+                                                "arguments", arguments,
+                                                "timestamp", System.currentTimeMillis())),
+                                        conversationId);
+                            }
+
+                            @Override
+                            public void onCompleted(
+                                    String toolCallId,
+                                    String toolName,
+                                    String result,
+                                    boolean success) {
+                                accumulator.accept(AgentService.StreamDelta.event(
+                                        YliyunCloudAttachmentService.EVENT_ATTACHMENT_COMPLETED,
+                                        Map.of(
+                                                "toolCallId", toolCallId,
+                                                "toolName", toolName,
+                                                "result", result,
+                                                "success", success,
+                                                "timestamp", System.currentTimeMillis())),
+                                        conversationId);
+                            }
+                        });
                 String promptText = buildPromptText(message, requestParts);
                 if (regenerateSeed == null) {
                     // Regenerate reuses the already-persisted seed user row —
@@ -599,9 +639,6 @@ public class ChatController {
                 // RFC-063r §2.5: web entry — null channelId / no ChannelTarget;
                 // tools that need a workspace path read it from the agent (origin
                 // is enriched with workspaceBasePath in StateGraph buildInitialState).
-                vip.mate.agent.context.ChatOrigin webOrigin =
-                        memoryOrigin(conversationId, username, requesterUserIdOf(auth), workspaceId, request.getEndUserId())
-                                .withBaseUrl(requestBaseUrl);
                 Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel(), webOrigin)
                         .doOnNext(delta -> {
                             if (emitterDone.get()) return;

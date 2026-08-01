@@ -16,6 +16,7 @@ import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.pat.PersonalAccessTokenEntity;
 import vip.mate.auth.pat.PersonalAccessTokenService;
 import vip.mate.auth.service.AuthService;
+import vip.mate.auth.yliyun.YliyunAuthCookieService;
 
 import java.io.IOException;
 import java.util.List;
@@ -41,6 +42,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
      * required dependency so unit tests of this filter must wire it.
      */
     private final PersonalAccessTokenService patService;
+    private final YliyunAuthCookieService yliyunAuthCookieService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -55,7 +57,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (token.startsWith(PersonalAccessTokenService.PAT_PREFIX)) {
                 authenticateWithPat(token);
             } else {
-                authenticateWithJwt(token, response);
+                authenticateWithJwt(token, request, response);
             }
         }
         filterChain.doFilter(request, response);
@@ -88,7 +90,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     }
 
     /** Original JWT auth path, factored out to keep doFilterInternal flat. */
-    private void authenticateWithJwt(String token, HttpServletResponse response) {
+    private void authenticateWithJwt(String token, HttpServletRequest request,
+                                     HttpServletResponse response) {
         try {
             Claims claims = authService.parseClaims(token);
             if (claims == null) return;
@@ -109,6 +112,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 if (newToken != null) {
                     response.setHeader("X-New-Token", newToken);
                     response.setHeader("Access-Control-Expose-Headers", "X-New-Token");
+                    if (yliyunAuthCookieService.read(request) != null) {
+                        response.addHeader("Set-Cookie", yliyunAuthCookieService.headerValue(newToken));
+                    }
                 }
             }
         } catch (Exception ignored) {
@@ -126,11 +132,17 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (StringUtils.hasText(bearer) && bearer.startsWith("Bearer ")) {
             return bearer.substring(7);
         }
-        // 2. Query parameter（SSE 专用）
+        // 2. HttpOnly cookie（Yliyun iframe / embedded panel）
+        String cookieToken = yliyunAuthCookieService.read(request);
+        if (StringUtils.hasText(cookieToken)) {
+            return cookieToken;
+        }
+        // 3. Query parameter（SSE 专用）
         String queryToken = request.getParameter("token");
         if (StringUtils.hasText(queryToken)) {
             return queryToken;
         }
         return null;
     }
+
 }

@@ -53,9 +53,25 @@ public class WorkspaceAccessInterceptor implements HandlerInterceptor {
 
         // 检查注解：@RequireGlobalAdmin 与 @RequireWorkspaceRole 二选一
         RequireGlobalAdmin globalAdmin = handlerMethod.getMethodAnnotation(RequireGlobalAdmin.class);
-        RequireWorkspaceRole annotation = handlerMethod.getMethodAnnotation(RequireWorkspaceRole.class);
+        RequireWorkspaceRole methodAnnotation =
+                handlerMethod.getMethodAnnotation(RequireWorkspaceRole.class);
+        RequireWorkspaceRole classAnnotation =
+                handlerMethod.getBeanType().getAnnotation(RequireWorkspaceRole.class);
+        RequireWorkspaceRole annotation =
+                methodAnnotation != null ? methodAnnotation : classAnnotation;
         if (globalAdmin == null && annotation == null) {
             return true;
+        }
+
+        boolean explicitWorkspace = (methodAnnotation != null
+                && methodAnnotation.explicitWorkspace())
+                || (classAnnotation != null && classAnnotation.explicitWorkspace());
+        if (explicitWorkspace && !hasValidExplicitWorkspace(request)) {
+            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write(
+                    "{\"code\":400,\"msg\":\"X-Workspace-Id header is required\",\"data\":null}");
+            return false;
         }
 
         // 获取当前认证用户
@@ -151,6 +167,18 @@ public class WorkspaceAccessInterceptor implements HandlerInterceptor {
             }
         }
         return DEFAULT_WORKSPACE_ID;
+    }
+
+    private boolean hasValidExplicitWorkspace(HttpServletRequest request) {
+        String header = request.getHeader("X-Workspace-Id");
+        if (header == null || header.isBlank()) {
+            return false;
+        }
+        try {
+            return Long.parseLong(header.trim()) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private void sendForbidden(HttpServletResponse response, String message) throws Exception {

@@ -1,6 +1,108 @@
 # 一粒云 × WenShu × MateClaw 完整方案
 
-> 2026-07-23 | 分支: dev-v2
+> 2026-07-23 | 分支: dev-v2 | 2026-07-30 实施口径补充
+
+> **实现口径优先级**：本文主体保留总体设计和历史方案示例；若示例与以下口径冲突，以本节及 `handover-yliyun-integration.md` 的最新任务状态为准。
+>
+> - MateClaw 仅使用通用 `McpClientManager`，通过 Streamable HTTP `/mcp` 连接 `yliyun-mcp`，当前 manifest 为 14 个工具。
+> - 浏览器免登录 ticket 只用于云盘到 MateClaw 的一次性 SSO，兑换后写入 HttpOnly Cookie；不再签发长期 JWT 到 URL 或 localStorage。
+> - MateClaw 每次 Tool Call 生成短时 OBO 身份断言；MCP 验签后通过云盘内部接口换取当前用户 token。文中“把浏览器 ticket 直接传给 MCP”或固定 `X-Forward-User-Id` 的示例均视为历史草案。
+> - 用户映射键为 `(tenantId, yliyunUserId)`，每个云盘租户映射到独立 Workspace，并幂等种子化 `builtin.yliyun_assistant`。
+> - P0 的服务、协议、身份、登录、固定测试夹具、分层诊断、工具读写闭环、真实模型行为 E2E 和跨用户/跨租户 TC-6 已全部实施并复验。
+> - P1 已实现确定性云盘文件上下文、附件连续性、云盘文件详情右侧精简 Agent 面板，以及 Agent 通过 `file.create/file.save` 直接回存云盘；云盘上下文附件仅在会话首次提问或切换文件/文件夹后再次注入，普通追问不重复展示；完整 `CloudResourceRef`、固定引用、保存确认 UI 和 Codex 风格输入框合并仍待后续实施。
+> - 最新任务计数为 P0 28/28 完成、P1 16/32 完成（另有 2 项进行中、1 项仅剩固定引用待验收）、P2 0/7、V3 2/34、统一应用接入治理 IG 0/28；逐项状态与验收证据以 `handover-yliyun-integration.md` 第十二至十五章为准。
+> - 版本状态审计结论：V1 是“核心业务链已完成、生产收口未完成”，不能标记为全部完成；V2 设计中的专用文本读写、全局搜索、空间/用户上下文、`wenshu.analyze` 和全客户端验收尚未落地，当前仍以 V1 fallback 为主。
+> - V3 以 MateClaw 会话为主入口的资源动作协议、生成物回存、云盘原生预览/播放、租户审计问数和云盘知识库同步方案及任务编号，统一维护在 `handover-yliyun-integration.md` 第十三章。
+> - OAuth2 应用、云盘应用中心、MateClaw MCP 管理和 MCP 服务环境配置保持分层：OAuth2 Client 不作为租户开关；应用中心是租户 entitlement 和动态地址事实源；全局 MCP 连接由平台管理员管理；每次 Tool Call 继续使用 OBO 代表真实云盘用户。统一治理任务维护在 `handover-yliyun-integration.md` 第十四章。
+
+---
+
+## 〇、统一应用接入与认证治理（2026-07-30 新增）
+
+### 0.1 当前配置与认证边界
+
+| 配置域 | 当前范围 | 结论 |
+|---|---|---|
+| 云盘 OAuth2 应用 `system_oauth2_client` | 平台全局，实体使用 `@TenantIgnore` | 只管理 OAuth2 客户端、scope、grant、回调和 Token 生命周期；不能通过全局 Client 状态实现指定租户启停 |
+| 云盘应用中心 | 应用清单 + `cloud_app_instance` 租户实例 | 作为应用安装、租户启停、动态地址、角色/文件策略、健康状态和生命周期的唯一业务事实源 |
+| MateClaw `mate_mcp_server` | 当前全局，无 Workspace/Tenant 字段 | 管理 transport、URL、headers、连接和工具发现；平台共享 MCP 配置只能由平台管理员修改 |
+| 一粒云 MCP 环境配置 | 单个独立部署实例 | 管理云盘 API、内部连接 Token、OBO 公钥/issuer/audience、云盘换票 appKey、限流与日志 |
+
+当前问数 `wenshu_integration` 已形成应用中心闭环：平台连接配置从系统租户读取，租户策略从当前租户读取；enable/disable 同步远端生命周期；capability 决定入口；一次性 ticket 兑换为短时 delegation 后访问窄化文件 API。
+
+当前 AI 助手仍是过渡实现：
+
+- 菜单固定对所有用户展示。
+- MateClaw 地址来自云盘前端 `VITE_AI_BASE_URL`，无法在不重构前端的情况下动态改址。
+- 云盘 AI ticket 只校验登录用户，尚未校验租户应用实例、启用状态、健康状态和应用角色。
+- MCP OBO 换票使用部署级 appKey，尚未将租户 AI 助手 entitlement 作为换票和 Tool Call 的强制条件。
+
+### 0.2 当前四段认证链
+
+```text
+云盘登录用户
+  └─ YLIYUN_TICKET_SECRET：一次性 SSO ticket
+       └─ MateClaw 映射 (tenantId, userId) → Workspace/owner/admin/member
+            └─ MCP_INTERNAL_SERVICE_TOKEN：MateClaw 建立 MCP 服务连接
+                 └─ OBO RS256：每次 Tool Call 注入真实云盘用户和租户
+                      └─ YLIYUN_APP_KEY：MCP 换取/复用该用户 OAuth2 Token
+                           └─ 云盘 API 以该用户 ACL 执行最终授权
+```
+
+这些凭据用途不同，禁止复用：
+
+1. `YLIYUN_TICKET_SECRET`：云盘与 MateClaw 的浏览器 SSO。
+2. `MCP_INTERNAL_SERVICE_TOKEN`：MateClaw 与 MCP 的连接级服务认证。
+3. OBO 私钥/公钥：MateClaw 到 MCP 的逐次调用身份断言。
+4. `YLIYUN_APP_KEY`：MCP 到云盘的内部用户换票授权。
+5. WenShu `client_secret`：问数服务生命周期、票据兑换和回调认证。
+
+### 0.3 统一目标
+
+所有外部 AI/数据应用统一遵循：
+
+1. 平台管理员配置服务/API/嵌入地址、Origin、认证协议、密钥和依赖。
+2. 租户管理员安装、启停并配置本租户角色和数据能力策略。
+3. 云盘前端通过统一 capability 动态展示菜单和打开方式，不持有服务密钥或构建期外部地址。
+4. 用户启动应用时取得带 appKey、tenant/user、aud、jti、configVersion 和 launchContext 的一次性 ticket。
+5. 远端应用通过 OBO 或 delegation 代表当前用户访问云盘，云盘后端继续执行租户、应用 entitlement、用户角色和资源 ACL 四层校验。
+6. 应用停用同时关闭 capability、拒绝新出票、撤销旧会话/委托并拒绝 MCP 换票和 Tool Call，不能只隐藏菜单。
+
+AI 助手注册为 `mateclaw_ai_assistant` 应用扩展；平台配置 MateClaw API/嵌入地址、allowed origin、ticket/OIDC 和 MCP audience，租户配置 enabled、allowed roles、文件读写/分享/删除范围、打开方式和导航策略。WenShu 保持现有业务逻辑，通过兼容适配迁移到同一连接器契约。
+
+### 0.4 实施优先级
+
+| 优先级 | 工作包 | 目标 | 发布闸门 |
+|---|---|---|---|
+| IG-P0-A | AI 助手应用中心化 | 租户实例、平台/租户配置分层、capability、动态地址、enable/disable/health | 地址变化无需重构前端；未启用租户没有入口 |
+| IG-P0-B | SSO 与三层安全强制 | 通用 launch ticket；出票、验票、MCP 换票/Tool Call 同时校验 entitlement；停用撤销和双密钥轮换 | 绕过菜单或持有旧 Cookie 也不能继续调用 |
+| IG-P0-C | MCP 平台治理 | 全局 MCP 配置只允许平台管理员；独立部署 Profile；分层诊断；双租户 E2E | transport、OBO、云盘换票、租户开关和 ACL 全部通过 |
+| IG-P1 | 通用应用连接框架 | 版本化 SPI、WenShu 兼容适配、OAuth2 Profile 绑定、配置事件、依赖模型和管理页 | 现有用户、Workspace、问数入口和配置可原地迁移、回滚 |
+| IG-P2 | MCP 业务扩展 | ToolProvider 模块、受控只读 OpenAPI 映射、统一风险策略、全文检索和审计报告工具域 | 新工具发现不等于授权；禁止任意 URL/Header/SQL |
+
+当前 MCP 的 14 个工具为代码显式注册。新增复杂认证、数据转换或副作用工具仍需构建和部署 MCP；MateClaw通常只需刷新 MCP 连接和工具清单，不需要随每个新 Tool 重新打包。完成 IG-P2 后，仅批准的简单只读 API 可通过声明式映射免 MCP 代码重打包。
+
+详细的 28 个任务、依赖、责任仓库、验收标准和执行批次以 `handover-yliyun-integration.md` 第十四章为准。实施顺序固定为 `IG-P0-A01 → IG-P0-A → IG-P0-B → IG-P0-C → IG-P1 → IG-P2`；P1 的签名资源引用可在 IG-P0 接口冻结后并行，全文检索和审计工具分别复用 V3-A05、V3-E，不建设第二套云盘 API。
+
+### 0.5 V3 媒体播放、外链与本地应用边界
+
+V3 的“打开/播放”不是让 LLM 直接输出一个 URL，也不是统一交给 `browser_use`。统一采用 `CloudResourceAction + 客户端动作分发器`：
+
+```text
+Agent / MCP
+  └─ 返回资源引用、PLAY/OPEN_PREVIEW/OPEN_LOCAL 意图、能力和短时 actionRef
+       ├─ 云盘内嵌：postMessage → 云盘宿主校验 → 复用原生预览/播放器
+       ├─ 独立 Web：动作卡 → 用户点击 → window.open 云盘应用短时地址
+       └─ 云盘桌面端：宿主动作 → Tauri/本地编辑协议 → 系统播放器或 Office
+```
+
+当前错误地址已经定位：MCP 创建分享后丢弃云盘后端返回的 `shareUrl`，使用 `YLIYUN_API_BASE_URL` 拼接 `/share/{shareCode}`；服务端调用又没有浏览器 Origin，最终容易得到后端 API Host。修复后由云盘后端输出相对 `sharePath` 或基于受信云盘 Web Base 的 `publicUrl`，MCP 必须原样透传。当前用户的私有预览/播放使用短时启动票据，不能默认创建公开分享。
+
+此前 `browser_use` 不会出现在云盘助手工具集中，是因为 `AgentGraphBuilder` 对 `builtin.yliyun_assistant` 强制只保留 `yliyun-mcp` Callback。该模板级硬限制已于 2026-07-30 删除；云盘助手现在与普通 Agent 一样，使用 Agent/Skill 工具绑定、渐进披露和运行时 Guard，管理员可以通过通用工具配置决定可用能力，同时仍受现有权限与安全策略约束。`browser_use` 即使按通用配置启用，控制的也是 MateClaw 后端所在机器的 Playwright/CDP 浏览器，不等于打开访问网页用户的本机浏览器；客户端打开/播放仍应通过可审计的 `CloudResourceAction`。
+
+MP4 播放不要求桌面客户端：云盘 Web 内嵌可直接调宿主播放器，独立 MateClaw Web 可由用户点击动作卡在浏览器打开。只有“自动调用本机已安装 Office，并监听修改回传云盘”的闭环需要云盘桌面端、原生帮助程序或已安装的 `cloud-drive://` 协议处理器；纯 Web 应回退到 OnlyOffice、在线预览或下载。浏览器的弹窗和媒体自动播放策略要求保留用户手势，不能承诺无点击自动播放。
+
+完整定位证据、运行形态矩阵及 `V3-D01`—`V3-D09` 任务以 `handover-yliyun-integration.md` 第 13.2.1、13.3 节为准。
 
 ---
 
@@ -58,11 +160,13 @@
 
 ### 原则：云盘为主，AI 跟随
 
-用户体系不需要在 AI 侧重建。通过 ticket 兑票机制自动映射：
+用户体系不需要在 AI 侧重建。通过一次性 code 兑票机制自动映射：
 
 ```
-用户在云盘登录 → 打开 AI 浮窗 → 云盘生成一次性 ticket(JWT,含userId/tenantId)
-  → MateClaw 兑票验签 → 查找或创建映射用户 → 签发 MateClaw JWT → 后续请求携带
+用户在云盘登录 → 打开 AI 浮窗
+  → 云盘生成一次性 ticket（含 userId/tenantId/tenantName/tenantAdmin 并签名）
+  → MateClaw 兑票验签、防重放 → 查找或创建映射用户及租户 Workspace
+  → 设置 HttpOnly、SameSite Cookie → 后续请求不在 URL/localStorage 暴露长期 JWT
 ```
 
 ### MateClaw 用户表扩展
@@ -78,7 +182,55 @@ ALTER TABLE mc_workspace_user ADD COLUMN yliyun_tenant_id VARCHAR(64); -- 租户
 |---|---|
 | 事件驱动（推荐） | 云盘 Webhook `user.created/deleted` → MateClaw 同步 |
 | 实时查询（兜底） | 权限校验时调用云盘 API 实时确认 |
-| 一期简化 | 不做组织树，只做用户映射 + 租户隔离 |
+| 当前实现 | 每次 SSO 按签名声明对账用户、租户 Workspace 和成员角色；组织树仍留待后续事件同步 |
+
+### 租户角色与模型供应商隔离（2026-07-29 已实施）
+
+云盘是租户角色的事实源，前端不得传入或覆盖管理员身份。云盘后端通过
+`PermissionService` 判断 `super_admin` 或 `tenant_admin`，把布尔值 `tenantAdmin` 放入签名 ticket；
+MateClaw 每次 SSO 同步 `mc_workspace_user` 和 `mate_workspace_member`：
+
+| 云盘身份 | MateClaw Workspace 角色 | 能力 |
+|---|---|---|
+| 首位有效租户管理员 | owner | 管理成员、配置本租户供应商与模型 |
+| 后续租户管理员 | admin | 配置本租户供应商与模型 |
+| 普通租户成员 | member | 使用并只读查看本租户已启用模型 |
+
+管理员降级时，若其为 owner，系统先把 owner 转交给其他有效管理员，再完成降级；
+禁止通过设置全局 `mate_user.role='admin'` 实现租户管理，否则会越过 Workspace 边界。
+
+供应商采用“平台目录 + 工作空间配置”双层模型：
+
+| 数据 | 存储与隔离方式 |
+|---|---|
+| 内置 Provider 名称、协议、能力元数据 | 复用平台 `mate_model_provider` 目录，不向租户泄露平台密钥 |
+| 租户 API Key、OAuth、Base URL、启用状态、回退优先级 | `mate_workspace_model_provider`，唯一键 `(workspace_id, provider_id)`，敏感字段 AES-GCM 加密 |
+| 租户模型清单、默认模型、启用状态 | `mate_workspace_model_config`，唯一键 `(workspace_id, provider, model_name)` |
+| 旧平台配置 | 默认 Workspace 继续读取原全局表，不做破坏性复制或密钥重写 |
+
+模型管理接口必须显式提供 `X-Workspace-Id` 并校验成员资格：admin/owner 可写，
+member/viewer 只读可用模型。Agent 构建、工具调用、OAuth 回调和模型选择均携带同一
+Workspace scope。租户配置不注册到进程级全局 Provider Pool/熔断器，从而避免一个
+租户的失败影响其他租户。
+
+Claude Code OAuth 凭据存放在 MateClaw 服务器本机用户目录，无法按 Workspace 加密隔离，
+因此仅在平台默认 Workspace 可见；租户可使用工作空间化的 API Key、自定义 OpenAI
+兼容供应商和 OpenAI OAuth。
+
+### 云盘文件问答运行口径（2026-07-29 已验收）
+
+云盘附件在会话入口携带 `yliyun://file/{id}` 引用。MateClaw 使用当前用户 OBO 身份通过
+`yliyun-mcp` 的 `file.read` 确定性解析文件，把带来源标识的内容写入会话上下文；导航到
+模型设置再返回、展开完整界面或在同一会话继续追问时，不要求用户重新选择或上传文件。
+云盘宿主首次打开文件时，把资源作为下一轮待分析附件；发送后清除附件卡但保留活动上下文和会话记忆。普通追问不重复附加同一资源；宿主切换文件/文件夹后才为下一轮重新加入附件，不重载 iframe，也不创建新会话。
+
+`builtin.yliyun_assistant` 只装配 `yliyun-mcp` 的 14 个工具，避免全局工具清单占满本地
+模型上下文。当前环境的 `ollama/qwen3:latest` 实际上下文为 4096，收敛工具后仍返回空
+响应，因此依照运行回退规则切换为租户已配置的 `deepseek/deepseek-chat`。文件 `17485`
+（XLSX，3 个工作表）已完成首轮总结和不重传附件的同会话追问，答案持久化成功。
+
+工作空间 Agent 不使用同名进程级全局 Provider Pool/熔断状态过滤租户 Provider，确保
+其他工作空间或平台探测失败不会错误禁用当前租户的供应商。
 
 ---
 
@@ -1666,6 +1818,8 @@ V2 将这些 Workaround 替换为专用 API，提升性能和体验：
 | **V2-P1** | `GET /extends/user/profile` | 用户云盘使用统计、配额信息 | 0.5天 |
 | **V2-P2** | WenShu 对接 | `wenshu.analyze` 完整能力 | 2-3天 |
 
+> **2026-07-29 代码审计状态：未实施。** 当前云盘后端未发现上述五个专用 API；MCP `file.search` 仍使用递归目录列表，文本读写仍组合预览/下载/上传接口，manifest 中也没有 `wenshu.analyze`。云盘已有的 `preview`、`preview-stream-url`、`content`、`download` 和分享接口属于 V1 可组合能力，不等同于 V2 设计已完成。
+
 ### 11.3 V1 云盘侧需要的 zero-change 确认项
 
 以下现有 API 在 V1 中被 MCP Server 使用，**不需要改云盘代码**，但需要确认：
@@ -2968,6 +3122,8 @@ server.addTool({
 
 > **目标**：claw → MCP → 云盘 整条链路可演示。用户能从 MateClaw 搜索/浏览/读取云盘文件，AI 处理后保存回云盘。
 > **策略**：全用现有云盘 API，MCP Server 侧做文本提取。云盘侧 zero-change。
+>
+> **状态说明（2026-07-30）**：以下复选框是最初的历史拆分，不再作为实时状态源，其中还包含已废弃的固定透传头和旧工具数量。当前 V1/V2 的逐项状态、V3 计划与统一应用接入治理任务以 `handover-yliyun-integration.md` 第十二至十五章为准：V1 核心链可用但生产验收未收口，V2 和 IG 尚未完成。
 
 #### Phase A: MCP Server 核心实现（3-5天）
 

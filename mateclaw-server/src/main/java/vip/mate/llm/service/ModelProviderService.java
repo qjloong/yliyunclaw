@@ -1,6 +1,7 @@
 package vip.mate.llm.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,10 @@ import vip.mate.llm.failover.ProviderInitProbe;
 import vip.mate.llm.failover.ProviderRequirements;
 import vip.mate.llm.model.*;
 import vip.mate.llm.repository.ModelProviderMapper;
+import vip.mate.llm.workspace.WorkspaceModelProviderEntity;
+import vip.mate.llm.workspace.repository.WorkspaceModelProviderMapper;
+import vip.mate.llm.workspace.WorkspaceModelScope;
+import vip.mate.system.service.SettingCrypto;
 
 import org.springframework.ai.chat.model.ChatModel;
 
@@ -47,6 +52,9 @@ public class ModelProviderService {
             java.util.regex.Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$");
 
     private final ModelProviderMapper modelProviderMapper;
+    private final WorkspaceModelProviderMapper workspaceModelProviderMapper;
+    private final WorkspaceModelScope workspaceModelScope;
+    private final SettingCrypto settingCrypto;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
     /** Lazy provider — avoids forcing the bean to exist in test contexts that don't load the anthropic package. */
@@ -102,6 +110,22 @@ public class ModelProviderService {
     }
 
     private List<ProviderInfoDTO> listProvidersInternal(boolean enabledOnly) {
+        if (isWorkspaceScoped()) {
+            List<ModelProviderEntity> providers = workspaceProviderCatalog().stream()
+                    .filter(provider -> !enabledOnly || Boolean.TRUE.equals(provider.getEnabled()))
+                    .sorted(Comparator
+                            .comparing((ModelProviderEntity p) -> Boolean.TRUE.equals(p.getIsLocal())).reversed()
+                            .thenComparing(p -> Boolean.TRUE.equals(p.getIsCustom()))
+                            .thenComparing(ModelProviderEntity::getName,
+                                    Comparator.nullsLast(String::compareToIgnoreCase)))
+                    .toList();
+            LivenessContext liveness = livenessContext();
+            return providers.stream()
+                    .map(provider -> toProviderInfo(provider,
+                            modelConfigService.listModelsByProvider(provider.getProviderId()),
+                            liveness))
+                    .toList();
+        }
         LambdaQueryWrapper<ModelProviderEntity> qw = new LambdaQueryWrapper<>();
         if (enabledOnly) {
             qw.eq(ModelProviderEntity::getEnabled, true);
@@ -138,9 +162,10 @@ public class ModelProviderService {
             int p = Math.max(0, request.getFallbackPriority());
             provider.setFallbackPriority(p);
         }
-        modelProviderMapper.updateById(provider);
+        saveProvider(provider);
+        modelConfigService.ensureWorkspaceProviderModels(providerId);
         tryAutoActivateModel(providerId, provider);
-        eventPublisher.publishEvent(new ModelConfigChangedEvent("provider-config-updated"));
+        publishConfigChanged("provider-config-updated");
         return toProviderInfo(provider, modelConfigService.listModelsByProvider(providerId));
     }
 
@@ -154,7 +179,7 @@ public class ModelProviderService {
             throw new MateClawException("err.llm.provider_id_invalid",
                     "Provider id 仅允许字母/数字及 . _ -（不允许斜杠或空格），首字符必须是字母或数字，长度 1-64: " + request.getId());
         }
-        if (modelProviderMapper.selectById(request.getId()) != null) {
+        if (providerExistsInCurrentWorkspace(request.getId())) {
             throw new MateClawException("err.llm.provider_exists", "Provider 已存在: " + request.getId());
         }
         ModelProtocol protocol = ModelProtocol.resolve(request.getProtocol(), request.getChatModel());
@@ -179,14 +204,18 @@ public class ModelProviderService {
         provider.setSupportConnectionCheck(false);
         provider.setFreezeUrl(false);
         provider.setRequireApiKey(request.getRequireApiKey() == null || Boolean.TRUE.equals(request.getRequireApiKey()));
-        modelProviderMapper.insert(provider);
+        if (isWorkspaceScoped()) {
+            saveProvider(provider);
+        } else {
+            modelProviderMapper.insert(provider);
+        }
 
         if (request.getModels() != null) {
             for (ModelInfoDTO model : request.getModels()) {
                 modelConfigService.addModelToProvider(request.getId(), model.getId(), model.getName(), false);
             }
         }
-        eventPublisher.publishEvent(new ModelConfigChangedEvent("provider-created"));
+        publishConfigChanged("provider-created");
         return toProviderInfo(provider, modelConfigService.listModelsByProvider(request.getId()));
     }
 
@@ -196,8 +225,14 @@ public class ModelProviderService {
             throw new MateClawException("err.llm.provider_builtin_readonly", "内置 Provider 不支持删除");
         }
         modelConfigService.deleteModelsByProvider(providerId);
-        modelProviderMapper.deleteById(providerId);
-        eventPublisher.publishEvent(new ModelConfigChangedEvent("provider-deleted"));
+        if (isWorkspaceScoped()) {
+            workspaceModelProviderMapper.delete(
+                    workspaceProviderQuery()
+                            .eq(WorkspaceModelProviderEntity::getProviderId, providerId));
+        } else {
+            modelProviderMapper.deleteById(providerId);
+        }
+        publishConfigChanged("provider-deleted");
     }
 
     public ProviderInfoDTO addModel(String providerId, AddProviderModelRequest request) {
@@ -225,12 +260,65 @@ public class ModelProviderService {
     }
 
     /**
+     * Persists OAuth credentials in the active workspace. The default workspace
+     * keeps the legacy global row; tenant workspaces write only their encrypted
+     * overlay row.
+     */
+    public void updateOAuthCredentials(String providerId,
+                                       String accessToken,
+                                       String refreshToken,
+                                       Long expiresAt,
+                                       String accountId) {
+        ModelProviderEntity provider = getProvider(providerId);
+        provider.setOauthAccessToken(accessToken);
+        if (StringUtils.hasText(refreshToken)) {
+            provider.setOauthRefreshToken(refreshToken);
+        }
+        provider.setOauthExpiresAt(expiresAt);
+        if (StringUtils.hasText(accountId)) {
+            provider.setOauthAccountId(accountId);
+        }
+        provider.setEnabled(true);
+        saveProvider(provider);
+        publishConfigChanged("provider-oauth-updated");
+    }
+
+    public void clearOAuthCredentials(String providerId) {
+        if (!isWorkspaceScoped()) {
+            modelProviderMapper.update(null, new LambdaUpdateWrapper<ModelProviderEntity>()
+                    .eq(ModelProviderEntity::getProviderId, providerId)
+                    .set(ModelProviderEntity::getOauthAccessToken, null)
+                    .set(ModelProviderEntity::getOauthRefreshToken, null)
+                    .set(ModelProviderEntity::getOauthExpiresAt, null)
+                    .set(ModelProviderEntity::getOauthAccountId, null));
+        } else {
+            workspaceModelProviderMapper.update(null,
+                    new LambdaUpdateWrapper<WorkspaceModelProviderEntity>()
+                            .eq(WorkspaceModelProviderEntity::getWorkspaceId,
+                                    workspaceModelScope.currentWorkspaceId())
+                            .eq(WorkspaceModelProviderEntity::getProviderId, providerId)
+                            .set(WorkspaceModelProviderEntity::getOauthAccessTokenEncrypted, null)
+                            .set(WorkspaceModelProviderEntity::getOauthRefreshTokenEncrypted, null)
+                            .set(WorkspaceModelProviderEntity::getOauthExpiresAt, null)
+                            .set(WorkspaceModelProviderEntity::getOauthAccountId, null));
+        }
+        publishConfigChanged("provider-oauth-cleared");
+    }
+
+    /**
      * RFC-009: ordered list of providers that participate in the multi-model
      * failover chain. Filters by {@code fallback_priority > 0} and sorts
      * ascending, so priority 1 is tried first after the primary model
      * exhausts retries. An empty list disables fallover entirely.
      */
     public List<ModelProviderEntity> listFallbackChain() {
+        if (isWorkspaceScoped()) {
+            return workspaceProviderCatalog().stream()
+                    .filter(provider -> provider.getFallbackPriority() != null
+                            && provider.getFallbackPriority() > 0)
+                    .sorted(Comparator.comparing(ModelProviderEntity::getFallbackPriority))
+                    .toList();
+        }
         com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ModelProviderEntity> qw =
                 new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
         qw.gt("fallback_priority", 0);
@@ -293,12 +381,14 @@ public class ModelProviderService {
             return EnableResult.unchanged();
         }
         provider.setEnabled(enabled);
-        modelProviderMapper.updateById(provider);
+        saveProvider(provider);
+        if (enabled) {
+            modelConfigService.ensureWorkspaceProviderModels(providerId);
+        }
         EnableResult result = enabled
                 ? EnableResult.unchanged()
                 : pickReplacementDefaultIfNeeded(providerId);
-        eventPublisher.publishEvent(new ModelConfigChangedEvent(
-                enabled ? "provider-enabled" : "provider-disabled"));
+        publishConfigChanged(enabled ? "provider-enabled" : "provider-disabled");
         return result;
     }
 
@@ -321,12 +411,24 @@ public class ModelProviderService {
             return EnableResult.unchanged();
         }
         // Walk enabled providers in DB order, take the first one with a model.
-        List<ModelProviderEntity> candidates = modelProviderMapper.selectList(
-                new LambdaQueryWrapper<ModelProviderEntity>()
-                        .eq(ModelProviderEntity::getEnabled, true)
-                        .ne(ModelProviderEntity::getProviderId, disabledProviderId)
-                        .orderByDesc(ModelProviderEntity::getIsLocal)
-                        .orderByAsc(ModelProviderEntity::getName));
+        List<ModelProviderEntity> candidates;
+        if (isWorkspaceScoped()) {
+            candidates = workspaceProviderCatalog().stream()
+                    .filter(provider -> Boolean.TRUE.equals(provider.getEnabled()))
+                    .filter(provider -> !disabledProviderId.equals(provider.getProviderId()))
+                    .sorted(Comparator
+                            .comparing((ModelProviderEntity p) -> Boolean.TRUE.equals(p.getIsLocal())).reversed()
+                            .thenComparing(ModelProviderEntity::getName,
+                                    Comparator.nullsLast(String::compareToIgnoreCase)))
+                    .toList();
+        } else {
+            candidates = modelProviderMapper.selectList(
+                    new LambdaQueryWrapper<ModelProviderEntity>()
+                            .eq(ModelProviderEntity::getEnabled, true)
+                            .ne(ModelProviderEntity::getProviderId, disabledProviderId)
+                            .orderByDesc(ModelProviderEntity::getIsLocal)
+                            .orderByAsc(ModelProviderEntity::getName));
+        }
         for (ModelProviderEntity candidate : candidates) {
             if (!isProviderConfigured(candidate)) continue;
             List<ModelConfigEntity> models = modelConfigService.listModelsByProvider(candidate.getProviderId());
@@ -349,7 +451,7 @@ public class ModelProviderService {
         boolean shouldAutoActivate = false;
         try {
             ModelConfigEntity currentDefault = modelConfigService.getDefaultModel();
-            ModelProviderEntity defaultProvider = modelProviderMapper.selectById(currentDefault.getProvider());
+            ModelProviderEntity defaultProvider = getProvider(currentDefault.getProvider());
             if (!isProviderEnabledAndConfigured(defaultProvider)) {
                 shouldAutoActivate = true;
             }
@@ -373,6 +475,22 @@ public class ModelProviderService {
     }
 
     private ModelProviderEntity getProvider(String providerId) {
+        if (isWorkspaceScoped()) {
+            rejectHostScopedProvider(providerId);
+            WorkspaceModelProviderEntity scoped = workspaceModelProviderMapper.selectOne(
+                    workspaceProviderQuery()
+                            .eq(WorkspaceModelProviderEntity::getProviderId, providerId)
+                            .last("LIMIT 1"));
+            if (scoped != null) {
+                return toModelProvider(scoped);
+            }
+            ModelProviderEntity catalog = modelProviderMapper.selectById(providerId);
+            if (catalog != null && !Boolean.TRUE.equals(catalog.getIsCustom())) {
+                return safeCatalogProjection(catalog);
+            }
+            throw new MateClawException("err.llm.provider_not_found",
+                    "当前工作区的 Provider 不存在: " + providerId);
+        }
         ModelProviderEntity provider = modelProviderMapper.selectById(providerId);
         if (provider == null) {
             throw new MateClawException("err.llm.provider_not_found", "Provider 不存在: " + providerId);
@@ -627,6 +745,198 @@ public class ModelProviderService {
         }
     }
 
+    public boolean isWorkspaceScoped() {
+        return workspaceModelScope.currentWorkspaceId()
+                != WorkspaceModelScope.DEFAULT_WORKSPACE_ID;
+    }
+
+    private boolean providerExistsInCurrentWorkspace(String providerId) {
+        if (!isWorkspaceScoped()) {
+            return modelProviderMapper.selectById(providerId) != null;
+        }
+        Long workspaceCount = workspaceModelProviderMapper.selectCount(
+                workspaceProviderQuery()
+                        .eq(WorkspaceModelProviderEntity::getProviderId, providerId));
+        if (workspaceCount != null && workspaceCount > 0) {
+            return true;
+        }
+        ModelProviderEntity catalog = modelProviderMapper.selectById(providerId);
+        return catalog != null
+                && !Boolean.TRUE.equals(catalog.getIsCustom())
+                && !isHostScopedProvider(providerId);
+    }
+
+    private List<ModelProviderEntity> workspaceProviderCatalog() {
+        Map<String, ModelProviderEntity> effective = new LinkedHashMap<>();
+        List<ModelProviderEntity> globalCatalog = modelProviderMapper.selectList(
+                new LambdaQueryWrapper<ModelProviderEntity>()
+                        .and(wrapper -> wrapper
+                                .isNull(ModelProviderEntity::getIsCustom)
+                                .or()
+                                .ne(ModelProviderEntity::getIsCustom, true)));
+        for (ModelProviderEntity provider : globalCatalog) {
+            if (isHostScopedProvider(provider.getProviderId())) {
+                continue;
+            }
+            effective.put(provider.getProviderId(), safeCatalogProjection(provider));
+        }
+        List<WorkspaceModelProviderEntity> workspaceProviders =
+                workspaceModelProviderMapper.selectList(workspaceProviderQuery());
+        for (WorkspaceModelProviderEntity provider : workspaceProviders) {
+            effective.put(provider.getProviderId(), toModelProvider(provider));
+        }
+        return new ArrayList<>(effective.values());
+    }
+
+    /**
+     * Claude Code credentials live in the MateClaw host user's home directory.
+     * They cannot be isolated by workspace, so exposing this provider in a
+     * tenant workspace would silently share one machine credential across
+     * tenants. Keep it available only to the legacy/default platform workspace.
+     */
+    private boolean isHostScopedProvider(String providerId) {
+        return CLAUDE_CODE_PROVIDER_ID.equals(providerId);
+    }
+
+    private void rejectHostScopedProvider(String providerId) {
+        if (isHostScopedProvider(providerId)) {
+            throw new MateClawException("err.llm.provider_not_found",
+                    "该 Provider 使用服务器本机凭据，仅可在平台默认工作区配置");
+        }
+    }
+
+    private LambdaQueryWrapper<WorkspaceModelProviderEntity> workspaceProviderQuery() {
+        return new LambdaQueryWrapper<WorkspaceModelProviderEntity>()
+                .eq(WorkspaceModelProviderEntity::getWorkspaceId,
+                        workspaceModelScope.currentWorkspaceId());
+    }
+
+    private void saveProvider(ModelProviderEntity provider) {
+        if (!isWorkspaceScoped()) {
+            modelProviderMapper.updateById(provider);
+            return;
+        }
+        WorkspaceModelProviderEntity existing = workspaceModelProviderMapper.selectOne(
+                workspaceProviderQuery()
+                        .eq(WorkspaceModelProviderEntity::getProviderId,
+                                provider.getProviderId())
+                        .last("LIMIT 1"));
+        WorkspaceModelProviderEntity scoped = toWorkspaceProvider(
+                provider, workspaceModelScope.currentWorkspaceId());
+        if (existing == null) {
+            scoped.setId(null);
+            workspaceModelProviderMapper.insert(scoped);
+        } else {
+            scoped.setId(existing.getId());
+            workspaceModelProviderMapper.updateById(scoped);
+        }
+    }
+
+    private ModelProviderEntity safeCatalogProjection(ModelProviderEntity catalog) {
+        ModelProviderEntity safe = copyProvider(catalog);
+        safe.setApiKey(null);
+        safe.setOauthAccessToken(null);
+        safe.setOauthRefreshToken(null);
+        safe.setOauthExpiresAt(null);
+        safe.setOauthAccountId(null);
+        safe.setFallbackPriority(0);
+        safe.setEnabled(false);
+        return safe;
+    }
+
+    private ModelProviderEntity toModelProvider(WorkspaceModelProviderEntity source) {
+        ModelProviderEntity target = new ModelProviderEntity();
+        target.setProviderId(source.getProviderId());
+        target.setName(source.getName());
+        target.setApiKeyPrefix(source.getApiKeyPrefix());
+        target.setChatModel(source.getChatModel());
+        target.setApiKey(settingCrypto.decrypt(source.getApiKeyEncrypted()));
+        target.setBaseUrl(source.getBaseUrl());
+        target.setGenerateKwargs(source.getGenerateKwargs());
+        target.setIsCustom(source.getIsCustom());
+        target.setIsLocal(source.getIsLocal());
+        target.setSupportModelDiscovery(source.getSupportModelDiscovery());
+        target.setSupportConnectionCheck(source.getSupportConnectionCheck());
+        target.setFreezeUrl(source.getFreezeUrl());
+        target.setRequireApiKey(source.getRequireApiKey());
+        target.setAuthType(source.getAuthType());
+        target.setOauthAccessToken(settingCrypto.decrypt(
+                source.getOauthAccessTokenEncrypted()));
+        target.setOauthRefreshToken(settingCrypto.decrypt(
+                source.getOauthRefreshTokenEncrypted()));
+        target.setOauthExpiresAt(source.getOauthExpiresAt());
+        target.setOauthAccountId(source.getOauthAccountId());
+        target.setFallbackPriority(source.getFallbackPriority());
+        target.setEnabled(source.getEnabled());
+        target.setCreateTime(source.getCreateTime());
+        target.setUpdateTime(source.getUpdateTime());
+        return target;
+    }
+
+    private WorkspaceModelProviderEntity toWorkspaceProvider(
+            ModelProviderEntity source, long workspaceId) {
+        WorkspaceModelProviderEntity target = new WorkspaceModelProviderEntity();
+        target.setWorkspaceId(workspaceId);
+        target.setProviderId(source.getProviderId());
+        target.setName(source.getName());
+        target.setApiKeyPrefix(source.getApiKeyPrefix());
+        target.setChatModel(source.getChatModel());
+        target.setApiKeyEncrypted(settingCrypto.encrypt(source.getApiKey()));
+        target.setBaseUrl(source.getBaseUrl());
+        target.setGenerateKwargs(source.getGenerateKwargs());
+        target.setIsCustom(source.getIsCustom());
+        target.setIsLocal(source.getIsLocal());
+        target.setSupportModelDiscovery(source.getSupportModelDiscovery());
+        target.setSupportConnectionCheck(source.getSupportConnectionCheck());
+        target.setFreezeUrl(source.getFreezeUrl());
+        target.setRequireApiKey(source.getRequireApiKey());
+        target.setAuthType(source.getAuthType());
+        target.setOauthAccessTokenEncrypted(settingCrypto.encrypt(
+                source.getOauthAccessToken()));
+        target.setOauthRefreshTokenEncrypted(settingCrypto.encrypt(
+                source.getOauthRefreshToken()));
+        target.setOauthExpiresAt(source.getOauthExpiresAt());
+        target.setOauthAccountId(source.getOauthAccountId());
+        target.setFallbackPriority(source.getFallbackPriority());
+        target.setEnabled(source.getEnabled());
+        return target;
+    }
+
+    private ModelProviderEntity copyProvider(ModelProviderEntity source) {
+        ModelProviderEntity target = new ModelProviderEntity();
+        target.setProviderId(source.getProviderId());
+        target.setName(source.getName());
+        target.setApiKeyPrefix(source.getApiKeyPrefix());
+        target.setChatModel(source.getChatModel());
+        target.setApiKey(source.getApiKey());
+        target.setBaseUrl(source.getBaseUrl());
+        target.setGenerateKwargs(source.getGenerateKwargs());
+        target.setIsCustom(source.getIsCustom());
+        target.setIsLocal(source.getIsLocal());
+        target.setSupportModelDiscovery(source.getSupportModelDiscovery());
+        target.setSupportConnectionCheck(source.getSupportConnectionCheck());
+        target.setFreezeUrl(source.getFreezeUrl());
+        target.setRequireApiKey(source.getRequireApiKey());
+        target.setAuthType(source.getAuthType());
+        target.setOauthAccessToken(source.getOauthAccessToken());
+        target.setOauthRefreshToken(source.getOauthRefreshToken());
+        target.setOauthExpiresAt(source.getOauthExpiresAt());
+        target.setOauthAccountId(source.getOauthAccountId());
+        target.setFallbackPriority(source.getFallbackPriority());
+        target.setEnabled(source.getEnabled());
+        target.setCreateTime(source.getCreateTime());
+        target.setUpdateTime(source.getUpdateTime());
+        return target;
+    }
+
+    private void publishConfigChanged(String reason) {
+        long workspaceId = workspaceModelScope.currentWorkspaceId();
+        eventPublisher.publishEvent(new ModelConfigChangedEvent(
+                workspaceId == WorkspaceModelScope.DEFAULT_WORKSPACE_ID
+                        ? reason
+                        : reason + ":workspace=" + workspaceId));
+    }
+
     // ============================================================
     // RFC-073: Liveness computation
     // ============================================================
@@ -639,6 +949,10 @@ public class ModelProviderService {
 
     private Liveness computeLiveness(ModelProviderEntity provider, boolean configured, LivenessContext ctx) {
         if (!configured) return Liveness.UNCONFIGURED;
+        // Workspace providers intentionally do not share the global provider
+        // pool/cooldown key. Until the pool has a composite key, fail open here
+        // so one tenant's probe/failure cannot disable another tenant.
+        if (isWorkspaceScoped()) return Liveness.LIVE;
         String id = provider.getProviderId();
         // Probe absent in test contexts → fail-open to LIVE so test fixtures don't trip on UNPROBED.
         if (ctx.initProbe() != null && !ctx.initProbe().hasBeenProbed(id)) {

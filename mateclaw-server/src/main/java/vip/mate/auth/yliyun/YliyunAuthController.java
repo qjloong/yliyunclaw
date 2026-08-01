@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.service.AuthService;
@@ -23,9 +24,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Yliyun 票据认证控制器
@@ -44,30 +44,11 @@ public class YliyunAuthController {
 
     private final YliyunUserMappingService userMappingService;
     private final AuthService authService;
+    private final YliyunTicketReplayService replayService;
+    private final YliyunAuthCookieService cookieService;
 
     @Value("${mateclaw.auth.yliyun.ticket-secret}")
     private String ticketSecret;
-
-    /** 防重放 nonce 缓存：jti → 过期时间戳（秒），ticket 5 分钟内有效 */
-    private final ConcurrentHashMap<String, Long> usedNonces = new ConcurrentHashMap<>();
-
-    {
-        // 后台线程定期清理过期 nonce（每 5 分钟）
-        Thread cleanup = new Thread(() -> {
-            while (true) {
-                try {
-                    TimeUnit.MINUTES.sleep(5);
-                    long now = System.currentTimeMillis() / 1000;
-                    usedNonces.entrySet().removeIf(e -> e.getValue() < now);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }, "yliyun-nonce-cleanup");
-        cleanup.setDaemon(true);
-        cleanup.start();
-    }
 
     /**
      * Yliyun ticket 认证入口。
@@ -88,15 +69,21 @@ public class YliyunAuthController {
             @RequestParam(required = false) String fileName,
             @RequestParam(required = false) String folderId,
             @RequestParam(required = false) String folderName,
+            @RequestParam(required = false) String conversationId,
+            @RequestParam(required = false) String channelId,
+            @RequestParam(required = false) String parentOrigin,
             jakarta.servlet.http.HttpServletRequest request) {
 
         // 1. 验证 ticket
         Map<String, Object> claims = verifyTicket(ticket);
 
         // 2. 提取声明
-        String yliyunUserId = String.valueOf(claims.get("userId"));
-        String yliyunTenantId = String.valueOf(claims.getOrDefault("tenantId", "1"));
-        String nickname = claims.get("nickname") instanceof String ? (String) claims.get("nickname") : "User";
+        String yliyunUserId = claimString(claims, "userId");
+        String yliyunTenantId = claimString(claims, "tenantId");
+        String nickname = optionalClaimString(claims, "nickname");
+        String account = optionalClaimString(claims, "account");
+        String tenantName = optionalClaimString(claims, "tenantName");
+        Boolean tenantAdmin = optionalClaimBoolean(claims, "tenantAdmin");
 
         if (yliyunUserId == null || yliyunUserId.isBlank()) {
             throw new MateClawException("err.auth.yliyun.missing_user_id", 400, "ticket 中缺少 userId");
@@ -105,42 +92,146 @@ public class YliyunAuthController {
         log.info("[Yliyun] Ticket verified: userId={}, tenantId={}", yliyunUserId, yliyunTenantId);
 
         // 3. 防重放：检查 ticket jti 是否已被使用
-        Object jti = claims.get("jti");
-        long nowSec = System.currentTimeMillis() / 1000;
-        if (jti instanceof String && !((String) jti).isBlank()) {
-            Long prevUsed = usedNonces.putIfAbsent((String) jti, nowSec + 300);
-            if (prevUsed != null) {
-                log.warn("[Yliyun] Replay attack detected: jti={}, userId={}", jti, yliyunUserId);
-                throw new MateClawException("err.auth.yliyun.replay", 401, "ticket 已被使用（疑似重放）");
-            }
-        }
+        replayService.consume(claimString(claims, "jti"));
 
         // 4. 查找或创建用户
-        UserEntity user = userMappingService.findOrCreateUser(yliyunUserId, yliyunTenantId, nickname);
+        UserEntity user = userMappingService.findOrCreateUser(
+                yliyunUserId, yliyunTenantId, nickname, account, tenantName, tenantAdmin);
 
         // 5. 签发 MateClaw JWT
         String token = authService.generateToken(user);
 
-        // 6. 构建重定向 URL（保留文件上下文参数）
-        StringBuilder url = new StringBuilder(redirect);
-        url.append(redirect.contains("?") ? "&" : "?").append("token=").append(token);
-        appendParam(url, "fileId", fileId);
-        appendParam(url, "fileName", fileName);
-        appendParam(url, "folderId", folderId);
-        appendParam(url, "folderName", folderName);
+        // 6. JWT 只写 HttpOnly Cookie；重定向 URL 只保留非敏感文件上下文。
+        String safeRedirect = validateRedirect(redirect);
+        UriComponentsBuilder redirectBuilder = UriComponentsBuilder.fromPath(safeRedirect);
+        appendParam(redirectBuilder, "fileId", fileId);
+        appendParam(redirectBuilder, "fileName", fileName);
+        appendParam(redirectBuilder, "folderId", folderId);
+        appendParam(redirectBuilder, "folderName", folderName);
+        appendConversationId(redirectBuilder, conversationId);
+        appendChannelId(redirectBuilder, channelId);
+        appendParentOrigin(redirectBuilder, parentOrigin);
+        redirectBuilder.queryParam("authSource", "yliyun");
+        String url = redirectBuilder.build().encode().toUriString();
 
-        log.info("[Yliyun] Auth success: yliyunUserId={} → mateUserId={}, url={}",
-                yliyunUserId, user.getId(), url);
+        log.info("[Yliyun] Auth success: tenantId={}, yliyunUserId={} → mateUserId={}, redirect={}",
+                yliyunTenantId, yliyunUserId, user.getId(), safeRedirect);
 
         HttpHeaders headers = new HttpHeaders();
-        headers.setLocation(URI.create(url.toString()));
+        headers.setLocation(URI.create(url));
+        headers.add(HttpHeaders.SET_COOKIE, cookieService.headerValue(token));
+        headers.setCacheControl("no-store, no-cache, must-revalidate");
+        headers.setPragma("no-cache");
         return new ResponseEntity<>(headers, HttpStatus.FOUND);
     }
 
-    private void appendParam(StringBuilder url, String name, String value) {
+    private void appendParam(UriComponentsBuilder builder, String name, String value) {
         if (value != null && !value.isBlank()) {
-            url.append("&").append(name).append("=").append(value);
+            builder.queryParam(name, value);
         }
+    }
+
+    private void appendChannelId(UriComponentsBuilder builder, String channelId) {
+        if (channelId == null || channelId.isBlank()) {
+            return;
+        }
+        if (!channelId.matches("[a-zA-Z0-9-]{16,128}")) {
+            throw new MateClawException("err.auth.yliyun.invalid_channel",
+                    400, "channelId 格式无效");
+        }
+        builder.queryParam("channelId", channelId);
+    }
+
+    private void appendConversationId(UriComponentsBuilder builder, String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+        if (!conversationId.matches("[a-zA-Z0-9_-]{1,128}")) {
+            throw new MateClawException("err.auth.yliyun.invalid_conversation",
+                    400, "conversationId 格式无效");
+        }
+        builder.queryParam("conversationId", conversationId);
+    }
+
+    private void appendParentOrigin(UriComponentsBuilder builder, String parentOrigin) {
+        if (parentOrigin == null || parentOrigin.isBlank()) {
+            return;
+        }
+        URI origin;
+        try {
+            origin = URI.create(parentOrigin.trim());
+        } catch (IllegalArgumentException e) {
+            throw new MateClawException("err.auth.yliyun.invalid_parent_origin",
+                    400, "parentOrigin 格式无效");
+        }
+        if ((!"http".equalsIgnoreCase(origin.getScheme())
+                && !"https".equalsIgnoreCase(origin.getScheme()))
+                || origin.getHost() == null
+                || origin.getUserInfo() != null
+                || (origin.getPath() != null && !origin.getPath().isBlank())
+                || origin.getQuery() != null
+                || origin.getFragment() != null) {
+            throw new MateClawException("err.auth.yliyun.invalid_parent_origin",
+                    400, "parentOrigin 格式无效");
+        }
+        builder.queryParam("parentOrigin", origin.toString());
+    }
+
+    private String validateRedirect(String redirect) {
+        String value = redirect == null || redirect.isBlank() ? "/chat" : redirect.trim();
+        URI uri;
+        try {
+            uri = URI.create(value);
+        } catch (IllegalArgumentException e) {
+            throw new MateClawException("err.auth.yliyun.invalid_redirect",
+                    400, "redirect 格式无效");
+        }
+        if (uri.isAbsolute() || uri.getHost() != null || !value.startsWith("/")
+                || value.startsWith("//") || uri.getRawFragment() != null) {
+            throw new MateClawException("err.auth.yliyun.invalid_redirect",
+                    400, "redirect 不在允许范围内");
+        }
+        String path = uri.getPath();
+        if (!"/chat".equals(path) && !"/embed/cloud-agent".equals(path)) {
+            throw new MateClawException("err.auth.yliyun.invalid_redirect",
+                    400, "redirect 不在允许范围内");
+        }
+        return path;
+    }
+
+    private String claimString(Map<String, Object> claims, String key) {
+        Object value = claims.get(key);
+        if (value == null || String.valueOf(value).isBlank()
+                || "null".equalsIgnoreCase(String.valueOf(value))) {
+            throw new MateClawException("err.auth.yliyun.missing_" + key,
+                    401, "ticket 中缺少 " + key);
+        }
+        return String.valueOf(value);
+    }
+
+    private String optionalClaimString(Map<String, Object> claims, String key) {
+        Object value = claims.get(key);
+        return value == null || String.valueOf(value).isBlank()
+                ? null : String.valueOf(value).trim();
+    }
+
+    private Boolean optionalClaimBoolean(Map<String, Object> claims, String key) {
+        Object value = claims.get(key);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String normalized = String.valueOf(value).trim();
+        if ("true".equalsIgnoreCase(normalized)) {
+            return Boolean.TRUE;
+        }
+        if ("false".equalsIgnoreCase(normalized)) {
+            return Boolean.FALSE;
+        }
+        throw new MateClawException("err.auth.yliyun.invalid_" + key,
+                401, "ticket 中的 " + key + " 格式无效");
     }
 
     /**
@@ -157,11 +248,7 @@ public class YliyunAuthController {
                     .build()
                     .parseSignedClaims(ticket)
                     .getPayload();
-            return Map.of(
-                "userId", String.valueOf(claims.get("userId", Long.class)),
-                "tenantId", String.valueOf(claims.get("tenantId", Long.class)),
-                "nickname", claims.get("nickname", String.class)
-            );
+            return new LinkedHashMap<>(claims);
         } catch (Exception e) {
             log.debug("[Yliyun] Not a JWT ticket, trying HMAC format: {}", e.getMessage());
         }

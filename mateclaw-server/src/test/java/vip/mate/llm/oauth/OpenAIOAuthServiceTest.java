@@ -3,8 +3,8 @@ package vip.mate.llm.oauth;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import vip.mate.llm.repository.ModelProviderMapper;
 import vip.mate.llm.service.ModelProviderService;
+import vip.mate.llm.workspace.WorkspaceModelScope;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
@@ -32,7 +32,7 @@ class OpenAIOAuthServiceTest {
     }
 
     private OpenAIOAuthService service() {
-        return new OpenAIOAuthService(mock(ModelProviderMapper.class), new ObjectMapper(),
-                mock(ModelProviderService.class));
+        return new OpenAIOAuthService(new ObjectMapper(),
+                mock(ModelProviderService.class), new WorkspaceModelScope());
     }
 }

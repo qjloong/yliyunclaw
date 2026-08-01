@@ -364,13 +364,15 @@
             v-for="attachment in fileAttachments"
             :key="attachment.storedName"
             class="message-attachment"
+            :class="{ 'message-attachment--cloud': isCloudAttachment(attachment) }"
             type="button"
             @click="openFileAttachment(attachment)"
           >
             <el-icon class="message-attachment__icon"><Document /></el-icon>
             <span class="message-attachment__name">{{ attachment.name }}</span>
-            <span class="message-attachment__meta">{{ formatFileSize(attachment.size) }}</span>
+            <span class="message-attachment__meta">{{ attachmentMeta(attachment) }}</span>
             <el-icon
+              v-if="!isCloudAttachment(attachment)"
               class="message-attachment__download"
               :title="$t('chat.preview.download')"
               @click.stop="downloadFile(attachment)"
@@ -598,11 +600,23 @@ const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, loadAllModels, do
 // Document attachments: preview in the global dialog when the format is
 // supported, otherwise fall back to the legacy download behavior.
 function openFileAttachment(attachment: ChatAttachment) {
+  if (isCloudAttachment(attachment)) return
   if (previewKindOf(attachment)) {
     openFilePreview(attachment)
   } else {
     void downloadFile(attachment)
   }
+}
+
+function isCloudAttachment(attachment: ChatAttachment) {
+  return attachment.path?.startsWith('yliyun://')
+    || attachment.url?.startsWith('yliyun://')
+}
+
+function attachmentMeta(attachment: ChatAttachment) {
+  return isCloudAttachment(attachment)
+    ? t('chat.cloudAttachment')
+    : formatFileSize(attachment.size)
 }
 
 interface Props {
@@ -885,7 +899,7 @@ onBeforeUnmount(() => {
 })
 
 // --- 附件 ---
-// MessageContentPart media (image/audio/video produced by generation tools) live
+// MessageContentPart attachments (including typed cloud references) live
 // in `contentParts` rather than `attachments`. Synthesize virtual attachment
 // entries so the existing render + auth-blob loader works for them too.
 //
@@ -893,31 +907,35 @@ onBeforeUnmount(() => {
 // land in BOTH lists (the upload endpoint registers them as ChatAttachment AND
 // the message persistence echoes them back as a `type: 'image'` MessageContentPart).
 // Without this guard each user image shows twice in the bubble.
-const mediaPartAttachments = computed<ChatAttachment[]>(() => {
+const contentPartAttachments = computed<ChatAttachment[]>(() => {
   const parts = (props.message as any).contentParts as Array<any> | undefined
   if (!parts || !parts.length) return []
-  const existingUrls = new Set(
-    (props.message.attachments || []).map(a => a.url).filter(Boolean)
+  const existingReferences = new Set(
+    (props.message.attachments || [])
+      .flatMap(a => [a.url, a.path])
+      .filter(Boolean)
   )
   const out: ChatAttachment[] = []
   const seen = new Set<string>()
   for (const p of parts) {
-    if (!p || !p.fileUrl) continue
-    if (p.type !== 'image' && p.type !== 'audio' && p.type !== 'video' && p.type !== 'model3d') continue
-    if (existingUrls.has(p.fileUrl) || seen.has(p.fileUrl)) continue
-    seen.add(p.fileUrl)
-    const fileName = p.fileName || p.fileUrl.split('/').pop() || `${p.type}-${out.length}`
+    const reference = p?.fileUrl || p?.path
+    if (!reference) continue
+    if (p.type !== 'file' && p.type !== 'image' && p.type !== 'audio' && p.type !== 'video' && p.type !== 'model3d') continue
+    if (existingReferences.has(reference) || seen.has(reference)) continue
+    seen.add(reference)
+    const fileName = p.fileName || reference.split('/').pop() || `${p.type}-${out.length}`
     const ct = p.contentType
         || (p.type === 'image' ? 'image/png'
             : p.type === 'audio' ? 'audio/mpeg'
             : p.type === 'video' ? 'video/mp4'
-            : 'model/gltf-binary')
+            : p.type === 'model3d' ? 'model/gltf-binary'
+            : 'application/octet-stream')
     out.push({
       name: fileName,
-      size: 0,
-      url: p.fileUrl,
-      storedName: fileName,
-      path: p.fileUrl,
+      size: Number(p.fileSize) || 0,
+      url: p.fileUrl || '',
+      storedName: p.storedName || fileName,
+      path: p.path || p.fileUrl || '',
       contentType: ct,
     })
   }
@@ -926,7 +944,7 @@ const mediaPartAttachments = computed<ChatAttachment[]>(() => {
 
 const attachments = computed(() => [
   ...(props.message.attachments || []),
-  ...mediaPartAttachments.value,
+  ...contentPartAttachments.value,
 ])
 const imageAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('image/')))
 const videoAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('video/')))

@@ -890,7 +890,6 @@ public class ToolExecutionExecutor {
             // Spring AI ToolContext (preferred — read via ChatOrigin.from(ctx))
             // AND the legacy ToolExecutionContext ThreadLocal so tools that have
             // not yet migrated to ToolContext keep working unchanged.
-            ToolExecutionContext.set(pc.conversationId, pc.requesterId, pc.workspaceBasePath);
             String result;
             String progressToken = null;
             try {
@@ -898,6 +897,8 @@ public class ToolExecutionExecutor {
                 runtimeOrigin = runtimeOrigin
                         .withConversationId(pc.conversationId)
                         .withWorkspace(runtimeOrigin.workspaceId(), pc.workspaceBasePath);
+                ToolExecutionContext.set(pc.conversationId, pc.requesterId,
+                        runtimeOrigin.workspaceId(), pc.workspaceBasePath);
                 ToolContext toolContext = runtimeOrigin.toToolContext();
 
                 // MCP progress: generate progressToken and inject into ToolContext

@@ -963,6 +963,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   stream.on('tool_call_started', handleToolCallStarted)
   stream.on('tool_call_completed', handleToolCallCompleted)
+  // Cloud attachments are resolved deterministically before the Agent graph.
+  // Render that preparation through the same timeline cards without treating
+  // it as a provider tool-call/tool-response pair in persisted LLM history.
+  stream.on('cloud_attachment_started', handleToolCallStarted)
+  stream.on('cloud_attachment_completed', handleToolCallCompleted)
 
   // MCP long-running tool progress: update the matching tool_call segment's
   // progress field so ToolCallSegment can render a progress bar.

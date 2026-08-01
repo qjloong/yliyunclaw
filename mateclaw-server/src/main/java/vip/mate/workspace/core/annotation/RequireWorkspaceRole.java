@@ -12,7 +12,7 @@ import java.lang.annotation.*;
  *
  * @author MateClaw Team
  */
-@Target(ElementType.METHOD)
+@Target({ElementType.METHOD, ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 public @interface RequireWorkspaceRole {
@@ -21,4 +21,9 @@ public @interface RequireWorkspaceRole {
      * 最低角色要求，默认 viewer（即只要是成员就可以访问）
      */
     String value() default "viewer";
+
+    /**
+     * Reject missing/invalid X-Workspace-Id instead of falling back to workspace 1.
+     */
+    boolean explicitWorkspace() default false;
 }

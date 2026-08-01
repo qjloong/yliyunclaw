@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClient;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.oauth.OpenAIDeviceCodeService.DeviceCodePollResult;
 import vip.mate.llm.oauth.OpenAIDeviceCodeService.DeviceCodeStartResult;
+import vip.mate.llm.workspace.WorkspaceModelScope;
 
 import java.lang.reflect.Field;
 
@@ -41,7 +42,8 @@ class OpenAIDeviceCodeServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         oauthService = mock(OpenAIOAuthService.class);
-        deviceCodeService = new OpenAIDeviceCodeService(oauthService, new ObjectMapper());
+        deviceCodeService = new OpenAIDeviceCodeService(
+                oauthService, new ObjectMapper(), new WorkspaceModelScope());
 
         // Tighten config knobs so tests don't sleep
         setField(deviceCodeService, "pollMinIntervalMs", 0L);

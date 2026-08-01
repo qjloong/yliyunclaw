@@ -392,7 +392,9 @@ function onNavClick() {
   if (isMobile.value) mobileMenuOpen.value = false
 }
 
-const username = computed(() => localStorage.getItem('username') || 'User')
+const username = computed(() =>
+  localStorage.getItem('displayName') || localStorage.getItem('username') || 'User'
+)
 const role = computed(() => localStorage.getItem('role') || 'user')
 const userInitial = computed(() => username.value.charAt(0).toUpperCase())
 const roleLabel = computed(() => role.value === 'admin' ? t('nav.roleAdmin') : t('nav.roleUser'))
@@ -588,8 +590,13 @@ const showChangePassword = ref(false)
 
 function logout() {
   localStorage.removeItem('token')
+  localStorage.removeItem('userId')
   localStorage.removeItem('username')
+  localStorage.removeItem('displayName')
   localStorage.removeItem('role')
+  localStorage.removeItem('tenantName')
+  localStorage.removeItem('cloudUserId')
+  localStorage.removeItem('cloudTenantId')
   // 刷新页面而非 router.push：确保 keepAlive 缓存的 ChatConsole、
   // 模块级变量（cachedAgents 等）全部清空，杜绝跨用户数据泄漏。
   window.location.href = '/login'

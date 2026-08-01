@@ -70,12 +70,15 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(
             HttpSecurity http,
-            @Value("${mateclaw.openapi.expose-ui:false}") boolean exposeOpenApiUi) throws Exception {
+            @Value("${mateclaw.openapi.expose-ui:false}") boolean exposeOpenApiUi,
+            @Value("${mateclaw.auth.yliyun.frame-ancestors:'self'}") String frameAncestors) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .headers(headers -> headers
                 // V1: 允许 iframe 嵌入（云盘嵌入 MateClaw 需要跨端口）
                 .frameOptions(frame -> frame.disable())
+                .contentSecurityPolicy(csp -> csp
+                        .policyDirectives("frame-ancestors " + frameAncestors))
             )
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> {

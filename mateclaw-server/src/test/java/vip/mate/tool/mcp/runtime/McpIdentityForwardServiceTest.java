@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ToolContext;
 import vip.mate.agent.context.ChatOrigin;
+import vip.mate.auth.yliyun.McWorkspaceUserEntity;
+import vip.mate.auth.yliyun.YliyunUserMappingService;
 import vip.mate.tool.builtin.ToolExecutionContext;
 
 import java.security.KeyPair;
@@ -18,6 +20,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests {@link McpIdentityForwardService}: identity typing across channels,
@@ -36,7 +40,14 @@ class McpIdentityForwardServiceTest {
     }
 
     private McpIdentityForwardService svc(McpIdentityForwardProperties p) {
-        return new McpIdentityForwardService(p);
+        YliyunUserMappingService mappingService = mock(YliyunUserMappingService.class);
+        McWorkspaceUserEntity mapping = new McWorkspaceUserEntity();
+        mapping.setUserId(42L);
+        mapping.setWorkspaceId(9L);
+        mapping.setYliyunUserId("1001");
+        mapping.setYliyunTenantId("7");
+        when(mappingService.findMappingByMateUserId(42L)).thenReturn(Optional.of(mapping));
+        return new McpIdentityForwardService(p, mappingService);
     }
 
     /** Build a ToolContext carrying the given origin, mirroring ToolExecutionExecutor. */
@@ -273,8 +284,34 @@ class McpIdentityForwardServiceTest {
         assertThat(claims.getSubject()).isEqualTo("42");
         assertThat(claims.get("trust", String.class)).isEqualTo(McpIdentityForwardService.TRUST_AUTHENTICATED);
         assertThat(claims.get("channel_type", String.class)).isEqualTo("web");
+        assertThat(claims.get("mateclaw_user_id", String.class)).isEqualTo("42");
+        assertThat(claims.get("yliyun_user_id", String.class)).isEqualTo("1001");
+        assertThat(claims.get("tenant_id", String.class)).isEqualTo("7");
+        assertThat(claims.get("workspace_id", String.class)).isEqualTo("9");
+        assertThat(claims.get("trace_id", String.class)).isEqualTo("c1");
         assertThat(claims.getExpiration()).isAfter(new Date());
         assertThat(claims.getId()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("token mode: explicit ToolContext trace id overrides conversation fallback")
+    void explicitTraceIdIsForwarded() throws Exception {
+        KeyPair kp = rsaKeyPair();
+        var p = tokenProps(kp);
+        ChatOrigin origin = ChatOrigin.web("conversation-1", "alice", 1L, null, null, 42L);
+        ToolContext context = new ToolContext(Map.of(
+                ChatOrigin.CTX_KEY, origin,
+                McpIdentityForwardService.TRACE_ID_CONTEXT_KEY, "diagnostic-trace-1"));
+
+        Optional<McpIdentityForwardService.Injection> injection =
+                svc(p).resolve(context, "my-api");
+        Claims claims = Jwts.parser()
+                .verifyWith(kp.getPublic())
+                .build()
+                .parseSignedClaims(injection.orElseThrow().value())
+                .getPayload();
+
+        assertThat(claims.get("trace_id", String.class)).isEqualTo("diagnostic-trace-1");
     }
 
     @Test

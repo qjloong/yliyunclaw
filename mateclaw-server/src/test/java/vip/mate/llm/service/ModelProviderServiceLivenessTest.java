@@ -16,6 +16,9 @@ import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.model.ProviderInfoDTO;
 import vip.mate.llm.repository.ModelProviderMapper;
+import vip.mate.llm.workspace.repository.WorkspaceModelProviderMapper;
+import vip.mate.llm.workspace.WorkspaceModelScope;
+import vip.mate.system.service.SettingCrypto;
 
 import java.util.List;
 
@@ -35,6 +38,9 @@ import static org.mockito.Mockito.*;
 class ModelProviderServiceLivenessTest {
 
     private ModelProviderMapper providerMapper;
+    private WorkspaceModelProviderMapper workspaceProviderMapper;
+    private WorkspaceModelScope workspaceModelScope;
+    private SettingCrypto settingCrypto;
     private ModelConfigService modelConfigService;
     private ApplicationEventPublisher eventPublisher;
     private ObjectProvider<ClaudeCodeOAuthService> claudeCodeOAuthProvider;
@@ -49,6 +55,10 @@ class ModelProviderServiceLivenessTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         providerMapper = mock(ModelProviderMapper.class);
+        workspaceProviderMapper = mock(WorkspaceModelProviderMapper.class);
+        workspaceModelScope = mock(WorkspaceModelScope.class);
+        when(workspaceModelScope.currentWorkspaceId()).thenReturn(1L);
+        settingCrypto = mock(SettingCrypto.class);
         modelConfigService = mock(ModelConfigService.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         claudeCodeOAuthProvider = mock(ObjectProvider.class);
@@ -62,7 +72,8 @@ class ModelProviderServiceLivenessTest {
         initProbeProvider = mock(ObjectProvider.class);
         when(initProbeProvider.getIfAvailable()).thenReturn(initProbe);
 
-        service = new ModelProviderService(providerMapper, modelConfigService, eventPublisher,
+        service = new ModelProviderService(providerMapper, workspaceProviderMapper,
+                workspaceModelScope, settingCrypto, modelConfigService, eventPublisher,
                 claudeCodeOAuthProvider, pool, healthTracker, initProbeProvider);
     }
 

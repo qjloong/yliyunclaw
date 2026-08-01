@@ -574,6 +574,15 @@ export const channelApi = {
 }
 
 // ==================== MCP Server ====================
+export interface McpProxyToolResponse {
+  code: number
+  msg: string
+  data: unknown
+  errorCode?: string | null
+  stage?: string | null
+  latencyMs?: number | string | null
+}
+
 export const mcpApi = {
   list: () => http.get('/mcp/servers'),
   get: (id: string | number) => http.get(`/mcp/servers/${id}`),
@@ -584,6 +593,15 @@ export const mcpApi = {
     http.put(`/mcp/servers/${id}/toggle?enabled=${enabled}`),
   test: (id: string | number) => http.post(`/mcp/servers/${id}/test`),
   refresh: () => http.post('/mcp/servers/refresh'),
+  /** Layered Yliyun diagnosis; the optional write check creates and recycles one temporary folder. */
+  diagnostics: (includeWrite = false) =>
+    http.post(`/mcp/proxy/diagnostics?includeWrite=${includeWrite}`),
+  /** Invoke one Yliyun tool through the authenticated shared MCP runtime. */
+  callYliyunTool: (toolName: string, args: Record<string, unknown>) =>
+    http.post<McpProxyToolResponse, McpProxyToolResponse>(
+      `/mcp/proxy/${encodeURIComponent(toolName)}`,
+      args,
+    ),
   /** Set the whole server's tool disclosure tier ('core' | 'extension'). */
   setDisclosureTier: (id: string | number, tier: 'core' | 'extension') =>
     http.put(`/mcp/servers/${id}/disclosure-tier`, { tier }),

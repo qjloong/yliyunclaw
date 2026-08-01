@@ -29,6 +29,7 @@ import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 @RestController
 @RequestMapping("/api/v1/models")
 @RequiredArgsConstructor
+@RequireWorkspaceRole(value = "viewer", explicitWorkspace = true)
 public class ModelConfigController {
 
     private final ModelConfigService modelConfigService;
@@ -41,28 +42,28 @@ public class ModelConfigController {
 
     @Operation(summary = "获取 Provider 列表（仅 enabled）")
     @GetMapping
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<List<ProviderInfoDTO>> list() {
         return R.ok(modelProviderService.listProviders());
     }
 
     @Operation(summary = "RFC-074: 获取 Provider 全量目录（含未启用），供 Add Provider 抽屉使用")
     @GetMapping("/catalog")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<List<ProviderInfoDTO>> catalog() {
         return R.ok(modelProviderService.listCatalog());
     }
 
     @Operation(summary = "RFC-074: 启用 Provider")
     @PostMapping("/{providerId}/enable")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<EnableResult> enableProvider(@PathVariable String providerId) {
         return R.ok(modelProviderService.setEnabled(providerId, true));
     }
 
     @Operation(summary = "RFC-074: 禁用 Provider（如其下模型为当前默认会自动切换）")
     @PostMapping("/{providerId}/disable")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<EnableResult> disableProvider(@PathVariable String providerId) {
         return R.ok(modelProviderService.setEnabled(providerId, false));
     }
@@ -98,7 +99,7 @@ public class ModelConfigController {
 
     @Operation(summary = "设置当前激活模型")
     @PutMapping("/active")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ActiveModelsInfo> setActiveModel(@RequestBody ModelSlotRequest request) {
         ModelConfigEntity model = modelConfigService.setDefaultModel(request.getProviderId(), request.getModel());
         ActiveModelsInfo info = new ActiveModelsInfo();
@@ -108,7 +109,7 @@ public class ModelConfigController {
 
     @Operation(summary = "更新 Provider 配置")
     @PutMapping("/{providerId}/config")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ProviderInfoDTO> updateProviderConfig(@PathVariable String providerId,
                                                    @RequestBody ProviderConfigRequest request) {
         ProviderInfoDTO updated = modelProviderService.updateProviderConfig(providerId, request);
@@ -119,14 +120,14 @@ public class ModelConfigController {
 
     @Operation(summary = "创建自定义 Provider")
     @PostMapping("/custom-providers")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ProviderInfoDTO> createCustomProvider(@RequestBody CreateCustomProviderRequest request) {
         return R.ok(modelProviderService.createCustomProvider(request));
     }
 
     @Operation(summary = "删除自定义 Provider")
     @DeleteMapping("/custom-providers/{providerId}")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Void> deleteCustomProvider(@PathVariable String providerId) {
         modelProviderService.deleteCustomProvider(providerId);
         return R.ok();
@@ -142,7 +143,7 @@ public class ModelConfigController {
      */
     @Operation(summary = "删除自定义 Provider（查询参数变体，兼容含特殊字符的旧 ID）")
     @DeleteMapping("/custom-providers")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Void> deleteCustomProviderByQuery(@RequestParam("providerId") String providerId) {
         modelProviderService.deleteCustomProvider(providerId);
         return R.ok();
@@ -150,7 +151,7 @@ public class ModelConfigController {
 
     @Operation(summary = "向 Provider 添加模型")
     @PostMapping("/{providerId}/models")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ProviderInfoDTO> addProviderModel(@PathVariable String providerId,
                                                @RequestBody AddProviderModelRequest request) {
         return R.ok(modelProviderService.addModel(providerId, request));
@@ -158,7 +159,7 @@ public class ModelConfigController {
 
     @Operation(summary = "从 Provider 删除模型")
     @DeleteMapping("/{providerId}/models")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ProviderInfoDTO> removeProviderModel(@PathVariable String providerId,
                                                   @RequestParam String modelId) {
         return R.ok(modelProviderService.removeModel(providerId, modelId));
@@ -166,21 +167,21 @@ public class ModelConfigController {
 
     @Operation(summary = "获取模型详情")
     @GetMapping("/{id}")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ModelConfigEntity> get(@PathVariable Long id) {
         return R.ok(modelConfigService.getModel(id));
     }
 
     @Operation(summary = "创建模型")
     @PostMapping
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ModelConfigEntity> create(@RequestBody ModelConfigEntity entity) {
         return R.ok(modelConfigService.createModel(entity));
     }
 
     @Operation(summary = "更新模型")
     @PutMapping("/{id}")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ModelConfigEntity> update(@PathVariable Long id, @RequestBody ModelConfigEntity entity) {
         entity.setId(id);
         return R.ok(modelConfigService.updateModel(entity));
@@ -188,7 +189,7 @@ public class ModelConfigController {
 
     @Operation(summary = "删除模型")
     @DeleteMapping("/{id}")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Void> delete(@PathVariable Long id) {
         modelConfigService.deleteModel(id);
         return R.ok();
@@ -196,7 +197,7 @@ public class ModelConfigController {
 
     @Operation(summary = "设置默认模型")
     @PostMapping("/{id}/default")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ModelConfigEntity> setDefault(@PathVariable Long id) {
         return R.ok(modelConfigService.setDefaultModel(id));
     }
@@ -205,14 +206,14 @@ public class ModelConfigController {
 
     @Operation(summary = "发现远端模型")
     @PostMapping("/{providerId}/discover")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<DiscoverResult> discoverModels(@PathVariable String providerId) {
         return R.ok(modelDiscoveryService.discoverModels(providerId));
     }
 
     @Operation(summary = "批量添加发现的模型")
     @PostMapping("/{providerId}/discover/apply")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Map<String, Integer>> applyDiscoveredModels(@PathVariable String providerId,
                                                           @RequestBody ApplyDiscoveredModelsRequest request) {
         int added = modelDiscoveryService.batchAddModels(providerId, request.getModelIds());
@@ -221,14 +222,14 @@ public class ModelConfigController {
 
     @Operation(summary = "测试供应商连接")
     @PostMapping("/{providerId}/test-connection")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<TestResult> testConnection(@PathVariable String providerId) {
         return R.ok(modelDiscoveryService.testConnection(providerId));
     }
 
     @Operation(summary = "测试单个模型可用性")
     @PostMapping("/{providerId}/models/test")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<TestResult> testModel(@PathVariable String providerId,
                                    @RequestParam String modelId) {
         return R.ok(modelDiscoveryService.testModel(providerId, modelId));
@@ -247,7 +248,7 @@ public class ModelConfigController {
 
     @Operation(summary = "测试 Embedding 模型连通性（嵌入一个短文本验证 API key）")
     @PostMapping("/embedding/{modelId}/test")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Map<String, Object>> testEmbedding(@PathVariable Long modelId) {
         Map<String, Object> result = new HashMap<>();
         try {

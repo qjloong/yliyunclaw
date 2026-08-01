@@ -13,6 +13,7 @@ import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
@@ -183,6 +184,81 @@ public class McpClientManager {
      */
     public List<McpSchema.Tool> getServerTools(Long serverId) {
         return toolsCache.getOrDefault(serverId, List.of());
+    }
+
+    /**
+     * Invoke a raw tool through the same pooled client used by Agent callbacks.
+     * This is the single runtime path for diagnostics and lightweight UI
+     * pickers; identity is still resolved from trusted ToolContext and injected
+     * per call, never accepted from the request body/model.
+     */
+    public ToolCallResult callTool(Long serverId, String rawToolName,
+                                   Map<String, Object> arguments, ToolContext toolContext) {
+        long startedAt = System.currentTimeMillis();
+        McpSyncClient client = clients.get(serverId);
+        if (client == null) {
+            return ToolCallResult.failure("MCP_NOT_CONNECTED",
+                    "MCP server 未连接", "mcp.connection",
+                    System.currentTimeMillis() - startedAt);
+        }
+        if (rawToolName == null || rawToolName.isBlank()) {
+            return ToolCallResult.failure("INVALID_TOOL_NAME",
+                    "工具名称不能为空", "mcp.validation",
+                    System.currentTimeMillis() - startedAt);
+        }
+        boolean exists = getServerTools(serverId).stream()
+                .anyMatch(tool -> rawToolName.equals(tool.name()));
+        if (!exists) {
+            return ToolCallResult.failure("TOOL_NOT_FOUND",
+                    "MCP 工具不存在: " + rawToolName, "mcp.discovery",
+                    System.currentTimeMillis() - startedAt);
+        }
+
+        try {
+            Map<String, Object> effectiveArguments =
+                    new LinkedHashMap<>(arguments != null ? arguments : Map.of());
+            String serverName = serverNames.get(serverId);
+            if (identityForwardService.forwardsTo(serverId, serverName)) {
+                String audience = identityForwardService.audienceFor(serverId, serverName);
+                identityForwardService.resolve(toolContext, audience)
+                        .ifPresent(injection ->
+                                effectiveArguments.put(injection.key(), injection.value()));
+            }
+            McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder()
+                    .name(rawToolName)
+                    .arguments(effectiveArguments)
+                    .build();
+            McpSchema.CallToolResult result = client.callTool(request);
+            String content = serializeToolContent(result);
+            long latency = System.currentTimeMillis() - startedAt;
+            if (result != null && Boolean.TRUE.equals(result.isError())) {
+                return ToolCallResult.fromToolError(content, latency);
+            }
+            return ToolCallResult.success(content, latency);
+        } catch (Exception e) {
+            String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return ToolCallResult.failure("MCP_CALL_FAILED", message,
+                    "mcp.transport", System.currentTimeMillis() - startedAt);
+        }
+    }
+
+    private String serializeToolContent(McpSchema.CallToolResult result) {
+        if (result == null || result.content() == null || result.content().isEmpty()) {
+            return "";
+        }
+        StringBuilder content = new StringBuilder();
+        for (McpSchema.Content item : result.content()) {
+            if (item instanceof McpSchema.TextContent text) {
+                content.append(text.text());
+            } else {
+                try {
+                    content.append(objectMapper.writeValueAsString(item));
+                } catch (Exception ignored) {
+                    content.append(item);
+                }
+            }
+        }
+        return content.toString();
     }
 
     /**
@@ -679,6 +755,49 @@ public class McpClientManager {
 
         public static ConnectionResult failure(String message, long latencyMs) {
             return new ConnectionResult(false, message, 0, latencyMs, List.of(), LocalDateTime.now());
+        }
+    }
+
+    public record ToolCallResult(
+            boolean success,
+            String code,
+            String content,
+            String stage,
+            long latencyMs
+    ) {
+        public static ToolCallResult success(String content, long latencyMs) {
+            return new ToolCallResult(true, "OK", content, "mcp.tool", latencyMs);
+        }
+
+        public static ToolCallResult failure(String code, String content,
+                                             String stage, long latencyMs) {
+            return new ToolCallResult(false, code, content, stage, latencyMs);
+        }
+
+        /**
+         * Preserve the structured error code/stage emitted by an MCP tool.
+         * Falling back to MCP_TOOL_ERROR keeps compatibility with third-party
+         * servers that return plain text or malformed JSON.
+         */
+        public static ToolCallResult fromToolError(String content, long latencyMs) {
+            String code = "MCP_TOOL_ERROR";
+            String stage = "mcp.tool";
+            try {
+                if (content != null && !content.isBlank()) {
+                    var error = JSONUtil.parseObj(content);
+                    String parsedCode = error.getStr("code");
+                    String parsedStage = error.getStr("stage");
+                    if (parsedCode != null && !parsedCode.isBlank()) {
+                        code = parsedCode;
+                    }
+                    if (parsedStage != null && !parsedStage.isBlank()) {
+                        stage = parsedStage;
+                    }
+                }
+            } catch (Exception ignored) {
+                // Plain-text errors from other MCP servers retain the generic code.
+            }
+            return failure(code, content, stage, latencyMs);
         }
     }
 }

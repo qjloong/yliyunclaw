@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.stereotype.Service;
 import vip.mate.agent.context.ChatOrigin;
+import vip.mate.auth.yliyun.McWorkspaceUserEntity;
+import vip.mate.auth.yliyun.YliyunUserMappingService;
 import vip.mate.tool.builtin.ToolExecutionContext;
 
 import java.security.KeyFactory;
@@ -57,12 +59,16 @@ import java.util.UUID;
 @Service
 public class McpIdentityForwardService {
 
+    /** Optional ToolContext key used to correlate MateClaw, MCP and cloud logs. */
+    public static final String TRACE_ID_CONTEXT_KEY = "_mateclaw_trace_id";
+
     /** Trust levels carried in the JWT {@code trust} claim / plaintext prefix. */
     static final String TRUST_AUTHENTICATED = "authenticated";
     static final String TRUST_ANONYMOUS = "anonymous";
     static final String TRUST_EXTERNAL = "external";
 
     private final McpIdentityForwardProperties properties;
+    private final YliyunUserMappingService yliyunUserMappingService;
 
     /**
      * Lazily parsed signing key; {@code null} until first successful parse or
@@ -80,8 +86,10 @@ public class McpIdentityForwardService {
      */
     private volatile String lastAttemptedPem;
 
-    public McpIdentityForwardService(McpIdentityForwardProperties properties) {
+    public McpIdentityForwardService(McpIdentityForwardProperties properties,
+                                     YliyunUserMappingService yliyunUserMappingService) {
         this.properties = properties;
+        this.yliyunUserMappingService = yliyunUserMappingService;
     }
 
     public boolean forwardsTo(Long serverId, String serverName) {
@@ -96,8 +104,11 @@ public class McpIdentityForwardService {
     public record Injection(String key, String value) {}
 
     /** A typed identity resolved from the request origin. Empty = inject nothing. */
-    record ResolvedIdentity(String subject, String trust, String channelType) {
-        static final ResolvedIdentity NONE = new ResolvedIdentity(null, null, null);
+    record ResolvedIdentity(String subject, String trust, String channelType,
+                            Long mateclawUserId, String yliyunUserId,
+                            String tenantId, Long workspaceId) {
+        static final ResolvedIdentity NONE =
+                new ResolvedIdentity(null, null, null, null, null, null, null);
         boolean present() { return subject != null && !subject.isBlank(); }
     }
 
@@ -135,12 +146,22 @@ public class McpIdentityForwardService {
         // the username when only the ThreadLocal path supplied identity.
         if ("web".equals(channel)) {
             if (origin.requesterUserId() != null) {
+                Optional<McWorkspaceUserEntity> mapping =
+                        yliyunUserMappingService.findMappingByMateUserId(origin.requesterUserId());
+                if (mapping.isEmpty()) {
+                    log.warn("[McpIdentity] authenticated MateClaw user {} has no unambiguous Yliyun mapping",
+                            origin.requesterUserId());
+                    return ResolvedIdentity.NONE;
+                }
+                McWorkspaceUserEntity cloud = mapping.get();
                 return new ResolvedIdentity(String.valueOf(origin.requesterUserId()),
-                        TRUST_AUTHENTICATED, "web");
+                        TRUST_AUTHENTICATED, "web", origin.requesterUserId(),
+                        cloud.getYliyunUserId(), cloud.getYliyunTenantId(), cloud.getWorkspaceId());
             }
             String user = ToolExecutionContext.username(ctx);
             return user != null && !user.isBlank()
-                    ? new ResolvedIdentity(user, TRUST_AUTHENTICATED, "web")
+                    ? new ResolvedIdentity(user, TRUST_AUTHENTICATED, "web",
+                            null, null, null, origin.workspaceId())
                     : ResolvedIdentity.NONE;
         }
         // webchat visitor ("api") or IM sender (feishu/wecom/…): external id,
@@ -151,7 +172,8 @@ public class McpIdentityForwardService {
             return ResolvedIdentity.NONE;
         }
         String trust = "api".equals(channel) ? TRUST_ANONYMOUS : TRUST_EXTERNAL;
-        return new ResolvedIdentity(requester, trust, channel);
+        return new ResolvedIdentity(requester, trust, channel,
+                null, null, null, origin.workspaceId());
     }
 
     /**
@@ -170,7 +192,7 @@ public class McpIdentityForwardService {
             return Optional.of(new Injection(McpIdentityForwardProperties.USER_ARG,
                     id.trust() + ":" + id.subject()));
         }
-        String jwt = mint(id, audience);
+        String jwt = mint(id, audience, traceId(ctx));
         if (jwt == null) {
             return Optional.empty();   // fail-closed: token mode but no key
         }
@@ -178,7 +200,7 @@ public class McpIdentityForwardService {
     }
 
     /** Mint a short-lived RS256 JWT, or {@code null} if the key is unavailable. */
-    private String mint(ResolvedIdentity id, String audience) {
+    private String mint(ResolvedIdentity id, String audience, String traceId) {
         PrivateKey key = signingKey();
         if (key == null) {
             return null;
@@ -193,6 +215,16 @@ public class McpIdentityForwardService {
                     .audience().add(audience).and()
                     .claim("trust", id.trust())
                     .claim("channel_type", id.channelType())
+                    // Snowflake ids routinely exceed JavaScript's safe integer
+                    // range. Serialize cross-runtime identifiers as decimal
+                    // strings so the MCP service never rounds an identity.
+                    .claim("mateclaw_user_id", id.mateclawUserId() != null
+                            ? id.mateclawUserId().toString() : null)
+                    .claim("yliyun_user_id", id.yliyunUserId())
+                    .claim("tenant_id", id.tenantId())
+                    .claim("workspace_id", id.workspaceId() != null
+                            ? id.workspaceId().toString() : null)
+                    .claim("trace_id", traceId)
                     .id(UUID.randomUUID().toString())
                     .issuedAt(Date.from(now))
                     .expiration(Date.from(now.plus(Duration.ofSeconds(Math.max(1, t.getTtlSeconds())))))
@@ -202,6 +234,20 @@ public class McpIdentityForwardService {
             log.error("[McpIdentity] failed to mint identity token: {}", e.getMessage());
             return null;
         }
+    }
+
+    private String traceId(ToolContext ctx) {
+        if (ctx != null && ctx.getContext() != null) {
+            Object explicit = ctx.getContext().get(TRACE_ID_CONTEXT_KEY);
+            if (explicit instanceof String value && !value.isBlank()) {
+                return value;
+            }
+        }
+        ChatOrigin origin = ChatOrigin.from(ctx);
+        if (origin.conversationId() != null && !origin.conversationId().isBlank()) {
+            return origin.conversationId();
+        }
+        return UUID.randomUUID().toString();
     }
 
     /**

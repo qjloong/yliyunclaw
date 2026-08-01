@@ -327,6 +327,7 @@ export default {
     },
     uploadFailed: '文件上传失败',
     dropToUpload: '拖放文件或文件夹到此处',
+    cloudAttachment: '云盘附件',
     copyFailed: '复制失败',
     datePinned: '置顶',
     dateToday: '今天',
@@ -1959,6 +1960,26 @@ export default {
     actions: {
       test: '测试连接',
       testing: '测试中...',
+      diagnose: '分层诊断',
+    },
+    diagnostics: {
+      title: '云盘 MCP 分层诊断',
+      running: '正在依次检查配置、传输、协议、当前用户身份和只读权限…',
+      allPassed: '全部检查通过，当前用户可以调用云盘 MCP。',
+      hasFailures: '存在未通过的检查，请按失败步骤的建议处理。',
+      suggestion: '处理建议',
+      rerun: '重新诊断',
+      requestFailed: '启动 MCP 诊断失败',
+      traceId: '关联追踪 ID',
+      includeWrite: '重新诊断时包含可回滚写入检查（创建一个临时目录并立即移入回收站）',
+      stages: {
+        config: '连接配置',
+        transport: '网络与传输',
+        protocol: 'MCP 协议与工具发现',
+        identity: '当前用户身份',
+        read: '只读工具权限',
+        write: '可回滚写入权限',
+      },
     },
     testResult: {
       success: '连接成功',
@@ -4399,6 +4420,8 @@ export default {
     list_workspace_memory_files: '列出记忆文件',
 
     // Files & shell
+    yliyun_attachment_read: '读取云盘附件',
+    yliyun_attachment_list: '读取云盘文件夹',
     read_file: '读取文件',
     execute_shell_command: '执行命令',
     extract_document_text: '提取文档内容',

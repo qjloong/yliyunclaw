@@ -2,7 +2,12 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
 import { mcpApi } from '@/api/index'
-import type { McpServer, McpServerForm, McpTestResult } from '@/views/mcp/types'
+import type {
+  McpDiagnosticResult,
+  McpServer,
+  McpServerForm,
+  McpTestResult,
+} from '@/views/mcp/types'
 import { mcpCatalog, type McpCatalogEntry } from '@/views/mcp/catalog'
 
 /**
@@ -18,6 +23,8 @@ export function useMcpServers() {
   const isRefreshing = ref(false)
   const testingId = ref<number | null>(null)
   const testResult = ref<McpTestResult | null>(null)
+  const diagnosingId = ref<number | null>(null)
+  const diagnosticResult = ref<McpDiagnosticResult | null>(null)
 
   const search = ref('')
   const pageSize = ref(12)
@@ -203,6 +210,19 @@ export function useMcpServers() {
     }
   }
 
+  async function diagnoseServer(server: McpServer, includeWrite = false) {
+    diagnosingId.value = server.id
+    diagnosticResult.value = null
+    try {
+      const res: any = await mcpApi.diagnostics(includeWrite)
+      diagnosticResult.value = (res?.data ?? res) as McpDiagnosticResult
+    } catch (e: any) {
+      mcToast.error(e?.message || t('mcp.diagnostics.requestFailed'))
+    } finally {
+      diagnosingId.value = null
+    }
+  }
+
   return {
     // state
     installed,
@@ -210,6 +230,8 @@ export function useMcpServers() {
     isRefreshing,
     testingId,
     testResult,
+    diagnosingId,
+    diagnosticResult,
     search,
     pageSize,
     installedPage,
@@ -226,5 +248,6 @@ export function useMcpServers() {
     removeServer,
     toggleServer,
     testServer,
+    diagnoseServer,
   }
 }

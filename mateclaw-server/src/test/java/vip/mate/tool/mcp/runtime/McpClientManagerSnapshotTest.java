@@ -10,6 +10,7 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.context.ApplicationEventPublisher;
 import vip.mate.tool.mcp.event.McpConnectionLostEvent;
+import vip.mate.auth.yliyun.YliyunUserMappingService;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -38,7 +40,8 @@ class McpClientManagerSnapshotTest {
     void staleListToolsServesSnapshotAndRequestsReconnect() throws Exception {
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         McpClientManager manager = new McpClientManager(publisher,
-                new McpIdentityForwardService(new McpIdentityForwardProperties()),
+                new McpIdentityForwardService(new McpIdentityForwardProperties(),
+                        mock(YliyunUserMappingService.class)),
                 null, null);
 
         // A client whose connection went stale: every listTools() throws.
@@ -60,6 +63,31 @@ class McpClientManagerSnapshotTest {
 
         // A reconnect was requested for exactly this server.
         verify(publisher, times(1)).publishEvent(any(McpConnectionLostEvent.class));
+    }
+
+    @Test
+    @DisplayName("structured MCP tool errors preserve their domain code and stage")
+    void structuredToolErrorsPreserveDomainMetadata() {
+        McpClientManager.ToolCallResult result =
+                McpClientManager.ToolCallResult.fromToolError("""
+                        {"code":"PERMISSION_DENIED","message":"无权操作","stage":"cloud.authorization"}
+                        """, 17);
+
+        assertFalse(result.success());
+        assertEquals("PERMISSION_DENIED", result.code());
+        assertEquals("cloud.authorization", result.stage());
+        assertEquals(17, result.latencyMs());
+    }
+
+    @Test
+    @DisplayName("plain text MCP tool errors keep the generic fallback")
+    void plainToolErrorsKeepGenericFallback() {
+        McpClientManager.ToolCallResult result =
+                McpClientManager.ToolCallResult.fromToolError("upstream failed", 9);
+
+        assertFalse(result.success());
+        assertEquals("MCP_TOOL_ERROR", result.code());
+        assertEquals("mcp.tool", result.stage());
     }
 
     private static Object field(McpClientManager manager, String name) throws Exception {

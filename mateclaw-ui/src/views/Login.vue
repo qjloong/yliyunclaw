@@ -138,7 +138,11 @@ async function applyLogin(data: { token: string; id: string | number; username: 
   localStorage.setItem('token', data.token)
   localStorage.setItem('userId', String(data.id || '1'))
   localStorage.setItem('username', data.username)
+  localStorage.setItem('displayName', data.username)
   localStorage.setItem('role', data.role || 'user')
+  localStorage.removeItem('tenantName')
+  localStorage.removeItem('cloudUserId')
+  localStorage.removeItem('cloudTenantId')
   systemSettingsStore.load()
   try {
     await workspaceStore.fetchWorkspaces()

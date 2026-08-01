@@ -65,8 +65,10 @@
           :key="server.id"
           :server="server"
           :testing="testingId === server.id"
+          :diagnosing="diagnosingId === server.id"
           @edit="openEditModal"
           @test="testServer"
+          @diagnose="openDiagnostics"
           @toggle="toggleServer"
           @set-tier="setServerTier"
         />
@@ -115,6 +117,73 @@
       @delete="onDelete"
     />
 
+    <el-dialog
+      v-model="diagnosticsVisible"
+      :title="t('mcp.diagnostics.title')"
+      width="min(640px, 92vw)"
+      destroy-on-close
+    >
+      <div v-if="diagnosingId !== null" class="diagnostic-loading">
+        {{ t('mcp.diagnostics.running') }}
+      </div>
+      <template v-else-if="diagnosticResult">
+        <div
+          class="diagnostic-summary"
+          :class="diagnosticResult.success ? 'diagnostic-summary--ok' : 'diagnostic-summary--fail'"
+        >
+          {{
+            diagnosticResult.success
+              ? t('mcp.diagnostics.allPassed')
+              : t('mcp.diagnostics.hasFailures')
+          }}
+        </div>
+        <div class="diagnostic-trace">
+          <span>{{ t('mcp.diagnostics.traceId') }}</span>
+          <code>{{ diagnosticResult.traceId }}</code>
+        </div>
+        <ol class="diagnostic-stages">
+          <li
+            v-for="stage in diagnosticResult.stages"
+            :key="stage.stage"
+            class="diagnostic-stage"
+          >
+            <span
+              class="diagnostic-stage__status"
+              :class="stage.success ? 'diagnostic-stage__status--ok' : 'diagnostic-stage__status--fail'"
+            >
+              {{ stage.success ? '✓' : '!' }}
+            </span>
+            <div class="diagnostic-stage__body">
+              <div class="diagnostic-stage__head">
+                <strong>{{ diagnosticStageLabel(stage.stage) }}</strong>
+                <span v-if="stage.latencyMs">{{ stage.latencyMs }} ms</span>
+              </div>
+              <p>{{ stage.message }}</p>
+              <p v-if="stage.suggestion" class="diagnostic-stage__suggestion">
+                {{ t('mcp.diagnostics.suggestion') }}：{{ stage.suggestion }}
+              </p>
+            </div>
+          </li>
+        </ol>
+      </template>
+      <label class="diagnostic-write-option">
+        <input v-model="includeWriteDiagnostic" type="checkbox" />
+        <span>{{ t('mcp.diagnostics.includeWrite') }}</span>
+      </label>
+      <template #footer>
+        <button class="btn-secondary" @click="diagnosticsVisible = false">
+          {{ t('common.close') }}
+        </button>
+        <button
+          class="btn-primary"
+          :disabled="diagnosingId !== null || !diagnosticsServer"
+          @click="diagnosticsServer && diagnoseServer(diagnosticsServer, includeWriteDiagnostic)"
+        >
+          {{ t('mcp.diagnostics.rerun') }}
+        </button>
+      </template>
+    </el-dialog>
+
     <transition name="toast">
       <div
         v-if="testResult"
@@ -157,6 +226,8 @@ const {
   isRefreshing,
   testingId,
   testResult,
+  diagnosingId,
+  diagnosticResult,
   search,
   pageSize,
   installedPage,
@@ -170,12 +241,16 @@ const {
   saveServer,
   removeServer,
   testServer,
+  diagnoseServer,
   toggleServer,
 } = useMcpServers()
 
 const modalVisible = ref(false)
 const editingServer = ref<McpServer | null>(null)
 const catalogPrefill = ref<McpCatalogEntry | null>(null)
+const diagnosticsVisible = ref(false)
+const diagnosticsServer = ref<McpServer | null>(null)
+const includeWriteDiagnostic = ref(false)
 
 const installedTotal = computed(() => filteredInstalled.value.length)
 const catalogTotal = computed(() => filteredCatalog.value.length)
@@ -197,6 +272,18 @@ function openFromCatalog(entry: McpCatalogEntry) {
 }
 function openDocs(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function openDiagnostics(server: McpServer) {
+  diagnosticsServer.value = server
+  diagnosticsVisible.value = true
+  diagnoseServer(server, false)
+}
+
+function diagnosticStageLabel(stage: string) {
+  const key = `mcp.diagnostics.stages.${stage}`
+  const translated = t(key)
+  return translated === key ? stage : translated
 }
 
 async function onSave(form: McpServerForm, editing: McpServer | null) {
@@ -350,6 +437,84 @@ onMounted(reload)
 .toast-leave-active { transition: all 0.25s ease; }
 .toast-enter-from,
 .toast-leave-to { opacity: 0; transform: translateY(16px); }
+
+.diagnostic-loading {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--mc-text-secondary);
+}
+.diagnostic-summary {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.diagnostic-summary--ok { color: #047857; background: #ecfdf5; }
+.diagnostic-summary--fail { color: #b91c1c; background: #fef2f2; }
+.diagnostic-trace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--mc-text-tertiary);
+  font-size: 12px;
+}
+.diagnostic-trace code {
+  overflow-wrap: anywhere;
+  color: var(--mc-text-secondary);
+}
+.diagnostic-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.diagnostic-stage {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--mc-border-light);
+}
+.diagnostic-stage:last-child { border-bottom: none; }
+.diagnostic-stage__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+}
+.diagnostic-stage__status--ok { background: #10b981; }
+.diagnostic-stage__status--fail { background: #ef4444; }
+.diagnostic-stage__body { min-width: 0; flex: 1; }
+.diagnostic-stage__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+.diagnostic-stage__head span { color: var(--mc-text-tertiary); font-size: 12px; }
+.diagnostic-stage__body p {
+  margin: 4px 0 0;
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.diagnostic-stage__suggestion { color: #b45309 !important; }
+.diagnostic-write-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.diagnostic-write-option input { margin-top: 2px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }

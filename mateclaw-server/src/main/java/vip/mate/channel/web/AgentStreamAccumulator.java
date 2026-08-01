@@ -282,6 +282,37 @@ public final class AgentStreamAccumulator {
             if (!warning.isBlank()) {
                 warnings.add(warning);
             }
+        } else if ("cloud_attachment_started".equals(eventType)) {
+            // Deterministic cloud attachment preparation happens before the
+            // Agent graph. Persist it as a visible execution segment only; it
+            // must not enter provider tool-call history.
+            currentPhase = "preparing_context";
+            sink.updatePhase(conversationId, currentPhase);
+            finalizeRunningSegments("thinking", "content");
+            var seg = newSegment("tool_call");
+            seg.put("toolCallId", String.valueOf(data.getOrDefault("toolCallId", "")));
+            seg.put("toolName", data.getOrDefault("toolName", ""));
+            seg.put("toolArgs", data.getOrDefault("arguments", ""));
+            segments.add(seg);
+        } else if ("cloud_attachment_completed".equals(eventType)) {
+            String toolCallId = String.valueOf(data.getOrDefault("toolCallId", ""));
+            String toolName = String.valueOf(data.getOrDefault("toolName", ""));
+            for (int i = segments.size() - 1; i >= 0; i--) {
+                var seg = segments.get(i);
+                if (!"tool_call".equals(seg.get("type"))) continue;
+                boolean matches = (!toolCallId.isEmpty()
+                        && toolCallId.equals(String.valueOf(seg.getOrDefault("toolCallId", ""))))
+                        || (toolCallId.isEmpty()
+                        && "running".equals(seg.get("status"))
+                        && toolName.equals(seg.get("toolName")));
+                if (matches) {
+                    boolean success = !Boolean.FALSE.equals(data.getOrDefault("success", true));
+                    seg.put("status", success ? "completed" : "error");
+                    seg.put("toolResult", data.getOrDefault("result", ""));
+                    seg.put("toolSuccess", success);
+                    break;
+                }
+            }
         } else if ("tool_call_started".equals(eventType)) {
             // toolCalls（兼容）
             Map<String, Object> tc = new LinkedHashMap<>();

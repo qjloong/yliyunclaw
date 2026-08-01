@@ -1,21 +1,30 @@
 <template>
-  <div class="mc-page-shell chat-console-shell">
+  <div
+    class="mc-page-shell chat-console-shell"
+    :class="{ 'is-cloud-embedded': props.embedded }"
+  >
     <div class="mc-page-frame chat-console-frame">
       <div class="chat-layout mc-surface-card">
         <!-- 移动端会话面板遮罩 -->
         <Transition name="fade">
-          <div v-if="isMobile && convPanelOpen" class="conv-backdrop" @click="convPanelOpen = false"></div>
+          <div
+            v-if="(props.embedded && embeddedConvPanelOpen) || (!props.embedded && isMobile && convPanelOpen)"
+            class="conv-backdrop"
+            @click="closeConversationPanel"
+          ></div>
         </Transition>
 
     <!-- 会话侧边栏 -->
     <ConversationSidebar
-      :conversations="conversations"
+      v-if="!props.embedded || embeddedConvPanelOpen"
+      :class="{ 'embedded-conversation-sidebar': props.embedded }"
+      :conversations="sidebarConversations"
       :current-conversation-id="currentConversationId"
       :agents="agents"
       :selected-agent-id="selectedAgentId"
-      :collapsed="convPanelCollapsed"
-      :mobile-open="convPanelOpen"
-      :is-mobile="isMobile"
+      :collapsed="props.embedded ? false : convPanelCollapsed"
+      :mobile-open="props.embedded ? embeddedConvPanelOpen : convPanelOpen"
+      :is-mobile="props.embedded || isMobile"
       @select="selectConversation"
       @new-chat="newConversation"
       @agent-picked="onAgentPicked"
@@ -44,7 +53,16 @@
       <!-- 头部 -->
       <div class="chat-header">
         <div class="chat-header-left">
-          <button v-if="isMobile" class="conv-toggle-btn" @click="convPanelOpen = !convPanelOpen" :title="$t('chat.conversations')">
+          <button
+            v-if="props.embedded"
+            class="conv-toggle-btn"
+            @click="embeddedConvPanelOpen = !embeddedConvPanelOpen"
+            :title="$t('chat.conversations')"
+            :aria-label="$t('chat.conversations')"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+          </button>
+          <button v-if="!props.embedded && isMobile" class="conv-toggle-btn" @click="convPanelOpen = !convPanelOpen" :title="$t('chat.conversations')">
             <el-icon><ChatDotRound /></el-icon>
           </button>
           <div class="chat-stage-copy" v-if="currentAgent">
@@ -259,6 +277,7 @@
 
         <!-- 运行总览侧栏：计划进度 + 子 Agent 实时状态 -->
         <RunOverviewPanel
+          v-if="!props.embedded"
           :messages="messages"
           :is-generating="isGenerating"
           :agent-type="currentAgent?.agentType"
@@ -291,6 +310,11 @@ import { mcToast } from '@/composables/useMcToast'
 import { ChatDotRound, Delete, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { conversationApi, agentApi, modelApi, chatApi, cronJobApi, approvalApi } from '@/api/index'
 import { copyToClipboard } from '@/utils/clipboard'
+import {
+  cloudContextKey,
+  cloudContextPaths,
+  shouldQueueManagedCloudContext,
+} from '@/utils/cloudContextPolicy'
 import { useFileDrop } from '@/composables/useFileDrop'
 import { useIsMobile, useMediaQuery, BREAKPOINTS } from '@/composables/useBreakpoint'
 import { useChat } from '@/composables/chat/useChat'
@@ -321,11 +345,27 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import GoalSetInlinePrompt from '@/components/goal/GoalSetInlinePrompt.vue'
 import GoalSystemLine from '@/components/goal/GoalSystemLine.vue'
 
+type CloudContext = {
+  fileId?: string
+  fileName?: string
+  folderId?: string
+  folderName?: string
+}
+
+const props = withDefaults(defineProps<{
+  embedded?: boolean
+  cloudContext?: CloudContext
+}>(), {
+  embedded: false,
+  cloudContext: () => ({}),
+})
+
 // ============ Talk Mode ============
 const showTalkMode = ref(false)
 
 // ============ 移动端 & 响应式状态 ============
 const convPanelOpen = ref(false)
+const embeddedConvPanelOpen = ref(false)
 const convPanelCollapsed = ref(localStorage.getItem('mc-conv-collapsed') === 'true')
 const userExplicitConvCollapse = ref(localStorage.getItem('mc-conv-collapsed') === 'true')
 
@@ -344,6 +384,10 @@ watch(compactViewport, (compact) => {
 }, { immediate: true })
 
 function toggleConvPanel() {
+  if (props.embedded) {
+    embeddedConvPanelOpen.value = !embeddedConvPanelOpen.value
+    return
+  }
   convPanelCollapsed.value = !convPanelCollapsed.value
   userExplicitConvCollapse.value = convPanelCollapsed.value
   localStorage.setItem('mc-conv-collapsed', String(convPanelCollapsed.value))
@@ -378,6 +422,18 @@ const suggestions = computed(() => {
 // ============ 状态 ============
 const router = useRouter()
 const route = useRoute()
+const chatRoutePath = computed(() => props.embedded ? '/embed/cloud-agent' : '/chat')
+const pendingRouteCloudContext = ref<CloudContext>({
+  fileId: route.query.fileId ? String(route.query.fileId) : undefined,
+  fileName: route.query.fileName ? String(route.query.fileName) : undefined,
+  folderId: route.query.folderId ? String(route.query.folderId) : undefined,
+  folderName: route.query.folderName ? String(route.query.folderName) : undefined,
+})
+// The selected cloud resource remains active route/host context, but its
+// attachment card is injected only on the first turn (and again after a host
+// resource switch). Keeping these concerns separate prevents every follow-up
+// user message from repeating the same attachment.
+const activeCloudContext = ref<CloudContext>({ ...pendingRouteCloudContext.value })
 const { t } = useI18n()
 const wsStore = useWorkspaceStore()
 
@@ -397,6 +453,12 @@ const workspaceBarPath = computed(() => wsStore.currentWorkspace?.basePath || ''
 const agents = ref<Agent[]>(cachedAgents.length > 0 ? [...cachedAgents] : [])
 const conversations = ref<Conversation[]>([])
 const selectedAgentId = ref<string | number>('')
+const sidebarConversations = computed(() => {
+  if (!props.embedded || !selectedAgentId.value) return conversations.value
+  return conversations.value.filter(
+    conversation => String(conversation.agentId || '') === String(selectedAgentId.value)
+  )
+})
 const currentConversationId = ref<string>('')
 const inputText = ref('')
 const modelSaving = ref(false)
@@ -751,7 +813,15 @@ const { startObserving: startMermaid, dispose: disposeMermaid } = useMermaidRend
 // Last-attempt draft, restored into the input box when the SSE error event
 // arrives async (sendChatMessage resolves on connect, the error fires later,
 // so the catch in handleSendMessage cannot recover input by itself).
-const pendingSendDraft = ref<{ input: string; attachments: any[] } | null>(null)
+type PendingSendDraft = {
+  input: string
+  attachments: ChatAttachment[]
+  conversationId: string
+  managedContextPaths: string[]
+  managedContextKey?: string
+  previousDeliveredContextKey?: string
+}
+const pendingSendDraft = ref<PendingSendDraft | null>(null)
 
 // 使用 useChat composable
 const {
@@ -779,8 +849,7 @@ const {
     // user hasn't typed something else in the meantime.
     if (meta.reason === 'error' && pendingSendDraft.value) {
       const draft = pendingSendDraft.value
-      if (!inputText.value) inputText.value = draft.input
-      if (pendingAttachments.value.length === 0) pendingAttachments.value = draft.attachments
+      restoreFailedSendDraft(draft)
     }
     if (meta.reason !== 'error') {
       pendingSendDraft.value = null
@@ -904,7 +973,11 @@ const currentModelSupportsThinking = computed<boolean>(() => {
   return Boolean(hit?.supportsThinking)
 })
 
-const userInitial = computed(() => (localStorage.getItem('username') || 'U').charAt(0).toUpperCase())
+const userInitial = computed(() =>
+  (localStorage.getItem('displayName') || localStorage.getItem('username') || 'U')
+    .charAt(0)
+    .toUpperCase()
+)
 
 const activeModelValue = computed(() => {
   const providerId = activeModels.value?.activeLlm?.providerId
@@ -1317,9 +1390,19 @@ onActivated(async () => {
 })
 
 watch(() => route.query, () => {
+  if (route.path !== chatRoutePath.value) return
   // If a fresh action arrives (e.g. user re-fires Ctrl+K via the URL while
   // the view is already alive), pick it up immediately.
   captureRouteAction()
+  if (route.query.fileId || route.query.folderId) {
+    pendingRouteCloudContext.value = {
+      fileId: route.query.fileId ? String(route.query.fileId) : undefined,
+      fileName: route.query.fileName ? String(route.query.fileName) : undefined,
+      folderId: route.query.folderId ? String(route.query.folderId) : undefined,
+      folderName: route.query.folderName ? String(route.query.folderName) : undefined,
+    }
+    activeCloudContext.value = { ...pendingRouteCloudContext.value }
+  }
   if (pendingRouteAction) applyPendingRouteAction()
   void hydrateStateFromRoute()
 })
@@ -1630,7 +1713,137 @@ async function refreshCurrentConversationMessages(conversationId: string) {
   }
 }
 
+function appendCloudContextAttachments(context: CloudContext) {
+  if (context.fileId) {
+    const path = `yliyun://file/${context.fileId}`
+    if (!pendingAttachments.value.some((item) => item.path === path)) {
+      pendingAttachments.value.push({
+        name: context.fileName || `云盘文件 #${context.fileId}`,
+        size: 0,
+        contentType: 'application/octet-stream',
+        storedName: `cloud:${context.fileId}`,
+        path,
+        url: '',
+        source: 'yliyun-mcp',
+      } as any)
+    }
+  }
+
+  if (context.folderId) {
+    const path = `yliyun://folder/${context.folderId}`
+    if (!pendingAttachments.value.some((item) => item.path === path)) {
+      pendingAttachments.value.push({
+        name: context.folderName || `云盘文件夹 #${context.folderId}`,
+        size: 0,
+        contentType: 'inode/directory',
+        storedName: `cloud-folder:${context.folderId}`,
+        path,
+        url: '',
+        source: 'yliyun-mcp',
+      } as any)
+    }
+  }
+}
+
+function closeConversationPanel() {
+  if (props.embedded) {
+    embeddedConvPanelOpen.value = false
+  } else {
+    convPanelOpen.value = false
+  }
+}
+
+const managedCloudContextPaths = new Set<string>()
+const deliveredManagedCloudContextByConversation = new Map<string, string>()
+
+function isCloudAttachment(attachment?: ChatAttachment) {
+  return Boolean(
+    attachment?.path?.startsWith('yliyun://file/')
+    || attachment?.path?.startsWith('yliyun://folder/')
+  )
+}
+
+function removePendingManagedCloudContextAttachments() {
+  if (managedCloudContextPaths.size > 0) {
+    pendingAttachments.value = pendingAttachments.value.filter(
+      item => !managedCloudContextPaths.has(item.path)
+    )
+  }
+  managedCloudContextPaths.clear()
+}
+
+function conversationContainsCloudContext(context: CloudContext) {
+  const expectedPaths = cloudContextPaths(context)
+  if (expectedPaths.length === 0) return false
+
+  return messages.value.some((message) => {
+    if (message.role !== 'user') return false
+    const messagePaths = new Set<string>()
+    for (const attachment of message.attachments || []) {
+      if (attachment.path) messagePaths.add(attachment.path)
+    }
+    for (const part of message.contentParts || []) {
+      if (
+        (part.type === 'file' || part.type === 'image' || part.type === 'video')
+        && part.path
+      ) {
+        messagePaths.add(part.path)
+      }
+    }
+    return expectedPaths.every(path => messagePaths.has(path))
+  })
+}
+
+function replaceManagedCloudContextAttachment(context: CloudContext) {
+  removePendingManagedCloudContextAttachments()
+  appendCloudContextAttachments(context)
+  if (context.fileId) managedCloudContextPaths.add(`yliyun://file/${context.fileId}`)
+  if (context.folderId) managedCloudContextPaths.add(`yliyun://folder/${context.folderId}`)
+}
+
+function reconcileManagedCloudContextAttachment(context: CloudContext) {
+  const nextKey = cloudContextKey(context)
+  const conversationId = currentConversationId.value
+  const lastDeliveredKey = conversationId
+    ? deliveredManagedCloudContextByConversation.get(conversationId)
+    : undefined
+  const conversationContainsContext = conversationContainsCloudContext(context)
+
+  if (!shouldQueueManagedCloudContext({
+    context,
+    lastDeliveredKey,
+    conversationContainsContext,
+  })) {
+    removePendingManagedCloudContextAttachments()
+    if (conversationId && nextKey && !lastDeliveredKey && conversationContainsContext) {
+      deliveredManagedCloudContextByConversation.set(conversationId, nextKey)
+    }
+    return
+  }
+
+  replaceManagedCloudContextAttachment(context)
+}
+
+watch(
+  () => props.cloudContext,
+  (context) => {
+    if (props.embedded) {
+      activeCloudContext.value = { ...context }
+    } else if (context.fileId || context.folderId) {
+      activeCloudContext.value = { ...context }
+    }
+    if (props.embedded) {
+      reconcileManagedCloudContextAttachment(context)
+      syncRouteState()
+      return
+    }
+    reconcileManagedCloudContextAttachment(context)
+  },
+  { deep: true, immediate: true }
+)
+
 async function hydrateStateFromRoute() {
+  if (route.path !== chatRoutePath.value) return
   let agentId = route.query.agentId ? String(route.query.agentId) : ''
   let conversationId = String(route.query.conversationId || '')
 
@@ -1665,11 +1878,19 @@ async function hydrateStateFromRoute() {
       try {
         const res: any = await conversationApi.listMessages(conversationId)
         if (currentConversationId.value !== conversationId) return
-      messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg, true))
+        messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg, true))
       } catch {
-        // 消息加载失败，保持空
+        // A cloud-host session mapping can outlive a deleted conversation.
+        // Embedded mode falls back to a fresh local session and immediately
+        // reports the replacement id back to the host.
+        if (props.embedded) {
+          currentConversationId.value = ''
+          messages.value = []
+          conversationId = ''
+        }
       }
       try {
+        if (!conversationId) throw new Error('conversation mapping is stale')
         if (currentConversationId.value !== conversationId) return
         const statusRes: any = await conversationApi.getStatus(conversationId)
         if (currentConversationId.value === conversationId && statusRes.data?.streamStatus === 'running') {
@@ -1687,59 +1908,48 @@ async function hydrateStateFromRoute() {
   }
 
   // Yliyun 云盘集成：从 URL 参数加载文件/文件夹上下文
-  const fileId = route.query.fileId as string | undefined
-  const fileName = route.query.fileName as string | undefined
-  const folderId = route.query.folderId as string | undefined
-  const folderName = route.query.folderName as string | undefined
+  const fileId = route.query.fileId
+    ? String(route.query.fileId)
+    : pendingRouteCloudContext.value.fileId || activeCloudContext.value.fileId
+  const fileName = route.query.fileName
+    ? String(route.query.fileName)
+    : pendingRouteCloudContext.value.fileName || activeCloudContext.value.fileName
+  const folderId = route.query.folderId
+    ? String(route.query.folderId)
+    : pendingRouteCloudContext.value.folderId || activeCloudContext.value.folderId
+  const folderName = route.query.folderName
+    ? String(route.query.folderName)
+    : pendingRouteCloudContext.value.folderName || activeCloudContext.value.folderName
 
   if (fileId || folderId) {
     if (!currentConversationId.value) newConversation()
+    activeCloudContext.value = { fileId, fileName, folderId, folderName }
+    reconcileManagedCloudContextAttachment(activeCloudContext.value)
+    pendingRouteCloudContext.value = {}
 
-    if (fileId && fileName) {
-      // 添加云盘文件为上下文附件
-      pendingAttachments.value.push({
-        name: fileName,
-        size: 0,
-        contentType: 'application/octet-stream',
-        storedName: `cloud:${fileId}`,
-        path: `yliyun://file/${fileId}`,
-        url: '',
-        source: 'yliyun-mcp',
-      } as any)
-    }
-
-    if (folderId && folderName) {
-      // 添加文件夹为上下文引用（仅列出，不建 KB）
-      pendingAttachments.value.push({
-        name: folderName,
-        size: 0,
-        contentType: 'inode/directory',
-        storedName: `cloud-folder:${folderId}`,
-        path: `yliyun://folder/${folderId}`,
-        url: '',
-        source: 'yliyun-mcp',
-      } as any)
-    }
-
-    // 清理 URL 中的文件参数，避免刷新后重复添加
-    const cleanQuery = { ...route.query }
-    delete cleanQuery.fileId
-    delete cleanQuery.fileName
-    delete cleanQuery.folderId
-    delete cleanQuery.folderName
-    router.replace({ path: '/chat', query: cleanQuery })
+    syncRouteState()
   }
 }
 
 function syncRouteState() {
+  if (route.path !== chatRoutePath.value) return
   const query: Record<string, string> = {}
+  for (const key of ['authSource', 'channelId', 'parentOrigin']) {
+    const value = route.query[key]
+    if (value != null && value !== '') query[key] = String(value)
+  }
   if (selectedAgentId.value) query.agentId = String(selectedAgentId.value)
   if (currentConversationId.value) query.conversationId = currentConversationId.value
-  router.replace({ path: '/chat', query })
+  if (activeCloudContext.value.fileId) query.fileId = activeCloudContext.value.fileId
+  if (activeCloudContext.value.fileName) query.fileName = activeCloudContext.value.fileName
+  if (activeCloudContext.value.folderId) query.folderId = activeCloudContext.value.folderId
+  if (activeCloudContext.value.folderName) query.folderName = activeCloudContext.value.folderName
+  router.replace({ path: chatRoutePath.value, query })
 }
 
 async function selectConversation(conv: Conversation) {
   if (isMobile.value) convPanelOpen.value = false
+  if (props.embedded) embeddedConvPanelOpen.value = false
   // 切换到不同会话：只清理本地 UI/SSE（resetForNewConversation 会 stream.disconnect + 清变量），
   // 但不 POST /chat/{A}/stop —— 让 A 的后台 agent run 跑到完成。
   // 用户之后回到 A：pollActivity / selectConversation 的 /status 探测会自动 reconnect 接回实时流；
@@ -1776,6 +1986,7 @@ async function selectConversation(conv: Conversation) {
     if (switchingAway || !isGenerating.value) {
       const convRunning = conv.streamStatus === 'running'
       messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg, convRunning))
+      reconcileManagedCloudContextAttachment(activeCloudContext.value)
     }
 
     // Hydrate pending approvals：恢复刷新后丢失的审批卡片（RFC-067 §4.9）
@@ -1889,16 +2100,19 @@ function newConversation() {
   resetForNewConversation()
   currentConversationId.value = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   messages.value = []
+  reconcileManagedCloudContextAttachment(activeCloudContext.value)
   // A fresh conversation defers to the selected agent's model (then the global
   // default) until the user explicitly picks one.
   userPickedModel.value = false
   applyConversationModel()
+  if (props.embedded) embeddedConvPanelOpen.value = false
 }
 
 // The sidebar performs the delete API call(s) and emits the removed ids.
 // Drop them from the local list and reset the chat area if the conversation
 // currently open was among those deleted.
 function onConversationsDeleted(ids: string[]) {
+  for (const id of ids) deliveredManagedCloudContextByConversation.delete(id)
   conversations.value = conversations.value.filter(c => !ids.includes(c.conversationId))
   if (ids.includes(currentConversationId.value)) {
     resetStreamingState()
@@ -1918,8 +2132,12 @@ async function clearMessages() {
     resetStreamingState()
     await conversationApi.clearMessages(currentConversationId.value)
     messages.value = []
+    deliveredManagedCloudContextByConversation.delete(currentConversationId.value)
+    reconcileManagedCloudContextAttachment(activeCloudContext.value)
   } catch {
     messages.value = []
+    deliveredManagedCloudContextByConversation.delete(currentConversationId.value)
+    reconcileManagedCloudContextAttachment(activeCloudContext.value)
   }
 }
 
@@ -2053,11 +2271,37 @@ async function handleSendMessage(content: string) {
   // 先暂存，发送成功后再清空（失败时恢复）
   const savedInput = inputText.value
   const savedAttachments = [...pendingAttachments.value]
+  const savedManagedContextPaths = [...managedCloudContextPaths].filter(
+    path => outgoingAttachments.some(attachment => attachment.path === path)
+  )
+  const managedContextKey = savedManagedContextPaths.length > 0
+    ? savedManagedContextPaths.join('|')
+    : undefined
+  const previousDeliveredContextKey = managedContextKey
+    ? deliveredManagedCloudContextByConversation.get(currentConversationId.value)
+    : undefined
   // Stash for async-error recovery in onStreamEnd (sync catch can't reach this).
-  pendingSendDraft.value = { input: savedInput, attachments: savedAttachments }
+  pendingSendDraft.value = {
+    input: savedInput,
+    attachments: savedAttachments,
+    conversationId: currentConversationId.value,
+    managedContextPaths: savedManagedContextPaths,
+    managedContextKey,
+    previousDeliveredContextKey,
+  }
+  if (managedContextKey) {
+    deliveredManagedCloudContextByConversation.set(
+      currentConversationId.value,
+      managedContextKey
+    )
+  }
   inputText.value = ''
   chatInputRef.value?.clear?.()
+  // All attachments are one-shot message payloads. The selected cloud resource
+  // remains in activeCloudContext and will be queued again only when the host
+  // switches files/folders or the user explicitly selects another attachment.
   pendingAttachments.value = []
+  managedCloudContextPaths.clear()
 
   try {
     await sendChatMessage(content, {
@@ -2078,12 +2322,11 @@ async function handleSendMessage(content: string) {
       })),
     })
     // 发送成功后释放 ObjectURL
-    revokeAllPreviewUrls()
+    revokeAllPreviewUrls(outgoingAttachments)
   } catch (e) {
     console.error('Send message failed:', e)
     // 发送失败：恢复输入和附件，用户不丢失已上传的文件
-    if (!inputText.value) inputText.value = savedInput
-    if (pendingAttachments.value.length === 0) pendingAttachments.value = savedAttachments
+    if (pendingSendDraft.value) restoreFailedSendDraft(pendingSendDraft.value)
   }
 }
 
@@ -2300,11 +2543,46 @@ function removeAttachment(key: string) {
   pendingAttachments.value = pendingAttachments.value.filter(
     a => a.storedName !== key && a.path !== key
   )
+  if (removed?.path === `yliyun://file/${activeCloudContext.value.fileId}`) {
+    activeCloudContext.value.fileId = undefined
+    activeCloudContext.value.fileName = undefined
+  }
+  if (removed?.path === `yliyun://folder/${activeCloudContext.value.folderId}`) {
+    activeCloudContext.value.folderId = undefined
+    activeCloudContext.value.folderName = undefined
+  }
+  if (removed?.path && isCloudAttachment(removed)) {
+    managedCloudContextPaths.delete(removed.path)
+    syncRouteState()
+  }
 }
 
-/** 释放所有 pending 附件的 ObjectURL */
-function revokeAllPreviewUrls() {
-  for (const a of pendingAttachments.value) {
+function restoreFailedSendDraft(draft: PendingSendDraft) {
+  if (!inputText.value) inputText.value = draft.input
+  if (draft.managedContextKey) {
+    if (draft.previousDeliveredContextKey) {
+      deliveredManagedCloudContextByConversation.set(
+        draft.conversationId,
+        draft.previousDeliveredContextKey
+      )
+    } else {
+      deliveredManagedCloudContextByConversation.delete(draft.conversationId)
+    }
+  }
+  if (pendingAttachments.value.length === 0) {
+    pendingAttachments.value = draft.attachments
+    managedCloudContextPaths.clear()
+    for (const path of draft.managedContextPaths) {
+      if (draft.attachments.some(attachment => attachment.path === path)) {
+        managedCloudContextPaths.add(path)
+      }
+    }
+  }
+}
+
+/** 释放附件的 ObjectURL */
+function revokeAllPreviewUrls(attachments: ChatAttachment[] = pendingAttachments.value) {
+  for (const a of attachments) {
     if (a.previewUrl?.startsWith('blob:')) {
       URL.revokeObjectURL(a.previewUrl)
     }
@@ -2321,7 +2599,10 @@ function buildOutgoingParts(text: string, attachments: ChatAttachment[]): Messag
       : 'file'
     parts.push({
       type: partType,
-      fileUrl: attachment.url,
+      // Cloud references have no HTTP download URL. Carry the typed path as
+      // the visible reference so the user bubble can render it immediately;
+      // the backend still resolves the authoritative `path` via OBO + MCP.
+      fileUrl: attachment.url || attachment.path,
       fileName: attachment.name,
       storedName: attachment.storedName,
       contentType: attachment.contentType,
@@ -2411,14 +2692,16 @@ function normalizeMessage(raw: Message, preserveGeneratingStatus?: boolean): Mes
   if (!msg.status) msg.status = 'completed'
 
   // 从 file/image/video contentParts 恢复 attachments（历史消息 API 不返回单独的 attachments 字段）
-  const fileParts = msg.contentParts.filter(p => (p.type === 'file' || p.type === 'image' || p.type === 'video') && p.fileUrl)
+  const fileParts = msg.contentParts.filter(
+    p => (p.type === 'file' || p.type === 'image' || p.type === 'video') && (p.fileUrl || p.path)
+  )
   if (fileParts.length > 0 && (!msg.attachments || msg.attachments.length === 0)) {
     msg.attachments = fileParts.map(p => ({
       name: p.fileName || 'unknown',
       size: typeof p.fileSize === 'number' ? p.fileSize : Number(p.fileSize) || 0,
-      url: p.fileUrl!,
+      url: p.fileUrl || '',
       storedName: p.storedName || '',
-      path: p.path || '',
+      path: p.path || p.fileUrl || '',
       contentType: p.contentType,
     }))
   }
@@ -2532,11 +2815,34 @@ function handleCodeCopy(e: MouseEvent) {
   overflow: hidden;
 }
 
+.chat-console-shell.is-cloud-embedded {
+  padding: 0;
+}
+
+.chat-console-shell.is-cloud-embedded .chat-console-frame {
+  height: 100%;
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .chat-layout {
   display: flex;
   height: 100%;
   overflow: hidden;
   min-height: 0;
+  position: relative;
+}
+
+.chat-console-shell.is-cloud-embedded :deep(.embedded-conversation-sidebar) {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 100;
+  width: min(292px, 86%);
+  min-width: min(292px, 86%);
+  transform: translateX(0);
+  box-shadow: 8px 0 28px rgb(28 46 78 / 18%);
 }
 
 .chat-area {

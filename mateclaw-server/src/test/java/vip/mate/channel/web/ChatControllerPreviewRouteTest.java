@@ -10,6 +10,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import vip.mate.agent.AgentService;
 import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.auth.yliyun.YliyunCloudAttachmentService;
 import vip.mate.memory.identity.MemoryOwnerResolver;
 import vip.mate.tool.document.preview.OfficePreviewService;
 import vip.mate.workspace.conversation.ConversationService;
@@ -62,7 +63,8 @@ class ChatControllerPreviewRouteTest {
                 mock(vip.mate.memory.event.ConversationCompletionPublisher.class),
                 mock(MemoryOwnerResolver.class),
                 uploadLocationResolver,
-                officePreviewService);
+                officePreviewService,
+                mock(YliyunCloudAttachmentService.class));
 
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }

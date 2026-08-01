@@ -140,6 +140,17 @@ public class McpServerService {
         return entity;
     }
 
+    public McpServerEntity getByName(String name) {
+        McpServerEntity entity = mcpServerMapper.selectOne(
+                new LambdaQueryWrapper<McpServerEntity>()
+                        .eq(McpServerEntity::getName, name)
+                        .eq(McpServerEntity::getDeleted, 0));
+        if (entity == null) {
+            throw new MateClawException("err.mcp.not_found", "MCP server 不存在: " + name);
+        }
+        return entity;
+    }
+
     public McpServerEntity create(McpServerEntity entity) {
         validateServer(entity);
         entity.setBuiltin(false);

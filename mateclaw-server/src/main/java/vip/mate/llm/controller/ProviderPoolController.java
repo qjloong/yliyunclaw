@@ -16,12 +16,14 @@ import vip.mate.llm.failover.ProviderHealthTracker;
 import vip.mate.llm.failover.ProviderHealthTracker.ProviderHealthSnapshot;
 import vip.mate.llm.failover.ProviderInitProbe;
 import vip.mate.llm.model.ProviderInfoDTO;
+import vip.mate.llm.model.TestResult;
+import vip.mate.llm.service.ModelDiscoveryService;
 import vip.mate.llm.service.ModelProviderService;
+import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 
 /**
  * RFC-009 Phase 4 — read-only diagnostic endpoint for the provider pool.
@@ -41,17 +43,21 @@ import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 @RestController
 @RequestMapping("/api/v1/llm/provider-pool")
 @RequiredArgsConstructor
+@RequireWorkspaceRole(value = "admin", explicitWorkspace = true)
 public class ProviderPoolController {
 
     private final AvailableProviderPool providerPool;
     private final ProviderHealthTracker healthTracker;
     private final ModelProviderService providerService;
     private final ProviderInitProbe initProbe;
+    private final ModelDiscoveryService modelDiscoveryService;
 
     @Operation(summary = "查询所有 provider 的池状态 + 冷却信息")
     @GetMapping
-    @RequireGlobalAdmin
     public R<List<ProviderPoolEntryDTO>> snapshot() {
+        if (providerService.isWorkspaceScoped()) {
+            return R.ok(workspaceSnapshot());
+        }
         Map<String, RemovalReason> poolView = providerPool.snapshot();
         Map<String, ProviderHealthSnapshot> healthView = healthTracker.snapshot();
         List<ProviderInfoDTO> providers = providerService.listProviders();
@@ -83,8 +89,17 @@ public class ProviderPoolController {
 
     @Operation(summary = "手动重新探测某个 provider，立即更新池状态")
     @PostMapping("/{providerId}/reprobe")
-    @RequireGlobalAdmin
     public R<ReprobeResultDTO> reprobe(@PathVariable String providerId) {
+        if (providerService.isWorkspaceScoped()) {
+            TestResult result = modelDiscoveryService.testConnection(providerId);
+            return R.ok(new ReprobeResultDTO(
+                    providerId,
+                    result.isSuccess(),
+                    result.getLatencyMs(),
+                    result.getErrorMessage(),
+                    result.isSuccess()
+            ));
+        }
         ProbeResult result = initProbe.probeOne(providerId);
         return R.ok(new ReprobeResultDTO(
                 providerId,
@@ -93,6 +108,33 @@ public class ProviderPoolController {
                 result.errorMessage(),
                 providerPool.contains(providerId)
         ));
+    }
+
+    /**
+     * Tenant workspaces deliberately do not read the process-global failover pool.
+     * Their provider credentials and availability are workspace-owned, so a probe
+     * or cooldown in one tenant cannot evict the same provider id for another.
+     */
+    private List<ProviderPoolEntryDTO> workspaceSnapshot() {
+        List<ProviderInfoDTO> providers = providerService.listProviders();
+        List<ProviderPoolEntryDTO> rows = new ArrayList<>(providers.size());
+        for (ProviderInfoDTO provider : providers) {
+            boolean usable = Boolean.TRUE.equals(provider.getEnabled())
+                    && Boolean.TRUE.equals(provider.getConfigured())
+                    && Boolean.TRUE.equals(provider.getAvailable());
+            rows.add(new ProviderPoolEntryDTO(
+                    provider.getId(),
+                    provider.getName(),
+                    usable,
+                    usable ? null : "WORKSPACE_CONFIGURATION",
+                    usable ? null : provider.getUnavailableReason(),
+                    null,
+                    false,
+                    0L,
+                    0L
+            ));
+        }
+        return rows;
     }
 
     /** Result of a manual reprobe. {@code inPool} reflects pool state after the probe ran. */

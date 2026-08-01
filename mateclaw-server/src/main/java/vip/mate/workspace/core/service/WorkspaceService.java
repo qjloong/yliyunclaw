@@ -295,12 +295,79 @@ public class WorkspaceService {
         return member;
     }
 
+    /**
+     * Upsert a membership controlled by a trusted external identity provider.
+     *
+     * <p>This path deliberately allows {@code owner}: interactive member
+     * management must never grant that role, but the Yliyun federation bridge
+     * needs to reconcile the authoritative tenant administrator lifecycle.
+     * Callers must derive {@code role} from a verified, server-signed claim.</p>
+     */
+    @Transactional
+    public WorkspaceMemberEntity syncFederatedMemberRole(
+            Long workspaceId, Long userId, String role) {
+        getById(workspaceId);
+        String normalizedRole = normalizeFederatedRole(role);
+        WorkspaceMemberEntity member = getMembership(workspaceId, userId);
+        if (member == null) {
+            member = new WorkspaceMemberEntity();
+            member.setWorkspaceId(workspaceId);
+            member.setUserId(userId);
+            member.setRole(normalizedRole);
+            member.setDeleted(0);
+            memberMapper.insert(member);
+        } else if (!normalizedRole.equals(member.getRole())) {
+            member.setRole(normalizedRole);
+            memberMapper.updateById(member);
+        }
+        evictMembershipCache(workspaceId, userId);
+        return member;
+    }
+
+    /**
+     * Atomically assign (or clear) the owner of a federated workspace while
+     * keeping the owner column and membership role consistent.
+     */
+    @Transactional
+    public void assignFederatedOwner(
+            Long workspaceId, Long newOwnerUserId, String previousOwnerRole) {
+        WorkspaceEntity workspace = workspaceMapper.selectOne(
+                new LambdaQueryWrapper<WorkspaceEntity>()
+                        .eq(WorkspaceEntity::getId, workspaceId)
+                        .last("FOR UPDATE"));
+        if (workspace == null) {
+            throw new MateClawException("err.workspace.not_found",
+                    "工作区不存在: " + workspaceId);
+        }
+        Long previousOwnerId = workspace.getOwnerId();
+        if (previousOwnerId != null && !previousOwnerId.equals(newOwnerUserId)) {
+            syncFederatedMemberRole(workspaceId, previousOwnerId,
+                    previousOwnerRole == null ? "member" : previousOwnerRole);
+        }
+        if (newOwnerUserId != null) {
+            syncFederatedMemberRole(workspaceId, newOwnerUserId, "owner");
+        }
+        if (!java.util.Objects.equals(previousOwnerId, newOwnerUserId)) {
+            workspace.setOwnerId(newOwnerUserId);
+            workspaceMapper.updateById(workspace);
+        }
+    }
+
     private String normalizeAssignableRole(String role) {
         String normalized = role == null || role.isBlank() ? "member" : role.trim();
         return switch (normalized) {
             case "admin", "member", "viewer" -> normalized;
             case "owner" -> throw new MateClawException(
                     "err.workspace.invalid_member_role", 400, "不能通过成员管理授予 owner 角色");
+            default -> throw new MateClawException(
+                    "err.workspace.invalid_member_role", 400, "无效的成员角色: " + normalized);
+        };
+    }
+
+    private String normalizeFederatedRole(String role) {
+        String normalized = role == null || role.isBlank() ? "member" : role.trim();
+        return switch (normalized) {
+            case "owner", "admin", "member", "viewer" -> normalized;
             default -> throw new MateClawException(
                     "err.workspace.invalid_member_role", 400, "无效的成员角色: " + normalized);
         };

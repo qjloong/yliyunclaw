@@ -1378,10 +1378,27 @@ public class ConversationService {
     private String renderFilePart(MessageContentPart part, boolean includePath) {
         String name = safe(part.getFileName());
         String path = safe(part.getPath());
+        String caption = safe(part.getCaption());
+        String label = path.startsWith("yliyun://folder/")
+                ? "[云盘文件夹]"
+                : path.startsWith("yliyun://file/") ? "[云盘附件]" : "[附件]";
+        StringBuilder rendered = new StringBuilder(label).append(' ').append(name);
         if (!includePath || path.isBlank()) {
-            return "[附件] " + name;
+            // Keep the display path private for external renderers, but the
+            // server-verified extracted text is still part of the conversation.
+        } else {
+            rendered.append("（引用: ").append(path).append("）");
         }
-        return "[附件] " + name + "（路径: " + path + "）";
+        if (!caption.isBlank()) {
+            String contentLabel = path.startsWith("yliyun://folder/")
+                    ? "云盘文件夹列表"
+                    : path.startsWith("yliyun://file/") ? "云盘文件内容" : "附件内容";
+            rendered.append("\n[").append(contentLabel)
+                    .append("，已由服务端按当前用户权限读取]\n")
+                    .append(caption.trim())
+                    .append("\n[/").append(contentLabel).append(']');
+        }
+        return rendered.toString();
     }
 
     /**

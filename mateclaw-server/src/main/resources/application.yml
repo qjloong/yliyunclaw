@@ -162,6 +162,14 @@ mateclaw:
       ticket-secret: ${YLIYUN_TICKET_SECRET:yliyun-ticket-secret-change-in-production}
       # 新建用户的默认角色
       default-role: ${YLIYUN_DEFAULT_ROLE:user}
+      cookie:
+        name: ${YLIYUN_AUTH_COOKIE_NAME:mateclaw_session}
+        max-age-seconds: ${YLIYUN_AUTH_COOKIE_MAX_AGE_SECONDS:86400}
+        same-site: ${YLIYUN_AUTH_COOKIE_SAME_SITE:Lax}
+        secure: ${YLIYUN_AUTH_COOKIE_SECURE:false}
+        domain: ${YLIYUN_AUTH_COOKIE_DOMAIN:}
+      # CSP frame-ancestors. Production should override with the exact cloud origin.
+      frame-ancestors: ${YLIYUN_FRAME_ANCESTORS:'self' http://localhost:8080 http://127.0.0.1:8080}
   sso:
     # 全局开关（默认关闭，不影响现有部署）
     enabled: ${SSO_ENABLED:false}
@@ -181,6 +189,18 @@ mateclaw:
   # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
   mcp:
     enabled: true
+    identity-forward:
+      # Identity is opt-in per trusted MCP server. The Yliyun connection is
+      # pooled, so the real cloud identity is signed and injected per Tool Call.
+      servers: ${MATECLAW_MCP_IDENTITY_SERVERS:yliyun-mcp}
+      token:
+        enabled: ${MATECLAW_MCP_OBO_ENABLED:true}
+        issuer: ${MATECLAW_MCP_OBO_ISSUER:mateclaw}
+        ttl-seconds: ${MATECLAW_MCP_OBO_TTL_SECONDS:60}
+        key-id: ${MATECLAW_MCP_OBO_KEY_ID:mateclaw-yliyun-1}
+        private-key-pem: ${MATECLAW_MCP_OBO_PRIVATE_KEY_PEM:}
+        audiences:
+          yliyun-mcp: ${MATECLAW_MCP_OBO_AUDIENCE:yliyun-mcp}
   tools:
     disclosure:
       # progressive: extension-tier tools are hidden behind the extension-tools

@@ -18,6 +18,9 @@ import vip.mate.llm.model.EnableResult;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.repository.ModelProviderMapper;
+import vip.mate.llm.workspace.repository.WorkspaceModelProviderMapper;
+import vip.mate.llm.workspace.WorkspaceModelScope;
+import vip.mate.system.service.SettingCrypto;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -50,6 +53,9 @@ import static org.mockito.Mockito.*;
 class ModelProviderServiceEnableTest {
 
     private ModelProviderMapper providerMapper;
+    private WorkspaceModelProviderMapper workspaceProviderMapper;
+    private WorkspaceModelScope workspaceModelScope;
+    private SettingCrypto settingCrypto;
     private ModelConfigService modelConfigService;
     private ApplicationEventPublisher eventPublisher;
     private ObjectProvider<ClaudeCodeOAuthService> claudeCodeOAuthProvider;
@@ -64,6 +70,10 @@ class ModelProviderServiceEnableTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         providerMapper = mock(ModelProviderMapper.class);
+        workspaceProviderMapper = mock(WorkspaceModelProviderMapper.class);
+        workspaceModelScope = mock(WorkspaceModelScope.class);
+        when(workspaceModelScope.currentWorkspaceId()).thenReturn(1L);
+        settingCrypto = mock(SettingCrypto.class);
         modelConfigService = mock(ModelConfigService.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         claudeCodeOAuthProvider = mock(ObjectProvider.class);
@@ -74,7 +84,8 @@ class ModelProviderServiceEnableTest {
         initProbeProvider = mock(ObjectProvider.class);
         when(initProbeProvider.getIfAvailable()).thenReturn(initProbe);
 
-        service = new ModelProviderService(providerMapper, modelConfigService, eventPublisher,
+        service = new ModelProviderService(providerMapper, workspaceProviderMapper,
+                workspaceModelScope, settingCrypto, modelConfigService, eventPublisher,
                 claudeCodeOAuthProvider, pool, healthTracker, initProbeProvider);
     }
 

@@ -35,6 +35,23 @@ export interface McpTestResult {
   discoveredTools: string[]
 }
 
+export interface McpDiagnosticStage {
+  stage: 'config' | 'transport' | 'protocol' | 'identity' | string
+  success: boolean
+  message: string
+  suggestion?: string | null
+  latencyMs: number
+}
+
+export interface McpDiagnosticResult {
+  success: boolean
+  serverId: number
+  serverName: string
+  traceId: string
+  writeIncluded: boolean
+  stages: McpDiagnosticStage[]
+}
+
 /** Form payload — superset of the create/edit body. */
 export interface McpServerForm {
   name: string

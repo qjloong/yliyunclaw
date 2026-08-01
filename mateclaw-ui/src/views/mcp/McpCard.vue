@@ -89,6 +89,24 @@
       </template>
       <template v-else>
         <button
+          v-if="server!.name === 'yliyun-mcp'"
+          class="mcp-card-action"
+          :title="t('mcp.actions.diagnose')"
+          :aria-label="t('mcp.actions.diagnose')"
+          :disabled="diagnosing"
+          @click="emit('diagnose', server!)"
+        >
+          <svg v-if="!diagnosing" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/>
+            <path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <svg v-else class="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/>
+            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+          </svg>
+        </button>
+        <button
           class="mcp-card-action"
           :title="t('mcp.actions.test')"
           :aria-label="t('mcp.actions.test')"
@@ -132,11 +150,13 @@ const props = defineProps<{
   server?: McpServer
   catalogEntry?: McpCatalogEntry
   testing?: boolean
+  diagnosing?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'edit', server: McpServer): void
   (e: 'test', server: McpServer): void
+  (e: 'diagnose', server: McpServer): void
   (e: 'toggle', server: McpServer): void
   (e: 'setTier', server: McpServer, tier: 'core' | 'extension'): void
   (e: 'add', entry: McpCatalogEntry): void
