@@ -99,7 +99,10 @@ public class McpProxyController {
                         : "transport 必须为 streamable_http，URL 必须指向 /mcp",
                 null, 0));
 
-        ConnectionResult transport = mcpServerService.testConnection(server);
+        // Use the managed connection for diagnostics. A throwaway test client
+        // can pass while the runtime pool still holds a pre-restart session id,
+        // causing the following identity/read calls to fail incorrectly.
+        ConnectionResult transport = mcpServerService.refreshManagedConnection(server);
         stages.add(stage("transport", transport.success(), transport.message(),
                 transport.success() ? null : "检查 18100 端口、/mcp 路由和内部认证头",
                 transport.latencyMs()));
@@ -128,7 +131,16 @@ public class McpProxyController {
                 read.latencyMs()));
 
         if (includeWrite) {
-            stages.add(runRecoverableWriteDiagnostic(server.getId(), context, traceId));
+            if (profile.success() && !allowsRecoverableWrite(profile.content())) {
+                Map<String, Object> skippedWrite = stage("write", false,
+                        "当前租户策略未同时开启文件写入与删除，已跳过可回滚写入检查，未创建临时数据",
+                        "如需执行该诊断，请由租户管理员临时同时开启 allowFileWrite 和 allowFileDelete",
+                        0);
+                skippedWrite.put("skipped", true);
+                stages.add(skippedWrite);
+            } else {
+                stages.add(runRecoverableWriteDiagnostic(server.getId(), context, traceId));
+            }
         }
 
         boolean ok = stages.stream().allMatch(row -> Boolean.TRUE.equals(row.get("success")));
@@ -212,6 +224,18 @@ public class McpProxyController {
         return stage("write", true,
                 "file.create/file.delete 可回滚写入检查成功，临时目录已移入回收站",
                 null, latency);
+    }
+
+    private boolean allowsRecoverableWrite(String profileContent) {
+        try {
+            JsonNode policy = objectMapper.readTree(profileContent).path("filePolicy");
+            return policy.path("write").asBoolean(false)
+                    && policy.path("delete").asBoolean(false);
+        } catch (Exception e) {
+            log.warn("Unable to parse filePolicy from user.profile; running write diagnostic for backward compatibility: {}",
+                    e.getMessage());
+            return true;
+        }
     }
 
     private Map<String, Object> stage(String name, boolean success, String message,

@@ -1,6 +1,6 @@
 # 一粒云 × WenShu × MateClaw 完整方案
 
-> 2026-07-23 | 分支: dev-v2 | 2026-07-30 实施口径补充
+> 2026-07-23 | 分支: dev-v2 | 2026-08-03 实施与需求口径补充
 
 > **实现口径优先级**：本文主体保留总体设计和历史方案示例；若示例与以下口径冲突，以本节及 `handover-yliyun-integration.md` 的最新任务状态为准。
 >
@@ -10,14 +10,14 @@
 > - 用户映射键为 `(tenantId, yliyunUserId)`，每个云盘租户映射到独立 Workspace，并幂等种子化 `builtin.yliyun_assistant`。
 > - P0 的服务、协议、身份、登录、固定测试夹具、分层诊断、工具读写闭环、真实模型行为 E2E 和跨用户/跨租户 TC-6 已全部实施并复验。
 > - P1 已实现确定性云盘文件上下文、附件连续性、云盘文件详情右侧精简 Agent 面板，以及 Agent 通过 `file.create/file.save` 直接回存云盘；云盘上下文附件仅在会话首次提问或切换文件/文件夹后再次注入，普通追问不重复展示；完整 `CloudResourceRef`、固定引用、保存确认 UI 和 Codex 风格输入框合并仍待后续实施。
-> - 最新任务计数为 P0 28/28 完成、P1 16/32 完成（另有 2 项进行中、1 项仅剩固定引用待验收）、P2 0/7、V3 2/34、统一应用接入治理 IG 0/28；逐项状态与验收证据以 `handover-yliyun-integration.md` 第十二至十五章为准。
+> - 最新任务计数为 P0 28/28 完成、P1 20/36 完成（另有 2 项进行中、1 项待验收）、P2 0/7、V3 2/34、统一应用接入治理 IG 15/28 完成（另有 1 项进行中）；租户 1 已完成 AI 助手应用安装、capability、签名 launchContext、真实身份 SSO、ticket 防重放、MCP entitlement/configVersion、平台管理员 MCP 边界、独立部署 Profile、分层诊断、双密钥无中断轮换、动态地址拒绝/切换/恢复、完整发布矩阵和通用可拖动非模态窗口/单 Header/多窗口浏览器验收；租户 135 已完成未安装状态隔离，以及经授权临时安装后的独立启停、真实租户管理员 SSO、Workspace owner/模型配置权限、旧会话失效、MCP 专用 delegation 精确撤销、MateClaw 不可达时的持久化补偿/自动恢复、新 ticket 恢复和最终卸载回收；WenShu 撤销失败现具备同等的持久化分步骤重试、旧端点补偿、告警、恢复和卸载保护，平台/租户配置边界测试已通过，逐项状态与证据以 `handover-yliyun-integration.md` 第十二至十五章为准。
 > - 版本状态审计结论：V1 是“核心业务链已完成、生产收口未完成”，不能标记为全部完成；V2 设计中的专用文本读写、全局搜索、空间/用户上下文、`wenshu.analyze` 和全客户端验收尚未落地，当前仍以 V1 fallback 为主。
 > - V3 以 MateClaw 会话为主入口的资源动作协议、生成物回存、云盘原生预览/播放、租户审计问数和云盘知识库同步方案及任务编号，统一维护在 `handover-yliyun-integration.md` 第十三章。
 > - OAuth2 应用、云盘应用中心、MateClaw MCP 管理和 MCP 服务环境配置保持分层：OAuth2 Client 不作为租户开关；应用中心是租户 entitlement 和动态地址事实源；全局 MCP 连接由平台管理员管理；每次 Tool Call 继续使用 OBO 代表真实云盘用户。统一治理任务维护在 `handover-yliyun-integration.md` 第十四章。
 
 ---
 
-## 〇、统一应用接入与认证治理（2026-07-30 新增）
+## 〇、统一应用接入与认证治理（2026-07-30 新增，2026-08-03 补充）
 
 ### 0.1 当前配置与认证边界
 
@@ -30,12 +30,13 @@
 
 当前问数 `wenshu_integration` 已形成应用中心闭环：平台连接配置从系统租户读取，租户策略从当前租户读取；enable/disable 同步远端生命周期；capability 决定入口；一次性 ticket 兑换为短时 delegation 后访问窄化文件 API。
 
-当前 AI 助手仍是过渡实现：
+AI 助手已从固定入口升级为应用中心治理实现，租户 1 已启用；租户 135 的临时安装/启停/回收矩阵、动态改址、双密钥轮换和 AI 助手发布矩阵已经完成，当前处于跨应用治理收口阶段：
 
-- 菜单固定对所有用户展示。
-- MateClaw 地址来自云盘前端 `VITE_AI_BASE_URL`，无法在不重构前端的情况下动态改址。
-- 云盘 AI ticket 只校验登录用户，尚未校验租户应用实例、启用状态、健康状态和应用角色。
-- MCP OBO 换票使用部署级 appKey，尚未将租户 AI 助手 entitlement 作为换票和 Tool Call 的强制条件。
+- `mateclaw_ai_assistant` 已作为独立应用扩展注册，系统租户维护 MateClaw 地址/Origin/票据契约，业务租户维护启用、角色、导航、打开方式和文件能力策略。
+- 云盘菜单、文件操作入口及嵌入地址已改为 `/admin-api/yliyun/ai/capability` 驱动，不再把 `VITE_AI_BASE_URL` 作为运行时事实源；问数继续走独立的 WenShu capability。
+- AI ticket 出票前校验 installed/enabled/healthy/allowed，并签名 appKey、configVersion、state/nonce、parentOrigin 和 launchContext；MateClaw 对应验票。
+- MateClaw OBO 已透传 appKey/configVersion；MCP 每次 Tool Call 重查租户 capability，并按通用工具 manifest 风险落实 read/write/share/delete 上限。
+- MateClaw 应用 Cookie 已通过签名回调与 configVersion 主动失效，撤销回调同时固定 `mateclaw_ai_assistant` appKey；MCP OBO 使用独立的 10 分钟 OAuth Client Token，生命周期可按 tenant+client 精确撤销，不影响云盘用户登录。AI 助手与 WenShu 的撤销失败都会写入各自租户应用实例，按失败子步骤指数退避重试，达到阈值写结构化告警并通知租户联系人，恢复后自动清理和通知；待办保存原远端地址，健康刷新与卸载不会丢失补偿状态。AI 租户 135 已通过 MateClaw 停机/恢复实测，WenShu 失败、恢复、改址和告警自动化回归通过。ticket 与撤销签名现使用带 key id 的 current/previous 密钥环，按“先 MateClaw、后云盘”完成旧 key 和新 key 两阶段真实 SSO 验证，secret 不进入应用中心、前端、URL 或日志。平台动态地址写入会先校验候选 API 健康，失败事务回滚；成功后广播所有已安装租户并定向撤销旧端点，前端显式打开时强制刷新 capability，真实切换和恢复已通过。AI 助手完整发布矩阵及跨应用撤销治理已经归档；IG-P0 当前仅剩 AI 远端 Workspace/Agent 停用语义与回收策略，因此仍不能宣称 IG-P0 全部完成。
 
 ### 0.2 当前四段认证链
 

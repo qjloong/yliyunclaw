@@ -35,6 +35,12 @@ public class McWorkspaceUserEntity {
     /** Yliyun 租户 ID */
     private String yliyunTenantId;
 
+    /** 最近一次云盘 SSO 验证通过的应用 entitlement。 */
+    private String appKey;
+
+    /** 云盘租户应用策略版本；MCP 调用时用于关闭/改权即时失效。 */
+    private Integer configVersion;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

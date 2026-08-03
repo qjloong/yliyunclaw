@@ -1,5 +1,7 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { fileURLToPath } from 'node:url'
 
 const cloudBaseUrl = process.env.YLIYUN_CLOUD_BASE_URL || 'http://127.0.0.1:30303'
@@ -32,15 +34,15 @@ for (let cycle = 1; cycle <= cycles; cycle += 1) {
     tenantId,
   )
   const previewUrl = new URL(previewUrlResult.data, cloudBaseUrl).toString()
-  const previewResponse = await fetch(previewUrl)
-  const previewBytes = Buffer.from(await previewResponse.arrayBuffer())
+  const previewResponse = await request(previewUrl)
+  const previewBytes = previewResponse.body
   assert(previewResponse.ok, `preview stream failed: HTTP ${previewResponse.status}`)
 
-  const downloadResponse = await fetch(
+  const downloadResponse = await request(
     `${cloudBaseUrl}/admin-api/cloud-drive/file/download?id=${readableFileId}`,
     { headers: cloudHeaders(ownerToken, tenantId) },
   )
-  const downloadBytes = Buffer.from(await downloadResponse.arrayBuffer())
+  const downloadBytes = downloadResponse.body
   assert(downloadResponse.ok, `download failed: HTTP ${downloadResponse.status}`)
   assert(previewBytes.length > 0, 'preview stream returned an empty body')
   assert(downloadBytes.length === previewBytes.length, 'preview/download byte lengths differ')
@@ -62,19 +64,27 @@ assert(
 )
 
 const attackerToken = await exchangeUserToken(attackerUserId, tenantId)
+const state = `state_${randomBytes(18).toString('base64url')}`
+const nonce = `nonce_${randomBytes(18).toString('base64url')}`
 const ticketResult = await cloudJson(
   '/admin-api/yliyun/ai/ticket',
   attackerToken,
   tenantId,
-  { method: 'POST' },
+  {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ state, nonce, parentOrigin: 'http://localhost:8080', launchContext: {} }),
+  },
 )
-const ssoResponse = await fetch(
-  `${mateclawBaseUrl}/api/v1/auth/yliyun/ticket`
-    + `?ticket=${encodeURIComponent(ticketResult.data)}&redirect=%2Fchat`,
-  { redirect: 'manual' },
-)
+const ssoUrl = new URL('/api/v1/auth/yliyun/ticket', mateclawBaseUrl)
+ssoUrl.searchParams.set('ticket', ticketResult.data.ticket)
+ssoUrl.searchParams.set('redirect', '/chat')
+ssoUrl.searchParams.set('parentOrigin', 'http://localhost:8080')
+ssoUrl.searchParams.set('state', state)
+ssoUrl.searchParams.set('nonce', nonce)
+const ssoResponse = await request(ssoUrl)
 assert(ssoResponse.status === 302, `MateClaw SSO failed: HTTP ${ssoResponse.status}`)
-const authCookie = firstCookie(ssoResponse.headers.get('set-cookie'))
+const authCookie = firstCookie(ssoResponse.headers['set-cookie'])
 assert(authCookie, 'MateClaw SSO did not return an authentication cookie')
 
 const session = await mateclawJson('/api/v1/auth/session', authCookie)
@@ -158,7 +168,7 @@ async function exchangeUserToken(userId, requestedTenantId) {
 }
 
 async function exchangeUserTokenResult(userId, requestedTenantId) {
-  const response = await fetch(`${cloudBaseUrl}/extends/user-token/get`, {
+  const response = await request(`${cloudBaseUrl}/extends/user-token/get`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -170,7 +180,7 @@ async function exchangeUserTokenResult(userId, requestedTenantId) {
       appKey,
     }),
   })
-  const body = await response.json().catch(() => null)
+  const body = parseJson(response.body)
   assert(response.ok && body, `token endpoint failed: HTTP ${response.status}`)
   return {
     code: body.code,
@@ -180,31 +190,31 @@ async function exchangeUserTokenResult(userId, requestedTenantId) {
 }
 
 async function cloudJson(path, token, requestedTenantId, init = {}) {
-  const response = await fetch(`${cloudBaseUrl}${path}`, {
+  const response = await request(`${cloudBaseUrl}${path}`, {
     ...init,
     headers: {
       ...cloudHeaders(token, requestedTenantId),
       ...(init.headers || {}),
     },
   })
-  const body = await response.json().catch(() => null)
+  const body = parseJson(response.body)
   assert(response.ok && body, `cloud endpoint ${path} failed: HTTP ${response.status}`)
   assert(body.code === 0, `cloud endpoint ${path} failed: ${body.code} ${body.msg}`)
   return body
 }
 
 async function mateclawJson(path, cookie) {
-  const response = await fetch(`${mateclawBaseUrl}${path}`, {
+  const response = await request(`${mateclawBaseUrl}${path}`, {
     headers: { cookie },
   })
-  const body = await response.json().catch(() => null)
+  const body = parseJson(response.body)
   assert(response.ok && body, `MateClaw endpoint ${path} failed: HTTP ${response.status}`)
   assert(body.code === 200, `MateClaw endpoint ${path} failed: ${body.code} ${body.msg}`)
   return body
 }
 
 async function proxyCall(toolName, args, cookie, workspaceId) {
-  const response = await fetch(
+  const response = await request(
     `${mateclawBaseUrl}/api/v1/mcp/proxy/${encodeURIComponent(toolName)}`,
     {
       method: 'POST',
@@ -216,7 +226,7 @@ async function proxyCall(toolName, args, cookie, workspaceId) {
       body: JSON.stringify(args),
     },
   )
-  const body = await response.json().catch(() => null)
+  const body = parseJson(response.body)
   assert(response.ok && body, `MCP proxy ${toolName} failed: HTTP ${response.status}`)
   return body
 }
@@ -229,7 +239,45 @@ function cloudHeaders(token, requestedTenantId) {
 }
 
 function firstCookie(setCookie) {
-  return setCookie ? setCookie.split(';', 1)[0] : ''
+  const value = Array.isArray(setCookie) ? setCookie[0] : setCookie
+  return value ? value.split(';', 1)[0] : ''
+}
+
+function request(url, init = {}) {
+  const target = new URL(url)
+  const body = init.body ? Buffer.from(init.body) : null
+  const headers = { ...(init.headers || {}) }
+  if (body && headers['content-length'] === undefined) {
+    headers['content-length'] = String(body.length)
+  }
+  const transport = target.protocol === 'https:' ? httpsRequest : httpRequest
+  return new Promise((resolve, reject) => {
+    const req = transport(target, {
+      method: init.method || 'GET',
+      headers,
+    }, (res) => {
+      const chunks = []
+      res.on('data', (chunk) => chunks.push(chunk))
+      res.on('end', () => resolve({
+        status: res.statusCode || 0,
+        ok: (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300,
+        headers: res.headers,
+        body: Buffer.concat(chunks),
+      }))
+    })
+    req.setTimeout(90_000, () => req.destroy(new Error(`request timed out: ${target.pathname}`)))
+    req.on('error', reject)
+    if (body) req.write(body)
+    req.end()
+  })
+}
+
+function parseJson(value) {
+  try {
+    return JSON.parse(Buffer.isBuffer(value) ? value.toString('utf8') : value)
+  } catch {
+    return null
+  }
 }
 
 function sha256(value) {

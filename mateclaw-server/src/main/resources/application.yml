@@ -160,6 +160,11 @@ mateclaw:
     yliyun:
       # Yliyun ticket JWT 签名密钥（HMAC-SHA256，至少 32 字节）
       ticket-secret: ${YLIYUN_TICKET_SECRET:yliyun-ticket-secret-change-in-production}
+      # 无中断轮换：先在 MateClaw 配置 current=new/previous=old，再切换云盘 current=new；窗口结束后清空 previous。
+      ticket-secret-current: ${YLIYUN_TICKET_SECRET_CURRENT:${YLIYUN_TICKET_SECRET:yliyun-ticket-secret-change-in-production}}
+      ticket-secret-previous: ${YLIYUN_TICKET_SECRET_PREVIOUS:}
+      ticket-key-id-current: ${YLIYUN_TICKET_KEY_ID_CURRENT:current}
+      ticket-key-id-previous: ${YLIYUN_TICKET_KEY_ID_PREVIOUS:previous}
       # 新建用户的默认角色
       default-role: ${YLIYUN_DEFAULT_ROLE:user}
       cookie:

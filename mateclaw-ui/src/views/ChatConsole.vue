@@ -1934,7 +1934,7 @@ async function hydrateStateFromRoute() {
 function syncRouteState() {
   if (route.path !== chatRoutePath.value) return
   const query: Record<string, string> = {}
-  for (const key of ['authSource', 'channelId', 'parentOrigin']) {
+  for (const key of ['authSource', 'channelId', 'parentOrigin', 'hostHeader']) {
     const value = route.query[key]
     if (value != null && value !== '') query[key] = String(value)
   }

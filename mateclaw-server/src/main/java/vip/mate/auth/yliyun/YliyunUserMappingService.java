@@ -16,6 +16,7 @@ import vip.mate.workspace.core.repository.WorkspaceMapper;
 import vip.mate.workspace.core.service.WorkspaceService;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -56,6 +57,14 @@ public class YliyunUserMappingService {
     public UserEntity findOrCreateUser(String yliyunUserId, String yliyunTenantId,
                                        String nickname, String account, String tenantName,
                                        Boolean tenantAdmin) {
+        return findOrCreateUser(yliyunUserId, yliyunTenantId, nickname, account, tenantName,
+                tenantAdmin, null, null);
+    }
+
+    @Transactional
+    public UserEntity findOrCreateUser(String yliyunUserId, String yliyunTenantId,
+                                       String nickname, String account, String tenantName,
+                                       Boolean tenantAdmin, String appKey, Integer configVersion) {
         String normalizedUserId = requireIdentityPart(yliyunUserId, "userId");
         String normalizedTenantId = requireIdentityPart(yliyunTenantId, "tenantId");
         String displayName = cloudDisplayName(nickname, account, normalizedUserId);
@@ -77,6 +86,7 @@ public class YliyunUserMappingService {
             syncUserDisplayName(user, displayName);
             syncWorkspaceName(mapping.getWorkspaceId(), normalizedTenantId, tenantName);
             reconcileWorkspaceRole(mapping, user.getId(), tenantAdmin);
+            syncEntitlement(mapping, appKey, configVersion);
             assistantProvisioningService.ensureAssistant(mapping.getWorkspaceId(), user.getId());
             return user;
         }
@@ -94,6 +104,8 @@ public class YliyunUserMappingService {
         mappingEntity.setRole(initialWorkspaceRole(workspace, newUser.getId(), tenantAdmin));
         mappingEntity.setYliyunUserId(normalizedUserId);
         mappingEntity.setYliyunTenantId(normalizedTenantId);
+        mappingEntity.setAppKey(appKey);
+        mappingEntity.setConfigVersion(configVersion);
         mappingEntity.setDeleted(0);
 
         try {
@@ -130,6 +142,16 @@ public class YliyunUserMappingService {
         log.info("[Yliyun] Created new user mapping: tenantId={}, yliyunUserId={}, mateUserId={}, workspaceId={}",
                 normalizedTenantId, normalizedUserId, newUser.getId(), workspace.getId());
         return newUser;
+    }
+
+    private void syncEntitlement(McWorkspaceUserEntity mapping, String appKey, Integer configVersion) {
+        if ((appKey == null || appKey.isBlank()) && configVersion == null) return;
+        boolean changed = !Objects.equals(mapping.getAppKey(), appKey)
+                || !Objects.equals(mapping.getConfigVersion(), configVersion);
+        if (!changed) return;
+        mapping.setAppKey(appKey);
+        mapping.setConfigVersion(configVersion);
+        workspaceUserMapper.updateById(mapping);
     }
 
     /**
@@ -170,10 +192,85 @@ public class YliyunUserMappingService {
         });
     }
 
+    public boolean isCurrentEntitlement(Long mateUserId, String appKey, Integer configVersion) {
+        if (appKey == null || appKey.isBlank() || configVersion == null) {
+            return false;
+        }
+        return findMappingByMateUserId(mateUserId)
+                .filter(mapping -> Objects.equals(mapping.getAppKey(), appKey))
+                .filter(mapping -> Objects.equals(mapping.getConfigVersion(), configVersion))
+                .isPresent();
+    }
+
+    /**
+     * Advance every mapped user of one cloud tenant to the revocation version.
+     * Older or duplicated callbacks never roll the local version backwards.
+     */
+    @Transactional
+    public int revokeTenantEntitlement(String tenantId, String appKey, Integer configVersion) {
+        String normalizedTenantId = requireIdentityPart(tenantId, "tenantId");
+        if (appKey == null || appKey.isBlank() || configVersion == null || configVersion < 1) {
+            throw new MateClawException("err.auth.yliyun.invalid_revoke", 400,
+                    "应用会话撤销参数无效");
+        }
+        List<McWorkspaceUserEntity> mappings = workspaceUserMapper.selectList(
+                new LambdaQueryWrapper<McWorkspaceUserEntity>()
+                        .eq(McWorkspaceUserEntity::getYliyunTenantId, normalizedTenantId)
+                        .eq(McWorkspaceUserEntity::getAppKey, appKey.trim())
+                        .eq(McWorkspaceUserEntity::getDeleted, 0));
+        int updated = 0;
+        for (McWorkspaceUserEntity mapping : mappings) {
+            Integer current = mapping.getConfigVersion();
+            if (current != null && current >= configVersion) continue;
+            mapping.setConfigVersion(configVersion);
+            workspaceUserMapper.updateById(mapping);
+            updated++;
+        }
+        log.info("[Yliyun] Revoked tenant application sessions: tenantId={}, appKey={}, "
+                        + "configVersion={}, mappings={}",
+                normalizedTenantId, appKey, configVersion, updated);
+        return updated;
+    }
+
+    /**
+     * Revoke every mapped session and disable only the application-owned Agent.
+     * The tenant workspace and its provider configuration remain intact so an
+     * application re-enable is reversible and does not lose tenant data.
+     */
+    @Transactional
+    public TenantApplicationDeactivation deactivateTenantApplication(
+            String tenantId, String appKey, Integer configVersion) {
+        String normalizedTenantId = requireIdentityPart(tenantId, "tenantId");
+        int revokedMappings = revokeTenantEntitlement(
+                normalizedTenantId, appKey, configVersion);
+        List<Long> workspaceIds = workspaceUserMapper.selectList(
+                        new LambdaQueryWrapper<McWorkspaceUserEntity>()
+                                .eq(McWorkspaceUserEntity::getYliyunTenantId, normalizedTenantId)
+                                .eq(McWorkspaceUserEntity::getDeleted, 0))
+                .stream()
+                .map(McWorkspaceUserEntity::getWorkspaceId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        int deactivatedAgents = assistantProvisioningService.deactivateAssistants(workspaceIds);
+        log.info("[Yliyun] Deactivated tenant application: tenantId={}, appKey={}, "
+                        + "configVersion={}, mappings={}, workspaces={}, agents={}",
+                normalizedTenantId, appKey, configVersion, revokedMappings,
+                workspaceIds.size(), deactivatedAgents);
+        return new TenantApplicationDeactivation(
+                revokedMappings, workspaceIds.size(), deactivatedAgents);
+    }
+
     public record YliyunSessionIdentity(
             String cloudUserId,
             String cloudTenantId,
             String tenantName) {
+    }
+
+    public record TenantApplicationDeactivation(
+            int revokedMappings,
+            int retainedWorkspaces,
+            int deactivatedAgents) {
     }
 
     /**

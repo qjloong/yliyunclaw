@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="澜图智能企业知识管理平台，连接分散内容，提供智能检索、知识问答、内容治理与安全私有化部署。">
+<meta name="theme-color" content="#081426">
+<title>澜图智能｜企业知识管理与私有化知识库解决方案</title>
+<style>
+:root{
+  --navy:#071427;--navy2:#0d2343;--ink:#12213a;--muted:#68768d;--line:#e7edf5;
+  --blue:#376ff4;--blue2:#6b8cff;--cyan:#25c6d9;--purple:#7c5cf2;--green:#13a37b;
+  --soft:#f4f7fb;--panel:#fff;--shadow:0 18px 60px rgba(17,35,67,.10);
+  --radius:24px;--radius2:16px;--max:1240px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;color:var(--ink);background:#fff;line-height:1.65}
+button,input,textarea,select{font:inherit}
+a{text-decoration:none;color:inherit}
+img{max-width:100%;display:block}
+svg{display:block}
+.site-shell{min-height:100vh;overflow:hidden}
+.announcement{height:34px;background:#081426;color:#c8d7ef;display:flex;align-items:center;justify-content:center;font-size:12px;letter-spacing:.02em}
+.announcement b{color:#fff;margin-right:8px}.announcement a{color:#8fb0ff;margin-left:10px}
+.header{position:sticky;top:0;z-index:30;height:72px;background:rgba(255,255,255,.92);backdrop-filter:blur(18px);border-bottom:1px solid rgba(224,232,244,.9)}
+.header-inner{height:100%;max-width:var(--max);margin:auto;padding:0 20px;display:flex;align-items:center;gap:28px}
+.logo{display:flex;align-items:center;gap:10px;min-width:170px;cursor:pointer}
+.logo-mark{width:38px;height:38px;border-radius:13px;background:linear-gradient(145deg,#376ff4,#6d63ef);display:grid;place-items:center;box-shadow:0 10px 24px rgba(55,111,244,.24)}
+.logo-mark svg{width:21px;height:21px;stroke:#fff;fill:none;stroke-width:1.8}
+.logo strong{font-size:17px;letter-spacing:-.02em}.logo small{display:block;font-size:9px;color:#8190a5;letter-spacing:.14em;text-transform:uppercase;margin-top:-3px}
+.nav{display:flex;align-items:center;gap:2px;flex:1}
+.nav button{border:0;background:transparent;padding:10px 13px;border-radius:10px;color:#4a5b73;font-size:13px;cursor:pointer;transition:.18s;white-space:nowrap}
+.nav button:hover,.nav button.active{background:#eef3ff;color:var(--blue)}
+.header-actions{display:flex;align-items:center;gap:8px}
+.icon-btn,.ghost-btn,.primary-btn,.soft-btn{height:40px;border-radius:11px;display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;font-weight:650;font-size:13px;transition:.18s}
+.icon-btn{width:40px;border:1px solid var(--line);background:#fff;color:#53647a}
+.ghost-btn{padding:0 15px;border:1px solid var(--line);background:#fff;color:#4f6179}
+.soft-btn{padding:0 15px;border:0;background:#edf3ff;color:var(--blue)}
+.primary-btn{padding:0 17px;border:1px solid var(--blue);background:var(--blue);color:#fff;box-shadow:0 10px 22px rgba(55,111,244,.22)}
+.primary-btn:hover{transform:translateY(-1px);box-shadow:0 14px 28px rgba(55,111,244,.27)}
+.mobile-menu-btn{display:none}
+main{min-height:70vh}
+.page{display:none;animation:fadeUp .35s ease}.page.active{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.container{max-width:var(--max);margin:0 auto;padding:0 20px}
+.hero{position:relative;background:
+ radial-gradient(circle at 80% 10%,rgba(112,112,255,.22),transparent 26%),
+ radial-gradient(circle at 70% 65%,rgba(37,198,217,.15),transparent 28%),
+ linear-gradient(135deg,#071427,#0b2347 60%,#132c5b);color:#fff;padding:88px 0 74px;overflow:hidden}
+.hero:before{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:40px 40px;mask-image:linear-gradient(to right,black,transparent 80%)}
+.hero-grid{position:relative;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(460px,.95fr);gap:70px;align-items:center}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#b9cced;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:6px 11px;margin-bottom:22px}
+.eyebrow i{width:7px;height:7px;background:#48d6b1;border-radius:50%;box-shadow:0 0 0 5px rgba(72,214,177,.12)}
+.hero h1{font-size:56px;line-height:1.12;letter-spacing:-.055em;margin:0 0 22px;font-weight:780}
+.hero h1 span{background:linear-gradient(90deg,#8ab2ff,#9be9ef);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero-copy>p{font-size:17px;color:#c4d2e8;max-width:650px;margin:0 0 30px;line-height:1.8}
+.hero-actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:32px}
+.hero .primary-btn{height:48px;padding:0 22px}
+.hero .ghost-btn{height:48px;color:#fff;border-color:rgba(255,255,255,.22);background:rgba(255,255,255,.06)}
+.hero-trust{display:flex;gap:22px;align-items:center;color:#94a9c9;font-size:11px;flex-wrap:wrap}
+.hero-trust span{display:flex;align-items:center;gap:6px}.hero-trust i{color:#66ddb9;font-style:normal}
+.hero-visual{position:relative}
+.product-window{background:rgba(255,255,255,.97);border:1px solid rgba(255,255,255,.4);border-radius:24px;padding:12px;box-shadow:0 35px 90px rgba(0,0,0,.32);transform:perspective(1200px) rotateY(-4deg) rotateX(2deg)}
+.window-bar{display:flex;align-items:center;gap:7px;padding:4px 3px 12px}.window-bar i{width:8px;height:8px;border-radius:50%;background:#dbe2ed}.window-bar span{margin-left:auto;color:#8a98aa;font-size:9px}
+.product-ui{background:#f2f5fa;border-radius:16px;display:grid;grid-template-columns:126px 1fr;min-height:378px;overflow:hidden;color:var(--ink)}
+.product-side{background:#0d203c;color:#91a8ca;padding:18px 13px}
+.product-brand{font-size:10px;color:#fff;font-weight:700;margin-bottom:22px;display:flex;gap:7px;align-items:center}.product-brand i{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,#4779f8,#7767ed)}
+.product-side div{font-size:9px;padding:8px;border-radius:7px;margin-bottom:4px}.product-side div.active{background:rgba(80,127,255,.22);color:#fff}
+.product-main{padding:19px}
+.product-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.product-top strong{font-size:13px}.product-top span{font-size:8px;color:#76859a}
+.search-box{height:42px;background:#fff;border:1px solid #e3e9f2;border-radius:11px;display:flex;align-items:center;padding:0 13px;color:#9ba8b8;font-size:10px;box-shadow:0 5px 15px rgba(30,49,81,.04)}
+.ai-answer{margin-top:12px;background:linear-gradient(135deg,#fff,#f4f7ff);border:1px solid #dbe5ff;border-radius:13px;padding:13px}
+.answer-head{display:flex;gap:8px;align-items:center;font-size:9px;color:#426fd9}.answer-icon{width:25px;height:25px;border-radius:8px;background:#e9efff;display:grid;place-items:center;font-weight:800}
+.ai-answer h4{font-size:11px;margin:8px 0 5px}.ai-answer p{font-size:8px;color:#64758c;margin:0;line-height:1.65}
+.result-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}.result-card{background:#fff;border:1px solid #e6ebf3;border-radius:10px;padding:10px}.result-card b{font-size:9px}.result-card p{font-size:7px;color:#8592a3;margin:4px 0 0}
+.floating-card{position:absolute;background:#fff;border-radius:14px;padding:12px 14px;box-shadow:0 18px 40px rgba(8,21,41,.22);color:var(--ink);border:1px solid #edf0f5}
+.floating-card.security{right:-25px;top:46px}.floating-card.efficiency{left:-28px;bottom:45px}
+.floating-card small{display:block;color:#8290a5;font-size:8px}.floating-card strong{font-size:16px}.floating-card span{color:#13a37b;font-size:8px;margin-left:5px}
+.logo-strip{border-bottom:1px solid var(--line);background:#fff}.logo-strip-inner{height:100px;display:flex;align-items:center;gap:34px;color:#8a98aa}.logo-strip-label{font-size:11px;min-width:135px}.client-logo{font-size:13px;font-weight:700;letter-spacing:.03em;color:#9aa6b5;flex:1;text-align:center}
+.section{padding:90px 0}.section.soft{background:var(--soft)}.section.dark{background:var(--navy);color:#fff}
+.section-head{max-width:720px;margin:0 auto 46px;text-align:center}.section-head.left{text-align:left;margin:0 0 38px}
+.section-kicker{font-size:11px;font-weight:750;letter-spacing:.18em;color:var(--blue);text-transform:uppercase;margin-bottom:12px}
+.section.dark .section-kicker{color:#86aaff}
+.section-head h2{font-size:38px;letter-spacing:-.04em;line-height:1.25;margin:0 0 15px}.section-head p{font-size:15px;color:var(--muted);margin:0}.section.dark .section-head p{color:#9eafc9}
+.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.feature-card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:25px;transition:.2s;position:relative;overflow:hidden}
+.feature-card:hover{transform:translateY(-4px);box-shadow:var(--shadow);border-color:#cad8f4}
+.feature-icon{width:45px;height:45px;border-radius:14px;background:var(--icon-bg,#edf3ff);color:var(--icon,#376ff4);display:grid;place-items:center;font-weight:800;margin-bottom:20px}
+.feature-icon svg{width:23px;height:23px;stroke:currentColor;fill:none;stroke-width:1.7}
+.feature-card h3{font-size:18px;margin:0 0 8px}.feature-card p{font-size:12px;color:var(--muted);margin:0 0 16px}.feature-link{font-size:11px;color:var(--blue);font-weight:700;cursor:pointer}
+.product-tabs{display:flex;gap:8px;justify-content:center;margin-bottom:28px;flex-wrap:wrap}.product-tabs button{border:1px solid var(--line);background:#fff;border-radius:11px;padding:9px 15px;color:#617188;cursor:pointer;font-size:12px}.product-tabs button.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.product-showcase{display:grid;grid-template-columns:.82fr 1.18fr;gap:22px;align-items:stretch}
+.product-copy{background:#fff;border-radius:24px;border:1px solid var(--line);padding:34px}.product-copy .mini-label{font-size:10px;color:var(--blue);font-weight:750}.product-copy h3{font-size:30px;line-height:1.25;margin:10px 0 13px;letter-spacing:-.03em}.product-copy>p{font-size:13px;color:var(--muted)}
+.check-list{display:flex;flex-direction:column;gap:10px;margin:20px 0 25px}.check-list div{display:flex;align-items:flex-start;gap:9px;font-size:12px}.check-list i{font-style:normal;color:var(--green);font-weight:800}
+.product-illustration{background:linear-gradient(145deg,#0d2142,#183e79);border-radius:24px;padding:28px;min-height:430px;position:relative;overflow:hidden}
+.product-illustration:after{content:"";position:absolute;width:280px;height:280px;border-radius:50%;right:-80px;bottom:-100px;background:rgba(85,112,255,.28);filter:blur(5px)}
+.knowledge-map{position:relative;height:100%;min-height:370px}.node{position:absolute;background:rgba(255,255,255,.95);color:var(--ink);border-radius:14px;padding:13px 15px;min-width:132px;box-shadow:0 14px 28px rgba(0,0,0,.18);z-index:2}.node b{font-size:11px}.node span{display:block;font-size:8px;color:#8290a5;margin-top:3px}.node.center{left:38%;top:38%;border:2px solid #7fa0ff}.node.n1{left:2%;top:8%}.node.n2{right:2%;top:11%}.node.n3{left:4%;bottom:12%}.node.n4{right:4%;bottom:10%}.map-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+.security-band{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
+.security-visual{position:relative;min-height:440px;display:grid;place-items:center}
+.security-rings{width:340px;height:340px;border-radius:50%;border:1px solid rgba(123,155,225,.25);display:grid;place-items:center;position:relative}
+.security-rings:before,.security-rings:after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(123,155,225,.2)}.security-rings:before{width:260px;height:260px}.security-rings:after{width:180px;height:180px}
+.security-core{width:110px;height:110px;border-radius:34px;background:linear-gradient(145deg,#3b73f5,#755ff0);display:grid;place-items:center;box-shadow:0 25px 60px rgba(58,105,241,.38);z-index:2}
+.security-core svg{width:45px;height:45px;stroke:#fff;fill:none;stroke-width:1.6}
+.security-chip{position:absolute;background:#122a4c;border:1px solid #274974;color:#d5e2f7;border-radius:12px;padding:10px 13px;font-size:10px}.security-chip.c1{left:4%;top:20%}.security-chip.c2{right:0;top:28%}.security-chip.c3{left:8%;bottom:22%}.security-chip.c4{right:4%;bottom:17%}
+.security-copy h2{font-size:40px;letter-spacing:-.04em;line-height:1.22;margin:0 0 17px}.security-copy>p{color:#a7b6cc;font-size:14px}.security-points{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:24px 0}.security-point{background:#0d203b;border:1px solid #1c3a64;border-radius:13px;padding:14px}.security-point strong{font-size:12px}.security-point span{display:block;color:#8ca1c0;font-size:9px;margin-top:4px}
+.solution-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.solution-card{height:310px;border-radius:22px;padding:24px;position:relative;overflow:hidden;color:#fff;cursor:pointer;background:linear-gradient(160deg,var(--s1),var(--s2))}
+.solution-card:after{content:"";position:absolute;width:180px;height:180px;border:1px solid rgba(255,255,255,.18);border-radius:50%;right:-50px;bottom:-60px}
+.solution-card small{font-size:9px;color:rgba(255,255,255,.7);letter-spacing:.12em}.solution-card h3{font-size:21px;line-height:1.35;margin:12px 0}.solution-card p{font-size:11px;color:rgba(255,255,255,.74)}.solution-card .arrow{position:absolute;bottom:22px;left:24px;width:36px;height:36px;border-radius:50%;border:1px solid rgba(255,255,255,.35);display:grid;place-items:center}
+.case-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.case-card{background:#fff;border:1px solid var(--line);border-radius:20px;overflow:hidden;cursor:pointer;transition:.2s}.case-card:hover{transform:translateY(-4px);box-shadow:var(--shadow)}
+.case-cover{height:180px;padding:22px;color:#fff;position:relative;background:linear-gradient(145deg,var(--c1),var(--c2));overflow:hidden}.case-cover:after{content:"";position:absolute;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.11);right:-80px;top:-50px}
+.case-cover small{font-size:9px;opacity:.7}.case-cover h3{font-size:21px;line-height:1.4;margin:15px 0}.case-logo{position:absolute;bottom:18px;font-weight:800;font-size:11px;letter-spacing:.08em}
+.case-body{padding:20px}.case-body p{font-size:11px;color:var(--muted);margin:0 0 16px}.case-stats{display:flex;gap:20px;border-top:1px solid var(--line);padding-top:14px}.case-stats strong{font-size:17px;color:var(--blue)}.case-stats span{display:block;font-size:8px;color:#8997aa}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:50px}.metric{text-align:center;padding:20px}.metric strong{font-size:38px;color:#fff}.metric span{display:block;color:#8fa4c3;font-size:10px;margin-top:3px}
+.insight-grid{display:grid;grid-template-columns:1.25fr .75fr;gap:18px}
+.featured-insight{background:linear-gradient(135deg,#10284f,#254f92);color:#fff;border-radius:24px;padding:38px;min-height:380px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;overflow:hidden}
+.featured-insight:before{content:"AI";position:absolute;right:25px;top:5px;font-size:180px;font-weight:900;color:rgba(255,255,255,.04)}
+.featured-insight .tag{align-self:flex-start;background:rgba(255,255,255,.12);border-radius:99px;padding:5px 9px;font-size:9px}.featured-insight h3{font-size:29px;line-height:1.3;margin:15px 0 10px}.featured-insight p{font-size:12px;color:#bed0ec;max-width:650px}
+.insight-list{display:flex;flex-direction:column;gap:12px}.insight-card{border:1px solid var(--line);border-radius:17px;padding:19px;background:#fff;cursor:pointer}.insight-card small{font-size:9px;color:var(--blue)}.insight-card h4{font-size:15px;line-height:1.45;margin:7px 0}.insight-card p{font-size:10px;color:var(--muted);margin:0}
+.cta-section{padding:80px 0}.cta-box{background:linear-gradient(135deg,#2f68ef,#695fee);border-radius:30px;padding:48px;color:#fff;display:flex;align-items:center;gap:30px;position:relative;overflow:hidden}.cta-box:after{content:"";position:absolute;width:350px;height:350px;border-radius:50%;right:-120px;top:-160px;background:rgba(255,255,255,.12)}.cta-box h2{font-size:34px;margin:0 0 10px}.cta-box p{color:#d9e4ff;margin:0}.cta-actions{margin-left:auto;display:flex;gap:10px;z-index:2}.cta-box .ghost-btn{color:#fff;border-color:rgba(255,255,255,.3);background:transparent}.cta-box .primary-btn{background:#fff;color:var(--blue);border-color:#fff}
+.footer{background:#071427;color:#8fa3c1;padding:58px 0 24px}.footer-grid{display:grid;grid-template-columns:1.35fr repeat(4,1fr);gap:38px}.footer .logo strong{color:#fff}.footer-desc{font-size:10px;max-width:270px;margin:18px 0}.footer-col h4{font-size:12px;color:#fff;margin:0 0 14px}.footer-col a{display:block;font-size:10px;margin:8px 0;cursor:pointer}.footer-bottom{border-top:1px solid #182a45;margin-top:38px;padding-top:18px;display:flex;justify-content:space-between;font-size:9px}
+.page-hero{background:linear-gradient(135deg,#f2f6ff,#f8fbff);padding:72px 0 55px;border-bottom:1px solid var(--line)}.page-hero-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center}.breadcrumbs{font-size:10px;color:#8b98aa;margin-bottom:17px}.page-hero h1{font-size:46px;line-height:1.2;letter-spacing:-.045em;margin:0 0 16px}.page-hero p{font-size:15px;color:var(--muted);max-width:680px}.page-hero-card{border-radius:23px;background:linear-gradient(145deg,#0e2548,#234f91);min-height:290px;padding:28px;color:#fff;position:relative;overflow:hidden}.page-hero-card:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;right:-80px;bottom:-120px;background:rgba(109,124,255,.28)}.page-hero-card h3{font-size:23px}.page-hero-card p{color:#b9cae5;font-size:11px}.mini-ui{position:absolute;left:28px;right:28px;bottom:25px;background:rgba(255,255,255,.94);border-radius:15px;padding:14px;color:var(--ink);display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.mini-ui div{background:#f2f5fa;border-radius:9px;padding:10px}.mini-ui strong{font-size:10px}.mini-ui span{display:block;font-size:8px;color:#8391a3;margin-top:3px}
+.filter-row{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:30px}.filter-row button{border:1px solid var(--line);background:#fff;color:#617188;border-radius:99px;padding:8px 14px;font-size:11px;cursor:pointer}.filter-row button.active{color:#fff;background:var(--blue);border-color:var(--blue)}
+.detail-layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:30px}.article{font-size:14px}.article h2{font-size:28px;margin-top:42px}.article h3{font-size:20px;margin-top:30px}.article p{color:#55667c}.article blockquote{margin:25px 0;padding:19px 22px;border-left:4px solid var(--blue);background:#f4f7ff;border-radius:0 14px 14px 0;color:#40536d}.article-image{height:340px;border-radius:22px;background:linear-gradient(145deg,#132d56,#3567ba);display:grid;place-items:center;color:#fff;margin:26px 0;overflow:hidden}.article-image svg{width:70%;max-height:250px}.sticky-card{position:sticky;top:95px;border:1px solid var(--line);border-radius:19px;padding:22px;background:#fff}.sticky-card h3{font-size:18px}.sticky-card p{font-size:11px;color:var(--muted)}.toc a{display:block;font-size:10px;color:#687991;border-left:2px solid #e2e8f2;padding:6px 10px}.toc a:hover{border-color:var(--blue);color:var(--blue)}
+.contact-layout{display:grid;grid-template-columns:.85fr 1.15fr;gap:30px}.contact-info{background:linear-gradient(145deg,#071427,#17335e);color:#fff;border-radius:24px;padding:36px}.contact-info h2{font-size:31px;line-height:1.3}.contact-info p{color:#aebed6;font-size:12px}.contact-item{display:flex;gap:12px;margin-top:20px}.contact-item i{width:37px;height:37px;border-radius:11px;background:rgba(255,255,255,.08);display:grid;place-items:center;font-style:normal}.contact-item strong{font-size:11px}.contact-item span{display:block;color:#95a9c6;font-size:9px}
+.form-card{border:1px solid var(--line);border-radius:24px;padding:34px;background:#fff;box-shadow:0 18px 55px rgba(18,36,67,.06)}.form-card h2{font-size:25px;margin:0 0 6px}.form-card>p{font-size:11px;color:var(--muted);margin:0 0 23px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field{display:flex;flex-direction:column;gap:6px}.field.full{grid-column:1/-1}.field label{font-size:10px;font-weight:650}.field input,.field textarea,.field select{width:100%;border:1px solid var(--line);border-radius:11px;background:#fbfcfe;padding:11px 12px;outline:0;font-size:12px}.field textarea{min-height:100px;resize:vertical}.field input:focus,.field textarea:focus,.field select:focus{border-color:#9eb7ef;box-shadow:0 0 0 3px #edf3ff}
+.about-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.about-stat{border:1px solid var(--line);border-radius:18px;padding:23px;background:#fff}.about-stat strong{font-size:29px;color:var(--blue)}.about-stat span{display:block;font-size:10px;color:var(--muted)}
+.timeline{position:relative;padding-left:30px}.timeline:before{content:"";position:absolute;left:8px;top:0;bottom:0;width:2px;background:#e1e8f2}.timeline-item{position:relative;padding:0 0 28px 20px}.timeline-item:before{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;border:4px solid var(--blue);left:-29px;top:3px}.timeline-item small{color:var(--blue);font-weight:700}.timeline-item h3{font-size:17px;margin:4px 0}.timeline-item p{font-size:11px;color:var(--muted);margin:0}
+.search-modal,.lead-modal,.chat-panel{position:fixed;z-index:70;opacity:0;pointer-events:none;transition:.2s}.search-modal.open,.lead-modal.open,.chat-panel.open{opacity:1;pointer-events:auto}
+.modal-mask{position:fixed;inset:0;background:rgba(4,13,28,.55);backdrop-filter:blur(5px)}
+.search-box-modal{position:fixed;top:100px;left:50%;transform:translateX(-50%);width:min(720px,calc(100% - 30px));background:#fff;border-radius:20px;padding:24px;box-shadow:0 25px 80px rgba(0,0,0,.28)}
+.search-input{display:flex;gap:8px}.search-input input{flex:1;height:48px;border:1px solid var(--line);border-radius:12px;padding:0 14px;outline:0}.search-results{margin-top:16px}.search-result{padding:12px;border-radius:11px;cursor:pointer}.search-result:hover{background:#f3f6fb}.search-result strong{font-size:12px}.search-result span{display:block;font-size:9px;color:var(--muted)}
+.lead-dialog{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(520px,calc(100% - 30px));background:#fff;border-radius:22px;padding:27px;box-shadow:0 25px 80px rgba(0,0,0,.28)}
+.lead-dialog h3{font-size:23px;margin:0 0 5px}.lead-dialog p{font-size:11px;color:var(--muted)}
+.close-btn{position:absolute;right:16px;top:14px;width:32px;height:32px;border:0;border-radius:9px;background:#f0f3f8;cursor:pointer}
+.floating-actions{position:fixed;right:22px;bottom:22px;z-index:45;display:flex;flex-direction:column;gap:9px}.floating-action{width:50px;height:50px;border-radius:17px;border:0;color:#fff;cursor:pointer;box-shadow:0 12px 28px rgba(25,48,88,.24);display:grid;place-items:center;font-weight:800}.floating-action.ai{background:linear-gradient(135deg,#3b72f4,#765ff1)}.floating-action.phone{background:#13a37b}
+.chat-panel{right:20px;bottom:84px;width:350px;background:#fff;border-radius:20px;box-shadow:0 25px 80px rgba(11,28,55,.28);overflow:hidden;border:1px solid var(--line)}
+.chat-head{background:linear-gradient(135deg,#153465,#315da7);color:#fff;padding:18px}.chat-head strong{font-size:14px}.chat-head span{display:block;font-size:9px;color:#c4d4ec}.chat-body{padding:16px;height:280px;overflow:auto;background:#f6f8fc}.chat-msg{max-width:88%;padding:10px 12px;border-radius:13px;font-size:10px;margin-bottom:10px}.chat-msg.ai{background:#fff;border:1px solid var(--line)}.chat-msg.user{background:var(--blue);color:#fff;margin-left:auto}.chat-input-row{display:flex;gap:7px;padding:11px;background:#fff;border-top:1px solid var(--line)}.chat-input-row input{flex:1;border:1px solid var(--line);border-radius:10px;padding:0 10px}.chat-input-row button{width:38px;border:0;border-radius:10px;background:var(--blue);color:#fff;cursor:pointer}
+.toast{position:fixed;left:50%;bottom:25px;transform:translateX(-50%) translateY(20px);background:#0b1c34;color:#fff;padding:11px 17px;border-radius:12px;font-size:11px;z-index:90;opacity:0;transition:.2s}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.mobile-drawer{display:none}
+@media(max-width:1050px){
+  .nav{display:none}.mobile-menu-btn{display:inline-flex}.hero-grid,.security-band,.page-hero-grid,.contact-layout{grid-template-columns:1fr}.hero-visual{max-width:680px;margin:auto}.feature-grid,.case-grid{grid-template-columns:repeat(2,1fr)}.solution-grid{grid-template-columns:repeat(2,1fr)}.product-showcase{grid-template-columns:1fr}.footer-grid{grid-template-columns:1.4fr repeat(2,1fr)}.insight-grid{grid-template-columns:1fr}.detail-layout{grid-template-columns:1fr}.sticky-card{position:static}
+}
+@media(max-width:700px){
+  .announcement{font-size:9px;padding:0 8px}.header{height:62px}.header-inner{padding:0 14px}.logo{min-width:0}.logo small{display:none}.header-actions .ghost-btn,.header-actions .primary-btn{display:none}
+  .hero{padding:60px 0 50px}.hero-grid{display:block}.hero h1{font-size:39px}.hero-copy>p{font-size:14px}.hero-visual{margin-top:40px}.product-window{transform:none}.product-ui{grid-template-columns:90px 1fr;min-height:320px}.floating-card{display:none}
+  .section{padding:65px 0}.section-head h2{font-size:30px}.feature-grid,.case-grid,.solution-grid,.about-stats{grid-template-columns:1fr}.security-points,.form-grid{grid-template-columns:1fr}.field.full{grid-column:auto}.metrics{grid-template-columns:repeat(2,1fr)}.cta-box{display:block;padding:31px}.cta-actions{margin:25px 0 0;flex-wrap:wrap}.footer-grid{grid-template-columns:1fr 1fr}.footer-grid>div:first-child{grid-column:1/-1}.footer-bottom{display:block}.page-hero{padding:50px 0 40px}.page-hero h1{font-size:36px}.product-showcase{gap:14px}.product-copy{padding:25px}.product-illustration{min-height:360px}.node{min-width:105px;padding:9px}.node.center{left:32%}.logo-strip-inner{overflow:auto}.client-logo{min-width:100px}.case-cover{height:160px}
+  .mobile-drawer{display:block;position:fixed;top:0;right:-290px;width:280px;height:100vh;background:#fff;z-index:80;padding:20px;box-shadow:-15px 0 50px rgba(8,22,43,.22);transition:.25s}.mobile-drawer.open{right:0}.mobile-drawer button{display:block;width:100%;border:0;background:transparent;text-align:left;padding:12px;border-bottom:1px solid var(--line);cursor:pointer}.drawer-close{font-size:22px!important;text-align:right!important}
+}
+</style>
+</head>
+<body>
+<div class="site-shell">
+  <div class="announcement"><b>新品发布</b>澜图 Knowledge OS 4.2 正式上线<a href="#" data-route="insights">查看更新 →</a></div>
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo" data-route="home">
+        <div class="logo-mark"><svg viewBox="0 0 24 24"><path d="M4 15.5 9 5l3.3 7L16 7l4 8.5M6 18h12"/></svg></div>
+        <div><strong>澜图智能</strong><small>Lantoo Intelligence</small></div>
+      </div>
+      <nav class="nav" id="desktopNav">
+        <button data-route="home">首页</button>
+        <button data-route="products">产品</button>
+        <button data-route="solutions">解决方案</button>
+        <button data-route="cases">客户案例</button>
+        <button data-route="insights">洞察</button>
+        <button data-route="about">关于我们</button>
+      </nav>
+      <div class="header-actions">
+        <button class="icon-btn" id="searchBtn" aria-label="搜索">⌕</button>
+        <button class="ghost-btn" data-route="contact">联系我们</button>
+        <button class="primary-btn" data-lead="预约产品演示">预约演示</button>
+        <button class="icon-btn mobile-menu-btn" id="mobileMenuBtn">☰</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="page active" id="page-home">
+      <div class="hero">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <div class="eyebrow"><i></i>企业知识智能化平台 · 支持私有化部署</div>
+            <h1>让企业知识<br><span>真正参与工作</span></h1>
+            <p>连接云盘、文档、知识库和业务系统，通过可信检索、智能问答与内容治理，让员工快速找到知识、理解知识并持续复用知识。</p>
+            <div class="hero-actions">
+              <button class="primary-btn" data-lead="预约产品演示">预约产品演示 →</button>
+              <button class="ghost-btn" data-route="products">查看产品能力</button>
+            </div>
+            <div class="hero-trust"><span><i>✓</i>国产化适配</span><span><i>✓</i>内网私有化</span><span><i>✓</i>细粒度权限</span><span><i>✓</i>全链路审计</span></div>
+          </div>
+          <div class="hero-visual">
+            <div class="product-window">
+              <div class="window-bar"><i></i><i></i><i></i><span>Knowledge OS · 智能知识工作台</span></div>
+              <div class="product-ui">
+                <aside class="product-side">
+                  <div class="product-brand"><i></i>Knowledge OS</div>
+                  <div class="active">智能问答</div><div>知识空间</div><div>内容治理</div><div>数据分析</div><div>安全审计</div>
+                </aside>
+                <div class="product-main">
+                  <div class="product-top"><strong>企业知识助手</strong><span>12 个数据源已连接</span></div>
+                  <div class="search-box">询问：私有化部署需要哪些基础资源？</div>
+                  <div class="ai-answer">
+                    <div class="answer-head"><div class="answer-icon">AI</div>基于 8 份内部资料生成 · 引用可追溯</div>
+                    <h4>推荐采用双节点应用服务 + 独立向量检索集群</h4>
+                    <p>根据《私有化部署指南 V4.2》，标准部署支持 5000 用户并发访问，核心服务可运行于信创环境……</p>
+                    <div class="result-grid"><div class="result-card"><b>部署指南 V4.2</b><p>第 3 章 · 资源规划</p></div><div class="result-card"><b>安全白皮书</b><p>第 5 章 · 数据隔离</p></div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="floating-card security"><small>知识权限命中率</small><strong>99.99%</strong><span>安全可控</span></div>
+            <div class="floating-card efficiency"><small>平均查找时间</small><strong>18 秒</strong><span>↓ 76%</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="logo-strip">
+        <div class="container logo-strip-inner"><div class="logo-strip-label">服务于中大型组织</div><div class="client-logo">HUA DONG</div><div class="client-logo">NOVA ENERGY</div><div class="client-logo">CITY DIGITAL</div><div class="client-logo">VISION TECH</div><div class="client-logo">APEX GROUP</div></div>
+      </div>
+
+      <section class="section">
+        <div class="container">
+          <div class="section-head"><div class="section-kicker">Core Capabilities</div><h2>从内容连接到知识应用<br>构建企业统一知识底座</h2><p>不是简单的文件搜索，而是一套覆盖连接、治理、检索、问答与运营的完整知识智能化平台。</p></div>
+          <div class="feature-grid">
+            <article class="feature-card"><div class="feature-icon"><svg viewBox="0 0 24 24"><path d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z"/></svg></div><h3>多源内容连接</h3><p>连接企业云盘、文件服务器、OA、业务系统和知识库，统一建立内容索引。</p><span class="feature-link" data-route="products">了解知识连接 →</span></article>
+            <article class="feature-card"><div class="feature-icon" style="--icon-bg:#f0edff;--icon:#7c5cf2"><svg viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3zM8 9h8M8 13h5"/></svg></div><h3>可信知识问答</h3><p>回答基于企业授权内容生成，支持引用定位、权限继承和答案质量评估。</p><span class="feature-link" data-route="products">了解智能问答 →</span></article>
+            <article class="feature-card"><div class="feature-icon" style="--icon-bg:#e8f8f3;--icon:#13a37b"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7zM9 12l2 2 4-5"/></svg></div><h3>安全与权限治理</h3><p>继承源系统权限，支持部门、角色和文件级隔离，完整记录检索与问答审计。</p><span class="feature-link" data-route="products">了解安全能力 →</span></article>
+            <article class="feature-card"><div class="feature-icon" style="--icon-bg:#fff5e7;--icon:#e79a22"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></div><h3>内容治理</h3><p>识别重复、过期和冲突内容，建立知识责任人、版本和有效期管理机制。</p><span class="feature-link" data-route="products">了解内容治理 →</span></article>
+            <article class="feature-card"><div class="feature-icon" style="--icon-bg:#e8f7fb;--icon:#17a6bd"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div><h3>知识运营分析</h3><p>分析热门问题、无答案问题、内容缺口和部门使用情况，持续提升知识质量。</p><span class="feature-link" data-route="products">了解运营分析 →</span></article>
+            <article class="feature-card"><div class="feature-icon" style="--icon-bg:#f4efff;--icon:#8d62de"><svg viewBox="0 0 24 24"><path d="M4 6h6v5H4zM14 13h6v5h-6zM10 8h4M12 8v7M8 15h6"/></svg></div><h3>业务场景编排</h3><p>将知识检索、问答和内容生成嵌入客服、研发、项目和运营流程。</p><span class="feature-link" data-route="solutions">查看解决方案 →</span></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section soft">
+        <div class="container">
+          <div class="section-head"><div class="section-kicker">Product Suite</div><h2>覆盖知识全生命周期的产品组合</h2><p>从统一知识空间到智能问答，再到治理和运营，按企业实际阶段灵活组合。</p></div>
+          <div class="product-tabs" id="homeProductTabs"><button class="active" data-tab="hub">知识空间</button><button data-tab="qa">智能问答</button><button data-tab="governance">内容治理</button><button data-tab="analytics">运营分析</button></div>
+          <div class="product-showcase">
+            <div class="product-copy" id="homeProductCopy">
+              <div class="mini-label">KNOWLEDGE HUB</div><h3>统一连接企业分散知识</h3><p>将不同系统和部门中的文件、页面与结构化数据连接到统一知识空间。</p>
+              <div class="check-list"><div><i>✓</i>多种数据源连接器</div><div><i>✓</i>增量同步与版本追踪</div><div><i>✓</i>权限继承与安全隔离</div><div><i>✓</i>知识标签和分类体系</div></div>
+              <button class="primary-btn" data-route="product-detail">查看产品详情</button>
+            </div>
+            <div class="product-illustration">
+              <div class="knowledge-map">
+                <svg class="map-lines"><line x1="23%" y1="23%" x2="49%" y2="49%" stroke="#7d9ad0"/><line x1="77%" y1="25%" x2="52%" y2="49%" stroke="#7d9ad0"/><line x1="24%" y1="79%" x2="49%" y2="53%" stroke="#7d9ad0"/><line x1="77%" y1="78%" x2="53%" y2="53%" stroke="#7d9ad0"/></svg>
+                <div class="node n1"><b>企业云盘</b><span>1,280 万份文档</span></div><div class="node n2"><b>业务系统</b><span>产品、项目和客户</span></div><div class="node center"><b>Knowledge Graph</b><span>统一知识底座</span></div><div class="node n3"><b>内部 Wiki</b><span>制度与经验知识</span></div><div class="node n4"><b>协作平台</b><span>消息与会议纪要</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section dark">
+        <div class="container security-band">
+          <div class="security-visual">
+            <div class="security-rings"><div class="security-core"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6zM9 12l2 2 4-5"/></svg></div></div>
+            <div class="security-chip c1">国密算法支持</div><div class="security-chip c2">权限实时继承</div><div class="security-chip c3">完整操作审计</div><div class="security-chip c4">内网离线部署</div>
+          </div>
+          <div class="security-copy"><div class="section-kicker">Security & Deployment</div><h2>企业级安全<br>从架构开始设计</h2><p>支持完全私有化、专有云和混合部署，数据不出域，模型、索引和内容均由企业自主控制。</p>
+            <div class="security-points"><div class="security-point"><strong>信创适配</strong><span>国产 CPU、操作系统、数据库</span></div><div class="security-point"><strong>数据隔离</strong><span>租户、部门、角色和资源级</span></div><div class="security-point"><strong>模型可控</strong><span>支持私有模型和多模型路由</span></div><div class="security-point"><strong>审计合规</strong><span>检索、问答、导出全链路记录</span></div></div>
+            <button class="ghost-btn" data-route="contact">获取私有化部署方案 →</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container"><div class="section-head"><div class="section-kicker">Industry Solutions</div><h2>深入行业场景，而不止是通用问答</h2><p>结合组织结构、业务流程和知识特点，构建可落地的行业知识智能化方案。</p></div>
+          <div class="solution-grid">
+            <article class="solution-card" style="--s1:#193d76;--s2:#2c6fc1" data-route="solutions"><small>MANUFACTURING</small><h3>制造业研发与售后知识中枢</h3><p>连接产品资料、工艺标准、故障案例和售后手册。</p><div class="arrow">→</div></article>
+            <article class="solution-card" style="--s1:#4e3b8d;--s2:#7d63d5" data-route="solutions"><small>GOVERNMENT</small><h3>政企制度与政策智能服务</h3><p>支持政策检索、制度问答、材料生成与合规校验。</p><div class="arrow">→</div></article>
+            <article class="solution-card" style="--s1:#126b72;--s2:#20a4a1" data-route="solutions"><small>ENERGY</small><h3>能源行业安全生产知识库</h3><p>沉淀规程、巡检、事故案例与应急处理经验。</p><div class="arrow">→</div></article>
+            <article class="solution-card" style="--s1:#8d4b32;--s2:#ca7850" data-route="solutions"><small>FINANCE</small><h3>金融制度与合规知识助手</h3><p>让制度、产品和风险规范安全进入业务流程。</p><div class="arrow">→</div></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section soft">
+        <div class="container"><div class="section-head"><div class="section-kicker">Customer Stories</div><h2>让知识真正产生业务价值</h2><p>来自制造、能源、政企和专业服务行业的数字化实践。</p></div>
+          <div class="case-grid">
+            <article class="case-card" data-route="case-detail"><div class="case-cover" style="--c1:#183a6d;--c2:#2e72c5"><small>智能制造 · 12,000 用户</small><h3>构建研发与售后统一知识中枢</h3><div class="case-logo">华东智造集团</div></div><div class="case-body"><p>连接 8 个业务系统和 1200 万份文档，支持研发、质量与售后团队统一检索。</p><div class="case-stats"><div><strong>76%</strong><span>查找时间下降</span></div><div><strong>42%</strong><span>问题解决提速</span></div></div></div></article>
+            <article class="case-card" data-route="case-detail"><div class="case-cover" style="--c1:#375449;--c2:#3e9c7a"><small>新能源 · 安全生产</small><h3>让安全规程和事故经验实时可用</h3><div class="case-logo">NOVA ENERGY</div></div><div class="case-body"><p>通过智能问答向现场人员提供带引用的规程与故障处理建议。</p><div class="case-stats"><div><strong>93%</strong><span>答案采纳率</span></div><div><strong>18s</strong><span>平均响应时间</span></div></div></div></article>
+            <article class="case-card" data-route="case-detail"><div class="case-cover" style="--c1:#5d427e;--c2:#8a66c8"><small>政企服务 · 制度管理</small><h3>政策和制度查询从小时缩短到秒</h3><div class="case-logo">CITY DIGITAL</div></div><div class="case-body"><p>统一政策、制度和办事材料，面向内部员工提供安全智能服务。</p><div class="case-stats"><div><strong>84%</strong><span>重复咨询减少</span></div><div><strong>99.9%</strong><span>权限准确率</span></div></div></div></article>
+          </div>
+          <div style="text-align:center;margin-top:28px"><button class="ghost-btn" data-route="cases">查看更多客户案例</button></div>
+        </div>
+      </section>
+
+      <section class="section dark">
+        <div class="container"><div class="section-head"><div class="section-kicker">Scale</div><h2>稳定支撑企业级知识应用</h2><p>从数百人团队到万人级集团组织，提供可扩展的产品能力和交付体系。</p></div>
+          <div class="metrics"><div class="metric"><strong>1200万+</strong><span>文档规模验证</span></div><div class="metric"><strong>10万+</strong><span>企业用户覆盖</span></div><div class="metric"><strong>99.95%</strong><span>平台可用性</span></div><div class="metric"><strong>50+</strong><span>业务系统连接器</span></div></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container"><div class="section-head"><div class="section-kicker">Insights</div><h2>企业知识智能化洞察</h2></div>
+          <div class="insight-grid">
+            <article class="featured-insight" data-route="insights"><span class="tag">行业白皮书</span><h3>2026 企业知识智能化建设指南</h3><p>从内容治理、权限体系、模型选型到业务落地，系统梳理企业知识智能化建设路径。</p><span style="font-size:11px;margin-top:15px">免费下载白皮书 →</span></article>
+            <div class="insight-list"><article class="insight-card" data-route="insights"><small>产品洞察 · 8 分钟</small><h4>为什么企业知识问答必须先解决权限问题？</h4><p>从源权限继承、索引隔离和答案审计三个层面分析。</p></article><article class="insight-card" data-route="insights"><small>最佳实践 · 6 分钟</small><h4>如何从 0 到 1 建设企业知识库</h4><p>一个可执行的四阶段方法：连接、治理、应用与运营。</p></article><article class="insight-card" data-route="insights"><small>技术解析 · 10 分钟</small><h4>私有化 RAG 系统的架构选择</h4><p>模型、向量检索、文档解析与高可用设计。</p></article></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta-section"><div class="container"><div class="cta-box"><div><h2>让企业知识从今天开始产生价值</h2><p>预约一场 45 分钟产品演示，获取适合您组织的知识智能化方案。</p></div><div class="cta-actions"><button class="ghost-btn" data-route="contact">联系解决方案顾问</button><button class="primary-btn" data-lead="预约产品演示">预约产品演示</button></div></div></div></section>
+    </section>
+
+    <section class="page" id="page-products">
+      <div class="page-hero"><div class="container page-hero-grid"><div><div class="breadcrumbs">首页 / 产品</div><h1>企业知识智能化<br>完整产品体系</h1><p>连接分散知识、建立可信检索、提供智能问答、持续治理内容，并将知识能力嵌入真实工作流程。</p><div style="display:flex;gap:9px;margin-top:24px"><button class="primary-btn" data-lead="产品方案咨询">获取产品方案</button><button class="ghost-btn" data-route="product-detail">查看 Knowledge Hub</button></div></div><div class="page-hero-card"><small>KNOWLEDGE OS 4.2</small><h3>四大产品能力统一协同</h3><p>Knowledge Hub · AI Assistant · Governance · Analytics</p><div class="mini-ui"><div><strong>知识连接</strong><span>50+ 数据源</span></div><div><strong>智能问答</strong><span>引用可追溯</span></div><div><strong>内容治理</strong><span>质量持续提升</span></div></div></div></div></div>
+      <section class="section"><div class="container"><div class="feature-grid">
+        <article class="feature-card" data-route="product-detail"><div class="feature-icon">KH</div><h3>Knowledge Hub</h3><p>连接不同系统和部门中的内容，建立统一知识空间、标签体系和权限索引。</p><span class="feature-link">查看产品详情 →</span></article>
+        <article class="feature-card"><div class="feature-icon" style="--icon-bg:#f0edff;--icon:#7c5cf2">AI</div><h3>AI Knowledge Assistant</h3><p>基于企业授权知识提供可信问答、摘要、对比和内容生成。</p><span class="feature-link" data-lead="智能问答咨询">预约演示 →</span></article>
+        <article class="feature-card"><div class="feature-icon" style="--icon-bg:#fff5e7;--icon:#e79a22">CG</div><h3>Content Governance</h3><p>识别重复、冲突、过期和低质量内容，建立知识生命周期管理。</p><span class="feature-link" data-lead="内容治理咨询">了解治理方案 →</span></article>
+        <article class="feature-card"><div class="feature-icon" style="--icon-bg:#e8f7fb;--icon:#17a6bd">KA</div><h3>Knowledge Analytics</h3><p>分析使用、搜索、问答和内容缺口，驱动知识运营持续优化。</p><span class="feature-link" data-lead="知识运营咨询">了解运营分析 →</span></article>
+        <article class="feature-card"><div class="feature-icon" style="--icon-bg:#e8f8f3;--icon:#13a37b">AP</div><h3>AI Portal</h3><p>为不同部门和业务场景快速搭建专属知识门户与 AI 助手。</p><span class="feature-link" data-lead="AI 门户咨询">查看场景 →</span></article>
+        <article class="feature-card"><div class="feature-icon" style="--icon-bg:#f4efff;--icon:#8d62de">API</div><h3>Knowledge API</h3><p>通过标准 API 和 MCP 将知识能力开放给 Agent、应用和业务系统。</p><span class="feature-link" data-lead="API 集成咨询">咨询集成 →</span></article>
+      </div></div></section>
+      <section class="section soft"><div class="container"><div class="section-head"><h2>产品能力矩阵</h2><p>按组织规模、业务场景和安全要求选择适合的能力组合。</p></div>
+        <div style="overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff"><table style="width:100%;border-collapse:collapse;min-width:780px;font-size:11px"><thead><tr style="background:#f5f7fb;text-align:left"><th style="padding:15px">能力</th><th>团队版</th><th>企业版</th><th>集团版</th><th>私有化版</th></tr></thead><tbody id="matrixRows"></tbody></table></div>
+      </div></section>
+      <section class="cta-section"><div class="container"><div class="cta-box"><div><h2>根据您的场景组合产品能力</h2><p>解决方案顾问将协助完成需求梳理、产品选型与架构建议。</p></div><div class="cta-actions"><button class="primary-btn" data-lead="产品选型咨询">获取选型建议</button></div></div></div></section>
+    </section>
+
+    <section class="page" id="page-solutions">
+      <div class="page-hero"><div class="container page-hero-grid"><div><div class="breadcrumbs">首页 / 解决方案</div><h1>让知识能力深入<br>每一个业务场景</h1><p>围绕研发、售后、制度、客服、项目和安全生产等核心场景，提供可快速落地的行业方案。</p></div><div class="page-hero-card"><small>SOLUTION ARCHITECTURE</small><h3>数据源 → 知识治理 → AI 应用</h3><p>统一连接、统一权限、统一运营</p><div class="mini-ui"><div><strong>业务内容</strong><span>文档与数据</span></div><div><strong>知识中台</strong><span>索引与治理</span></div><div><strong>场景应用</strong><span>问答与 Agent</span></div></div></div></div></div>
+      <section class="section"><div class="container"><div class="filter-row" id="solutionFilters"><button class="active" data-filter="all">全部场景</button><button data-filter="manufacturing">制造</button><button data-filter="government">政企</button><button data-filter="energy">能源</button><button data-filter="service">专业服务</button></div><div class="case-grid" id="solutionCards"></div></div></section>
+      <section class="section soft"><div class="container security-band" style="color:var(--ink)"><div><div class="section-kicker">Delivery Method</div><h2 style="font-size:38px;line-height:1.25;margin:0 0 15px">从试点到规模化落地<br>四阶段实施方法</h2><p style="color:var(--muted)">用真实业务问题验证价值，再逐步扩展内容范围、用户范围和业务场景。</p><div class="timeline" style="margin-top:30px"><div class="timeline-item"><small>PHASE 01</small><h3>场景与内容诊断</h3><p>确定高价值问题、目标用户、内容范围和安全边界。</p></div><div class="timeline-item"><small>PHASE 02</small><h3>试点知识空间</h3><p>连接核心数据源，完成权限、解析和问答效果验证。</p></div><div class="timeline-item"><small>PHASE 03</small><h3>业务流程集成</h3><p>将知识能力嵌入门户、客服、研发和项目协作。</p></div><div class="timeline-item"><small>PHASE 04</small><h3>知识运营体系</h3><p>建立内容责任、质量指标和持续运营机制。</p></div></div></div><div class="product-illustration" style="min-height:520px"><div style="position:relative;z-index:2;color:#fff"><small>VALUE DELIVERY</small><h3 style="font-size:27px;margin:12px 0">以业务价值为中心的交付</h3><p style="color:#b8c9e2;font-size:11px">每个阶段都有明确验收结果和价值指标。</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:35px"><div class="security-point"><strong>搜索效率</strong><span>目标下降 50% 以上</span></div><div class="security-point"><strong>问题解决</strong><span>首问解决率持续提升</span></div><div class="security-point"><strong>内容质量</strong><span>冲突与过期持续下降</span></div><div class="security-point"><strong>知识复用</strong><span>经验跨团队传播</span></div></div></div></div></div></section>
+      <section class="cta-section"><div class="container"><div class="cta-box"><div><h2>获取行业场景解决方案</h2><p>告诉我们您的业务问题，我们将提供针对性的方案和演示。</p></div><div class="cta-actions"><button class="primary-btn" data-lead="行业解决方案咨询">咨询行业方案</button></div></div></div></section>
+    </section>
+
+    <section class="page" id="page-cases">
+      <div class="page-hero"><div class="container"><div class="breadcrumbs">首页 / 客户案例</div><h1>客户实践与业务价值</h1><p>与客户一起，将企业知识从分散内容转化为可搜索、可理解、可复用的生产力。</p></div></div>
+      <section class="section"><div class="container"><div class="filter-row" id="caseFilters"><button class="active" data-filter="all">全部行业</button><button data-filter="制造">制造</button><button data-filter="能源">能源</button><button data-filter="政企">政企</button><button data-filter="专业服务">专业服务</button></div><div class="case-grid" id="caseCards"></div></div></section>
+      <section class="section dark"><div class="container"><div class="section-head"><h2>客户成功的共同路径</h2><p>聚焦高频问题，连接高价值内容，建立可持续运营机制。</p></div><div class="metrics"><div class="metric"><strong>68%</strong><span>平均查找时间下降</span></div><div class="metric"><strong>43%</strong><span>重复咨询下降</span></div><div class="metric"><strong>91%</strong><span>问答平均采纳率</span></div><div class="metric"><strong>3-6月</strong><span>典型价值实现周期</span></div></div></div></section>
+    </section>
+
+    <section class="page" id="page-insights">
+      <div class="page-hero"><div class="container"><div class="breadcrumbs">首页 / 洞察</div><h1>知识智能化洞察中心</h1><p>行业白皮书、产品实践、技术解析与线上活动，帮助企业建立清晰的知识智能化路径。</p></div></div>
+      <section class="section"><div class="container"><div class="filter-row"><button class="active">全部</button><button>白皮书</button><button>最佳实践</button><button>技术解析</button><button>活动直播</button></div><div class="insight-grid"><article class="featured-insight"><span class="tag">2026 白皮书</span><h3>企业知识智能化建设指南</h3><p>覆盖建设方法、技术架构、安全治理和业务落地，适合 CIO、数字化负责人和知识管理团队。</p><button class="primary-btn" data-lead="下载知识智能化白皮书" style="align-self:flex-start;margin-top:18px">免费下载</button></article><div class="insight-list" id="insightList"></div></div></div></section>
+      <section class="section soft"><div class="container"><div class="section-head"><h2>近期线上活动</h2></div><div class="feature-grid"><article class="feature-card"><div class="feature-icon">LIVE</div><h3>企业知识问答如何做好权限隔离</h3><p>8 月 15 日 14:00 · 产品技术公开课</p><button class="soft-btn" data-lead="报名线上公开课">立即报名</button></article><article class="feature-card"><div class="feature-icon" style="--icon-bg:#f0edff;--icon:#7c5cf2">CASE</div><h3>制造集团知识中枢建设实践</h3><p>8 月 22 日 15:00 · 客户案例分享</p><button class="soft-btn" data-lead="报名客户案例分享">立即报名</button></article><article class="feature-card"><div class="feature-icon" style="--icon-bg:#e8f8f3;--icon:#13a37b">TECH</div><h3>私有化 RAG 架构与性能优化</h3><p>8 月 29 日 14:00 · 技术架构分享</p><button class="soft-btn" data-lead="报名技术架构分享">立即报名</button></article></div></div></section>
+    </section>
+
+    <section class="page" id="page-about">
+      <div class="page-hero"><div class="container page-hero-grid"><div><div class="breadcrumbs">首页 / 关于我们</div><h1>用可信 AI<br>激活企业知识</h1><p>澜图智能专注企业知识管理与知识智能化，帮助组织建立安全、可控、可持续运营的知识生产力平台。</p></div><div class="page-hero-card"><small>OUR MISSION</small><h3>让每一份企业知识，都能在正确的时间服务正确的人</h3><p>Knowledge for everyone, at the right moment.</p></div></div></div>
+      <section class="section"><div class="container"><div class="about-stats"><div class="about-stat"><strong>2019</strong><span>公司成立</span></div><div class="about-stat"><strong>100+</strong><span>中大型客户</span></div><div class="about-stat"><strong>50+</strong><span>产品和交付伙伴</span></div><div class="about-stat"><strong>10万+</strong><span>企业用户</span></div></div><div class="security-band" style="margin-top:70px;color:var(--ink)"><div><div class="section-kicker">Company Story</div><h2 style="font-size:38px;line-height:1.3;margin:0 0 18px">从企业云盘到<br>企业知识智能化平台</h2><p style="color:var(--muted)">我们长期服务于企业内容管理和协作场景，深刻理解知识分散、权限复杂和业务落地困难。随着大模型技术成熟，我们将内容管理、知识治理与 AI 应用结合，形成面向企业的 Knowledge OS。</p></div><div class="timeline"><div class="timeline-item"><small>2019</small><h3>企业内容管理产品发布</h3><p>服务中大型组织的文件管理和安全协作。</p></div><div class="timeline-item"><small>2022</small><h3>知识管理能力升级</h3><p>建设统一知识空间、内容治理和组织权限体系。</p></div><div class="timeline-item"><small>2024</small><h3>企业知识 AI 平台上线</h3><p>推出可信问答、智能检索和知识生成能力。</p></div><div class="timeline-item"><small>2026</small><h3>Knowledge OS 4.2</h3><p>面向 Agent 与业务应用开放统一知识能力。</p></div></div></div></div></section>
+      <section class="section soft"><div class="container"><div class="section-head"><h2>我们的价值观</h2></div><div class="feature-grid"><article class="feature-card"><div class="feature-icon">01</div><h3>客户价值优先</h3><p>不追求技术展示，始终以真实业务价值和可持续运营为判断标准。</p></article><article class="feature-card"><div class="feature-icon" style="--icon-bg:#f0edff;--icon:#7c5cf2">02</div><h3>安全与可信</h3><p>企业 AI 必须尊重权限、来源和审计，可信是规模化应用的前提。</p></article><article class="feature-card"><div class="feature-icon" style="--icon-bg:#e8f8f3;--icon:#13a37b">03</div><h3>长期主义</h3><p>知识建设不是一次项目，而是产品、流程与组织共同演进的长期能力。</p></article></div></div></section>
+    </section>
+
+    <section class="page" id="page-contact">
+      <div class="page-hero"><div class="container"><div class="breadcrumbs">首页 / 联系我们</div><h1>开始您的企业知识智能化之旅</h1><p>填写需求，解决方案顾问将在 1 个工作日内与您联系。</p></div></div>
+      <section class="section"><div class="container contact-layout"><div class="contact-info"><div class="section-kicker" style="color:#89adff">CONTACT</div><h2>让我们一起梳理<br>最适合您的落地路径</h2><p>我们可以提供产品演示、场景诊断、技术交流和私有化架构建议。</p><div class="contact-item"><i>☎</i><div><strong>服务热线</strong><span>400-860-2026</span></div></div><div class="contact-item"><i>✉</i><div><strong>商务邮箱</strong><span>business@lantoo.ai</span></div></div><div class="contact-item"><i>⌂</i><div><strong>总部地址</strong><span>上海市浦东新区张江人工智能岛</span></div></div></div><form class="form-card demo-form"><h2>预约产品演示</h2><p>请填写以下信息，我们将结合您的行业和场景安排演示。</p><div class="form-grid"><div class="field"><label>姓名 *</label><input required placeholder="请输入姓名"></div><div class="field"><label>手机号 *</label><input required placeholder="请输入手机号"></div><div class="field"><label>公司名称 *</label><input required placeholder="请输入公司名称"></div><div class="field"><label>职位</label><input placeholder="请输入职位"></div><div class="field"><label>公司规模</label><select><option>500 人以下</option><option>500-2000 人</option><option>2000-10000 人</option><option>10000 人以上</option></select></div><div class="field"><label>关注方向</label><select><option>企业知识库</option><option>智能问答</option><option>内容治理</option><option>私有化部署</option></select></div><div class="field full"><label>需求描述</label><textarea placeholder="请简单描述您的业务场景、当前问题和期望目标"></textarea></div></div><label style="display:block;font-size:9px;color:var(--muted);margin:14px 0"><input type="checkbox" required> 我已阅读并同意隐私政策，同意用于本次业务咨询。</label><button class="primary-btn" type="submit" style="width:100%;height:46px">提交预约</button></form></div></section>
+    </section>
+
+    <section class="page" id="page-product-detail">
+      <div class="page-hero"><div class="container page-hero-grid"><div><div class="breadcrumbs">首页 / 产品 / Knowledge Hub</div><div class="section-kicker">KNOWLEDGE HUB</div><h1>连接企业分散内容<br>建立统一知识底座</h1><p>以安全、权限和治理为基础，将不同系统中的内容转化为可检索、可问答、可运营的企业知识。</p><div style="display:flex;gap:9px;margin-top:24px"><button class="primary-btn" data-lead="Knowledge Hub 产品演示">预约产品演示</button><button class="ghost-btn" data-route="contact">获取技术白皮书</button></div></div><div class="product-illustration" style="min-height:340px"><div class="knowledge-map"><svg class="map-lines"><line x1="23%" y1="23%" x2="49%" y2="49%" stroke="#7d9ad0"/><line x1="77%" y1="25%" x2="52%" y2="49%" stroke="#7d9ad0"/><line x1="24%" y1="79%" x2="49%" y2="53%" stroke="#7d9ad0"/><line x1="77%" y1="78%" x2="53%" y2="53%" stroke="#7d9ad0"/></svg><div class="node n1"><b>企业云盘</b><span>内容连接器</span></div><div class="node n2"><b>业务系统</b><span>结构化数据</span></div><div class="node center"><b>Knowledge Hub</b><span>统一知识底座</span></div><div class="node n3"><b>内部 Wiki</b><span>制度与经验</span></div><div class="node n4"><b>协作平台</b><span>消息与纪要</span></div></div></div></div></div>
+      <section class="section"><div class="container detail-layout"><article class="article"><h2>为什么企业需要统一知识底座</h2><p>企业知识通常分散在云盘、文件服务器、OA、CRM、项目系统和个人电脑中。简单搜索无法解决权限、版本、冲突和业务语义问题。Knowledge Hub 在保留源系统管理边界的基础上，建立统一知识索引和治理体系。</p><div class="article-image"><svg viewBox="0 0 700 260"><rect x="20" y="35" width="145" height="65" rx="16" fill="#ffffff" opacity=".95"/><rect x="20" y="160" width="145" height="65" rx="16" fill="#ffffff" opacity=".95"/><rect x="535" y="35" width="145" height="65" rx="16" fill="#ffffff" opacity=".95"/><rect x="535" y="160" width="145" height="65" rx="16" fill="#ffffff" opacity=".95"/><rect x="265" y="82" width="170" height="95" rx="24" fill="#7ea0ff"/><path d="M165 68 265 110M165 192 265 150M535 68 435 110M535 192 435 150" stroke="#9fb6df" stroke-width="3"/><text x="62" y="74" fill="#17325f" font-size="18">企业云盘</text><text x="62" y="199" fill="#17325f" font-size="18">内部 Wiki</text><text x="573" y="74" fill="#17325f" font-size="18">业务系统</text><text x="573" y="199" fill="#17325f" font-size="18">协作平台</text><text x="306" y="132" fill="#fff" font-size="20">Knowledge Hub</text></svg></div><h2>核心能力</h2><h3>多源连接与增量同步</h3><p>支持企业云盘、文件服务器、数据库、业务 API 和知识库，通过增量方式持续同步新增、修改和删除内容。</p><h3>权限继承与安全索引</h3><p>检索和问答严格继承源系统权限。员工只能看到本来就有权访问的内容，权限变化可以及时同步到知识索引。</p><h3>内容解析与语义建模</h3><p>识别 Word、PDF、PPT、Excel、图片和网页内容，保留标题、章节、表格、版本和来源信息。</p><h3>知识治理与质量管理</h3><p>自动发现重复、冲突、过期、缺失责任人和低使用内容，为知识管理员提供治理建议。</p><blockquote>Knowledge Hub 不替代原有业务系统，而是建立跨系统的统一知识能力层。</blockquote><h2>适用场景</h2><p>研发知识、产品资料、售后案例、制度政策、项目经验、客服知识、培训材料和安全规程等。</p></article><aside><div class="sticky-card"><small style="color:var(--blue);font-weight:700">KNOWLEDGE HUB</small><h3>获取产品资料</h3><p>预约演示，了解数据源连接、权限设计和私有化部署方案。</p><button class="primary-btn" data-lead="Knowledge Hub 详细咨询" style="width:100%">预约演示</button><div class="toc" style="margin-top:20px"><a href="#">统一知识底座</a><a href="#">多源连接</a><a href="#">权限安全</a><a href="#">内容治理</a><a href="#">适用场景</a></div></div></aside></div></section>
+    </section>
+
+    <section class="page" id="page-case-detail">
+      <div class="page-hero"><div class="container"><div class="breadcrumbs">首页 / 客户案例 / 华东智造集团</div><div class="section-kicker">CUSTOMER STORY</div><h1>华东智造集团：构建研发与售后统一知识中枢</h1><p>连接 8 个业务系统和 1200 万份文档，让研发、质量和售后团队快速获得可信知识。</p></div></div>
+      <section class="section"><div class="container detail-layout"><article class="article"><div class="about-stats"><div class="about-stat"><strong>12,000</strong><span>企业用户</span></div><div class="about-stat"><strong>1,200万</strong><span>文档规模</span></div><div class="about-stat"><strong>76%</strong><span>查找时间下降</span></div><div class="about-stat"><strong>42%</strong><span>问题解决提速</span></div></div><h2>项目背景</h2><p>华东智造集团拥有多个研发中心和制造基地，产品资料、技术标准、质量案例和售后手册分散在不同系统中。员工需要在多个平台之间切换，且难以判断文件是否为最新版本。</p><h2>建设方案</h2><div class="article-image"><svg viewBox="0 0 700 260"><rect x="30" y="35" width="150" height="190" rx="20" fill="#fff" opacity=".95"/><rect x="275" y="35" width="150" height="190" rx="20" fill="#7ea0ff"/><rect x="520" y="35" width="150" height="190" rx="20" fill="#fff" opacity=".95"/><path d="M180 130h95M425 130h95" stroke="#a8bedf" stroke-width="4"/><text x="75" y="118" fill="#17325f" font-size="20">8 个系统</text><text x="68" y="150" fill="#64758c" font-size="14">文档与数据</text><text x="315" y="118" fill="#fff" font-size="20">知识中枢</text><text x="306" y="150" fill="#e6edff" font-size="14">治理与权限</text><text x="556" y="118" fill="#17325f" font-size="20">业务应用</text><text x="550" y="150" fill="#64758c" font-size="14">研发与售后</text></svg></div><p>项目采用“统一连接、权限继承、分场景运营”的建设方式。首先连接云盘、PLM、质量系统和售后系统，再按研发、质量和售后建立专属知识空间与助手。</p><h2>业务成果</h2><p>员工平均查找资料时间从 75 秒下降到 18 秒；售后问题首问解决率提升 35%；过期产品手册和重复内容持续下降。</p><blockquote>“知识助手不仅帮助员工找到资料，更重要的是让我们建立了跨部门的知识运营机制。”—— 集团数字化负责人</blockquote></article><aside><div class="sticky-card"><small style="color:var(--blue);font-weight:700">制造行业案例</small><h3>获取完整案例</h3><p>留下联系方式，获取包含架构和实施方法的完整案例 PDF。</p><button class="primary-btn" data-lead="下载华东智造案例" style="width:100%">下载完整案例</button></div></aside></div></section>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container"><div class="footer-grid"><div><div class="logo" data-route="home"><div class="logo-mark"><svg viewBox="0 0 24 24"><path d="M4 15.5 9 5l3.3 7L16 7l4 8.5M6 18h12"/></svg></div><div><strong>澜图智能</strong><small>Lantoo Intelligence</small></div></div><p class="footer-desc">面向中大型组织的企业知识管理与知识智能化平台。</p></div><div class="footer-col"><h4>产品</h4><a data-route="product-detail">Knowledge Hub</a><a data-route="products">智能知识助手</a><a data-route="products">内容治理</a><a data-route="products">知识运营</a></div><div class="footer-col"><h4>解决方案</h4><a data-route="solutions">制造业</a><a data-route="solutions">政企</a><a data-route="solutions">能源</a><a data-route="solutions">专业服务</a></div><div class="footer-col"><h4>资源</h4><a data-route="cases">客户案例</a><a data-route="insights">行业洞察</a><a data-route="insights">白皮书</a><a data-route="insights">线上活动</a></div><div class="footer-col"><h4>公司</h4><a data-route="about">关于我们</a><a data-route="contact">联系我们</a><a>加入我们</a><a>隐私政策</a></div></div><div class="footer-bottom"><span>© 2026 澜图智能科技有限公司 · 沪ICP备2026000001号</span><span>隐私政策 · 服务条款 · 安全中心</span></div></div>
+  </footer>
+</div>
+
+<div class="mobile-drawer" id="mobileDrawer"><button class="drawer-close" id="drawerClose">×</button><button data-route="home">首页</button><button data-route="products">产品</button><button data-route="solutions">解决方案</button><button data-route="cases">客户案例</button><button data-route="insights">洞察</button><button data-route="about">关于我们</button><button data-route="contact">联系我们</button><button data-lead="移动端预约演示" style="color:var(--blue);font-weight:700">预约演示</button></div>
+
+<div class="search-modal" id="searchModal"><div class="modal-mask" data-close="searchModal"></div><div class="search-box-modal"><button class="close-btn" data-close="searchModal">×</button><h3 style="margin:0 0 14px">搜索网站内容</h3><div class="search-input"><input id="siteSearchInput" placeholder="搜索产品、解决方案、案例或文章"><button class="primary-btn" id="doSearch">搜索</button></div><div class="search-results" id="searchResults"></div></div></div>
+
+<div class="lead-modal" id="leadModal"><div class="modal-mask" data-close="leadModal"></div><div class="lead-dialog"><button class="close-btn" data-close="leadModal">×</button><h3 id="leadTitle">预约产品演示</h3><p>填写信息后，解决方案顾问将在 1 个工作日内联系您。</p><form class="demo-form"><div class="form-grid"><div class="field"><label>姓名 *</label><input required placeholder="请输入姓名"></div><div class="field"><label>手机号 *</label><input required placeholder="请输入手机号"></div><div class="field full"><label>公司名称 *</label><input required placeholder="请输入公司名称"></div><div class="field full"><label>需求描述</label><textarea placeholder="请简单描述您的业务场景"></textarea></div></div><label style="display:block;font-size:9px;color:var(--muted);margin:12px 0"><input type="checkbox" required> 同意隐私政策并用于本次咨询。</label><button class="primary-btn" type="submit" style="width:100%">提交预约</button></form></div></div>
+
+<div class="floating-actions"><button class="floating-action ai" id="aiChatBtn">AI</button><button class="floating-action phone" data-lead="电话咨询">☎</button></div>
+<div class="chat-panel" id="chatPanel"><div class="chat-head"><strong>澜图产品助手</strong><span>在线 · 可以了解产品、方案和案例</span></div><div class="chat-body" id="publicChatBody"><div class="chat-msg ai">你好，我是澜图产品助手。你可以问我：<br>• 私有化部署需要什么资源？<br>• 产品如何保证文件权限？<br>• 制造业有哪些落地案例？</div></div><div class="chat-input-row"><input id="publicChatInput" placeholder="输入问题"><button id="publicChatSend">↑</button></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=(s,p=document)=>p.querySelector(s),$$=(s,p=document)=>[...p.querySelectorAll(s)];
+const routeTitles={home:'澜图智能｜企业知识管理与私有化知识库解决方案',products:'产品｜澜图智能',solutions:'解决方案｜澜图智能',cases:'客户案例｜澜图智能',insights:'洞察｜澜图智能',about:'关于我们｜澜图智能',contact:'联系我们｜澜图智能','product-detail':'Knowledge Hub｜澜图智能','case-detail':'华东智造客户案例｜澜图智能'};
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(window.__tt);window.__tt=setTimeout(()=>t.classList.remove('show'),2400)}
+function routeTo(route,push=true){if(!routeTitles[route])route='home';$$('.page').forEach(p=>p.classList.remove('active'));$('#page-'+route).classList.add('active');$$('#desktopNav button').forEach(b=>b.classList.toggle('active',b.dataset.route===route));document.title=routeTitles[route];if(push)location.hash='#/'+route;window.scrollTo(0,0);$('#mobileDrawer').classList.remove('open')}
+function currentRoute(){return (location.hash.replace(/^#\//,'')||'home').split('?')[0]}
+$$('[data-route]').forEach(el=>el.addEventListener('click',e=>{e.preventDefault();routeTo(el.dataset.route)}));
+window.addEventListener('hashchange',()=>routeTo(currentRoute(),false));
+routeTo(currentRoute(),false);
+$('#mobileMenuBtn').onclick=()=>$('#mobileDrawer').classList.add('open');$('#drawerClose').onclick=()=>$('#mobileDrawer').classList.remove('open');
+
+const productData={
+ hub:{label:'KNOWLEDGE HUB',title:'统一连接企业分散知识',desc:'将不同系统和部门中的文件、页面与结构化数据连接到统一知识空间。',checks:['多种数据源连接器','增量同步与版本追踪','权限继承与安全隔离','知识标签和分类体系']},
+ qa:{label:'AI KNOWLEDGE ASSISTANT',title:'让员工快速获得可信答案',desc:'基于授权知识生成答案，保留引用来源、权限边界和反馈闭环。',checks:['答案引用可追溯','多轮问题理解','权限级答案隔离','无答案问题收集']},
+ governance:{label:'CONTENT GOVERNANCE',title:'持续提升企业知识质量',desc:'识别重复、冲突和过期内容，建立责任、版本与有效期治理。',checks:['重复内容识别','过期内容提醒','冲突版本对比','知识责任人机制']},
+ analytics:{label:'KNOWLEDGE ANALYTICS',title:'用数据驱动知识运营',desc:'分析搜索、问答、内容和用户行为，持续发现知识缺口。',checks:['热门问题分析','无答案问题分析','部门使用分析','内容价值评估']}
+};
+$$('#homeProductTabs button').forEach(b=>b.onclick=()=>{$$('#homeProductTabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');const d=productData[b.dataset.tab];$('#homeProductCopy').innerHTML=`<div class="mini-label">${d.label}</div><h3>${d.title}</h3><p>${d.desc}</p><div class="check-list">${d.checks.map(x=>`<div><i>✓</i>${x}</div>`).join('')}</div><button class="primary-btn" data-route="product-detail">查看产品详情</button>`;$('#homeProductCopy [data-route]').onclick=()=>routeTo('product-detail')});
+
+const matrix=[['多源内容连接','✓','✓','✓','✓'],['权限继承','基础','完整','完整','完整'],['智能问答','✓','✓','✓','✓'],['内容治理','—','✓','✓','✓'],['多组织隔离','—','—','✓','✓'],['私有模型','—','可选','可选','✓'],['内网离线部署','—','—','—','✓']];
+$('#matrixRows').innerHTML=matrix.map(r=>`<tr style="border-top:1px solid var(--line)">${r.map((c,i)=>`<td style="padding:14px;color:${i===0?'var(--ink)':'#5f7188'};font-weight:${i===0?'650':'400'}">${c}</td>`).join('')}</tr>`).join('');
+
+const solutions=[
+ {cat:'manufacturing',title:'研发知识助手',industry:'制造业',desc:'连接产品、设计、测试和工艺资料，支持研发人员快速检索与问答。',color:['#173b72','#2c72c4']},
+ {cat:'manufacturing',title:'售后故障知识库',industry:'制造业',desc:'沉淀故障现象、原因、处理过程和备件信息，提升首次解决率。',color:['#30564e','#3d9678']},
+ {cat:'government',title:'制度政策智能服务',industry:'政企',desc:'统一制度、政策和办事材料，提供带来源的政策问答。',color:['#53408a','#8668ca']},
+ {cat:'government',title:'材料智能编写',industry:'政企',desc:'基于内部模板和政策知识辅助生成汇报、方案和申报材料。',color:['#2d4c83','#577dc1']},
+ {cat:'energy',title:'安全生产知识助手',industry:'能源',desc:'将规程、巡检和事故案例转化为现场可用的安全知识。',color:['#15696e','#2da0a0']},
+ {cat:'energy',title:'设备运维知识库',industry:'能源',desc:'聚合设备档案、维修记录和专家经验，辅助故障诊断。',color:['#53693e','#82a558']},
+ {cat:'service',title:'专业服务知识中台',industry:'专业服务',desc:'沉淀项目方案、行业研究和交付经验，提升方案复用效率。',color:['#744637','#bd7354']},
+ {cat:'service',title:'客服坐席知识助手',industry:'专业服务',desc:'根据产品知识和服务规范，向坐席实时推荐可信答案。',color:['#4e477c','#766dc0']}
+];
+function renderSolutions(filter='all'){$('#solutionCards').innerHTML=solutions.filter(x=>filter==='all'||x.cat===filter).map((x,i)=>`<article class="case-card" data-lead="${x.title}咨询"><div class="case-cover" style="--c1:${x.color[0]};--c2:${x.color[1]}"><small>${x.industry}解决方案</small><h3>${x.title}</h3><div class="case-logo">场景方案 ${String(i+1).padStart(2,'0')}</div></div><div class="case-body"><p>${x.desc}</p><span class="feature-link">获取方案 →</span></div></article>`).join('');bindLead()}
+renderSolutions();$$('#solutionFilters button').forEach(b=>b.onclick=()=>{$$('#solutionFilters button').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderSolutions(b.dataset.filter)});
+
+const cases=[
+ {cat:'制造',title:'华东智造集团',sub:'研发与售后统一知识中枢',desc:'连接 8 个系统和 1200 万份文档。',stats:['76%','查找时间下降'],color:['#183a6d','#2e72c5']},
+ {cat:'能源',title:'NOVA ENERGY',sub:'安全生产知识助手',desc:'让规程与事故经验在现场实时可用。',stats:['93%','答案采纳率'],color:['#375449','#3e9c7a']},
+ {cat:'政企',title:'CITY DIGITAL',sub:'政策制度智能服务',desc:'政策查询从小时缩短到秒。',stats:['84%','重复咨询减少'],color:['#5d427e','#8a66c8']},
+ {cat:'专业服务',title:'APEX CONSULTING',sub:'项目经验复用平台',desc:'沉淀行业方案与交付方法。',stats:['46%','方案编写提速'],color:['#7b4b38','#bd7253']},
+ {cat:'制造',title:'VISION TECH',sub:'质量案例知识库',desc:'建立质量问题和原因分析知识网络。',stats:['35%','复发问题下降'],color:['#1f4d67','#3689a1']},
+ {cat:'政企',title:'METRO SERVICE',sub:'内部制度助手',desc:'服务 6000 名员工的制度与办事问答。',stats:['89%','问题自助解决'],color:['#414d86','#6778c6']}
+];
+function renderCases(filter='all'){$('#caseCards').innerHTML=cases.filter(x=>filter==='all'||x.cat===filter).map(x=>`<article class="case-card" data-route="case-detail"><div class="case-cover" style="--c1:${x.color[0]};--c2:${x.color[1]}"><small>${x.cat} · 客户案例</small><h3>${x.sub}</h3><div class="case-logo">${x.title}</div></div><div class="case-body"><p>${x.desc}</p><div class="case-stats"><div><strong>${x.stats[0]}</strong><span>${x.stats[1]}</span></div><div><strong>查看</strong><span>完整案例</span></div></div></div></article>`).join('');$$('#caseCards [data-route]').forEach(x=>x.onclick=()=>routeTo('case-detail'))}
+renderCases();$$('#caseFilters button').forEach(b=>b.onclick=()=>{$$('#caseFilters button').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderCases(b.dataset.filter)});
+
+const insights=[['最佳实践','企业知识库从 0 到 1 的四阶段方法','连接、治理、应用和运营，建立可持续的知识体系。'],['产品解析','企业知识问答为什么必须保留引用来源','引用不仅用于可信度，也是权限和审计的重要基础。'],['技术架构','私有化 RAG 系统的模型与检索选型','结合规模、安全和场景选择适合的部署架构。'],['行业观察','制造企业如何沉淀售后故障经验','从工单、手册和专家经验建立故障知识网络。']];
+$('#insightList').innerHTML=insights.map(x=>`<article class="insight-card"><small>${x[0]} · 8 分钟</small><h4>${x[1]}</h4><p>${x[2]}</p></article>`).join('');
+
+function openModal(id){$('#'+id).classList.add('open')}function closeModal(id){$('#'+id).classList.remove('open')}
+$$('[data-close]').forEach(x=>x.onclick=()=>closeModal(x.dataset.close));
+$('#searchBtn').onclick=()=>{openModal('searchModal');setTimeout(()=>$('#siteSearchInput').focus(),100)};
+const searchData=[['Knowledge Hub 产品','统一连接企业分散内容','product-detail'],['制造业解决方案','研发、质量和售后知识中枢','solutions'],['华东智造集团案例','1200 万文档知识平台','case-detail'],['企业知识智能化白皮书','2026 建设指南','insights'],['私有化部署咨询','获取技术架构建议','contact']];
+function search(){const q=$('#siteSearchInput').value.trim();const list=searchData.filter(x=>!q||x.join('').toLowerCase().includes(q.toLowerCase()));$('#searchResults').innerHTML=list.length?list.map(x=>`<div class="search-result" data-target="${x[2]}"><strong>${x[0]}</strong><span>${x[1]}</span></div>`).join(''):'<div style="padding:18px;color:var(--muted);font-size:11px">未找到相关内容，建议联系产品顾问。</div>';$$('#searchResults [data-target]').forEach(x=>x.onclick=()=>{closeModal('searchModal');routeTo(x.dataset.target)})}
+$('#doSearch').onclick=search;$('#siteSearchInput').addEventListener('keydown',e=>{if(e.key==='Enter')search()});search();
+
+function bindLead(){$$('[data-lead]').forEach(x=>{x.onclick=e=>{e.preventDefault();$('#leadTitle').textContent=x.dataset.lead||'预约产品演示';openModal('leadModal')}})}
+bindLead();
+$$('.demo-form').forEach(f=>f.addEventListener('submit',e=>{e.preventDefault();closeModal('leadModal');f.reset();toast('提交成功，解决方案顾问将在 1 个工作日内联系您')}));
+
+$('#aiChatBtn').onclick=()=>$('#chatPanel').classList.toggle('open');
+function sendChat(){const input=$('#publicChatInput'),v=input.value.trim();if(!v)return;const body=$('#publicChatBody');body.insertAdjacentHTML('beforeend',`<div class="chat-msg user">${v.replace(/[<>]/g,'')}</div>`);input.value='';body.scrollTop=body.scrollHeight;setTimeout(()=>{let answer='我已根据网站公开资料整理：澜图智能支持知识连接、智能问答、内容治理和私有化部署。你可以预约演示获取针对性方案。';if(v.includes('权限'))answer='平台继承源系统权限，并在检索、索引和答案三个层面进行隔离，同时保留完整审计记录。';if(v.includes('私有化'))answer='支持完全内网部署，模型、向量库、文档解析和业务数据均可运行在企业自有环境。';if(v.includes('制造'))answer='制造业典型场景包括研发知识、质量案例、售后故障和工艺标准。华东智造案例中，资料查找时间下降了 76%。';body.insertAdjacentHTML('beforeend',`<div class="chat-msg ai">${answer}</div>`);body.scrollTop=body.scrollHeight},450)}
+$('#publicChatSend').onclick=sendChat;$('#publicChatInput').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()});
+</script>
+</body>
+</html>

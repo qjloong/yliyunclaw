@@ -112,3 +112,54 @@ YLIYUN_TEST_FORGED_TENANT_ID
 YLIYUN_TEST_READ_CYCLES
 YLIYUN_TEST_RATE_BURST
 ```
+
+## 6. AI ticket 双密钥无中断轮换
+
+云盘后端只用 `current` 签发 ticket 和撤销通知；MateClaw 在轮换窗口内同时接受
+`current/previous`。本机密钥文件位于已忽略的 `data\yliyun-dev`，脚本只输出 key id，
+不会输出 secret。
+
+先生成新 current，并把旧 current 保留为 previous：
+
+```powershell
+node D:\project\ai\mateclaw-dev\scripts\yliyun-dev\generate-credentials.mjs --prepare-ticket-rotation
+node D:\project\ai\mateclaw-dev\scripts\yliyun-dev\verify-credentials.mjs
+```
+
+然后严格按以下顺序部署：
+
+1. 先重启 MateClaw 后端，使其加载 `current=new/previous=old`；云盘后端暂不重启。
+2. 执行 `node D:\project\ai\mateclaw-dev\scripts\yliyun-dev\verify-ticket-rotation.mjs`，应看到旧 key id 且 SSO 成功。
+3. 再重启云盘后端，使其改用新 current 签发。
+4. 再次执行验证脚本，应看到新 key id 且 SSO 成功。
+5. 从云盘切换到新 current 起至少保留 previous 15 分钟，并确认撤销重试和验票日志无异常。
+
+轮换窗口结束后，将 previous 移到可恢复的本机备份，再重启 MateClaw 和云盘后端：
+
+```powershell
+node D:\project\ai\mateclaw-dev\scripts\yliyun-dev\generate-credentials.mjs --retire-ticket-previous
+node D:\project\ai\mateclaw-dev\scripts\yliyun-dev\verify-credentials.mjs
+```
+
+在 previous 尚未退役时再次执行 `--prepare-ticket-rotation` 会直接失败，避免覆盖仍在使用的
+旧密钥。生产环境应把四个值放入 Secret Manager/KMS 注入的环境变量
+`YLIYUN_TICKET_SECRET_CURRENT/PREVIOUS`、`YLIYUN_TICKET_KEY_ID_CURRENT/PREVIOUS`，
+不得提交到代码仓库、前端配置或应用中心业务配置。
+
+## 7. AI 助手动态地址回归
+
+五个服务在线且租户 1 已启用 AI 助手时执行：
+
+```powershell
+node D:\project\ai\mateclaw-dev\scripts\yliyun-dev\verify-dynamic-ai-address.mjs
+```
+
+脚本会使用系统租户管理员短 Token 验证：不可达候选 API 地址不落库且不递增
+`configVersion`；MateClaw 浏览器/API 地址切换后 capability、SSO 和版本失效立即生效；
+最后在 `finally` 中恢复原浏览器地址、API 地址和 allowed origin。每次配置变更都会按设计
+撤销 MCP 专用 delegation，因此脚本会为每个管理请求重新换取短 Token，不会输出 Token、
+ticket 或 app key。
+
+该脚本会真实递增配置版本并使已有 AI 助手 Cookie 失效，只允许在测试租户执行。若进程被强制
+终止导致 `finally` 未运行，应立即在系统租户应用中心恢复输出中记录的原地址，再执行
+`verify-ticket-rotation.mjs` 确认 SSO。

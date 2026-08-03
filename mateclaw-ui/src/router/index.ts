@@ -239,7 +239,11 @@ const router = createRouter({
               path: 'mcp-servers',
               name: 'SettingsMcpServers',
               component: () => import('@/views/McpServers.vue'),
-              meta: { title: 'Settings - MCP Connections', requiredCapability: 'manage:settings' },
+              meta: {
+                title: 'Settings - MCP Connections',
+                requiredCapability: 'manage:settings',
+                requireAdmin: true,
+              },
             },
             {
               path: 'tools',

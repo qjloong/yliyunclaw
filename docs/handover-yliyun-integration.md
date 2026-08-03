@@ -1,8 +1,16 @@
 # 一粒云 × MateClaw 集成 — 交接文档
 
-> 日期：2026-07-28 | 最后更新：2026-07-30 | 分支：`dev-v2` | 状态：P0 28/28 完成；P1 已完成 16/32、进行中 2、待验收 1；V3 2/34 完成；统一应用接入治理 IG 0/28 待确认
+> 日期：2026-07-28 | 最后更新：2026-08-03 | 分支：`dev-v2` | 状态：P0 28/28 完成；P1 已完成 20/36、进行中 2、待验收 1；V3 2/34 完成；统一应用接入治理 IG 15/28 完成、进行中 1、待验收 0
 >
-> 2026-07-30 实施结论：MateClaw 通过通用 MCP Runtime 发现 14 个工具，OBO 用户身份、一次性 ticket、HttpOnly Cookie、读写工具闭环均已实测。新增 `/embed/cloud-agent` 精简会话页与云盘非阻塞右侧 Drawer；当前文件可在不重载 iframe/会话的情况下实时更新活动上下文，并可携带同一会话与上下文展开完整 MateClaw。云盘附件卡仅在当前会话首次提问或宿主切换文件/文件夹后再次发送，普通追问复用已持久化的会话上下文，不重复展示同一附件。租户管理员角色和模型供应商配置现已按 Workspace 隔离。云盘本地数据库与 Redis 已切换到 `192.168.0.135`，五个开发进程现均在线。真实文件 `17485` 已使用工作空间模型 `deepseek/deepseek-chat` 完成首轮总结和无附件重传的同会话追问。最新增量已补齐云盘附件消息卡片、附件读取过程、嵌入式历史会话列表，以及按“云盘用户 + 文件/文件夹”恢复会话；从原会话重放 `file.create` 已成功把润色结果保存为云盘文件 `17490`。云盘助手不再按模板 ID 硬编码裁剪为仅云盘 MCP 工具，统一使用现有 Agent/Skill 工具绑定、渐进披露和运行时安全策略。这些能力均通过云盘专用上下文或嵌入模式开关接入，不改变普通 MateClaw 会话主链路。`CloudResourceRef`、固定引用、保存确认 UI 和 Codex 风格输入框合并仍待后续实施。
+> 2026-08-01 实施结论：MateClaw 通过通用 MCP Runtime 发现 14 个工具，OBO 用户身份、一次性 ticket、HttpOnly Cookie、读写工具闭环均已实测。新增 `/embed/cloud-agent` 精简会话页，并把原 AI 助手内容不变地装入云盘通用 `FloatingWindow`：窗口可拖动/缩放/全屏、背景云盘可操作、iframe 保活且仅显示外层一层 Header。当前文件可在不重载 iframe/会话的情况下实时更新活动上下文，并可携带同一会话与上下文展开完整 MateClaw。云盘附件卡仅在当前会话首次提问或宿主切换文件/文件夹后再次发送，普通追问复用已持久化的会话上下文，不重复展示同一附件。租户管理员角色和模型供应商配置现已按 Workspace 隔离；租户 135 已通过标准应用中心 API 完成临时安装、连接检测、启停、真实身份 SSO、owner 工作空间、模型配置权限、新旧会话 configVersion 隔离和 MCP 五层诊断，测试结束后已停用并卸载。云盘本地数据库与 Redis 已切换到 `192.168.0.135`，五个开发进程现均在线。真实文件 `17485` 已使用工作空间模型 `deepseek/deepseek-chat` 完成首轮总结和无附件重传的同会话追问。最新增量已补齐云盘附件消息卡片、附件读取过程、嵌入式历史会话列表，以及按“云盘用户 + 文件/文件夹”恢复会话；从原会话重放 `file.create` 已成功把润色结果保存为云盘文件 `17490`。云盘助手不再按模板 ID 硬编码裁剪为仅云盘 MCP 工具，统一使用现有 Agent/Skill 工具绑定、渐进披露和运行时安全策略。平台共享 MCP 管理已收回全局管理员，独立部署 Profile 增加凭据配对和启动 fail-fast，诊断会刷新失效的正式 MCP session。这些能力均通过云盘专用上下文或嵌入模式开关接入，不改变普通 MateClaw 会话主链路。`CloudResourceRef`、固定引用、保存确认 UI 和 Codex 风格输入框合并仍待后续实施。
+>
+> 2026-08-02 增量：AI 助手撤销失败已形成持久化补偿闭环。失败项按租户/应用/configVersion 写入 `cloud_app_instance.runtime_json.aiRevocation`，30 秒起指数退避、15 分钟封顶；只重试未完成的 delegation/session 子步骤，第三次失败写结构化 ERROR 审计并向租户联系人发送站内告警，恢复后清理任务并发送恢复通知。管理端新增 `revocation-status` 查询，实例健康刷新不会覆盖待办和错误。租户 135 实测 MateClaw 停机后停用产生 `configVersion=29/sessionPending=true/attempts=1`，重试失败递增为 2，MateClaw 恢复后下一次调度成功并清零；临时实例随后卸载。云盘后台定向回归 16/16、23 模块 Reactor 编译/打包通过，五服务检查全通过。
+>
+> 2026-08-03 增量：AI ticket 与撤销通知已完成 `current/previous + key id` 双密钥无中断轮换。云盘只用 current 签名，票据携带签名内 `kid`、撤销回调携带 `X-Yliyun-Key-Id`；MateClaw 同时接受 current/previous，并校验声明 key id 与实际验签 key 一致。两端对短密钥、重复密钥和重复 key id 启动 fail-fast，兼容旧 `YLIYUN_TICKET_SECRET` 作为 current 回退；密钥只通过环境变量或 Git 忽略的本机文件注入，管理接口、URL、日志和前端不回显 secret。已按“先 MateClaw 消费端、后云盘签发端”真实轮换：旧 `dev-current` 在 previous 窗口 SSO 成功，新 `dev-20260803013227` 切换后 SSO 成功，租户 1/用户 100 映射和 `authSource=yliyun` 均正确。MateClaw 定向回归 8/8、云盘后端定向回归 18/18、两端完整 Reactor 编译打包通过；五个服务在线。旧 key 至少保留 15 分钟撤销重试窗口后再退役。
+>
+> 2026-08-03 动态改址增量：应用中心配置写入新增扩展级 before/after 生命周期。候选 `mateclaw_api_url` 必须先通过协议/格式和 `/actuator/health` 检查，失败由事务回滚；平台字段更新会广播全部已安装租户、逐租户递增 `configVersion` 并撤销旧会话。API 地址迁移若旧端点撤销失败，会把旧端点随补偿状态持久化，后续重试不会误打新端点；重置配置组也不再绕过不可编辑字段和扩展回调。云盘前端在用户显式打开/重新兑票时强制刷新 capability，不等待 60 秒缓存。真实验收从 configVersion 17 开始：不可达 `127.0.0.1:9` 被拒绝且版本不变，浏览器地址切到可达 `::1:5173` 后 capability/SSO 成功，API 地址切到 `localhost:18088` 后健康和撤销成功，最终恢复 `localhost:5173`、`127.0.0.1:18088`，configVersion 23、补偿队列为空。新增云盘回归后合计 24/24，前端定向 ESLint 通过，五服务和新 key SSO 复验通过。
+>
+> 2026-08-03 WenShu 撤销治理增量：保持问数正常启用、路由、远端接口及 delegation 协议不变，仅把停用失败边界接入与 AI 助手一致的持久化补偿约束。委托撤销或远端租户停用失败时，本地 capability 先 fail closed，再按租户/app/configVersion 写入 `cloud_app_instance.runtime_json.wenshuRevocation`；任务按失败子步骤独立重试，30 秒起指数退避、15 分钟封顶，第三次失败通知租户联系人，恢复后清理状态并通知。待办同时保存原问数 API 地址，平台改址后不会把旧停用请求误发到新端点；健康刷新不覆盖待办，卸载前必须补偿成功，管理端可查询 `revocation-status`。跨应用待办扫描已收敛到通用 Mapper 边界。问数 9/9、AI 助手及认证链 24/24 定向回归、23 模块生产打包均通过；最新 fat JAR 已在 30303 运行（PID 49336），五服务与凭据配对检查全通过。
 
 ---
 
@@ -43,7 +51,7 @@
 | Flyway 当前版本 | 9011 | V9012–V9016 未进入当前运行产物 |
 | `target/classes` | 缺少新增迁移及 `YliyunMcpConnector.class` | 当前进程使用旧编译产物 |
 
-### 2.3 2026-07-29 当前运行基线
+### 2.3 2026-08-01 当前运行基线（端口已复核）
 
 | 服务/检查项 | 结果 | 验收证据 |
 |---|---|---|
@@ -51,8 +59,8 @@
 | 云盘后端 `:30303` | ✅ | 新 JAR 23 模块构建成功；数据库与 Redis 使用 `192.168.0.135`，Tomcat 正常启动，业务鉴权接口和 OpenAPI HTTP 200 |
 | MCP Server `:18100/mcp` | ✅ | `/health`、`/manifest` 正常，MateClaw 发现 14 个工具 |
 | MateClaw UI `:5173` | ✅ | Vite 直接加载最新 `mateclaw-ui` 源码，`/api` 代理至后端 |
-| MateClaw 后端 `:18088` | ✅ | 最新 JAR 已重启，`/actuator/health` 为 `UP`，Flyway schema version `9019` |
-| 云盘助手 | ✅ / 待角色 E2E | 既有租户 Workspace 与 `builtin.yliyun_assistant` 已验证；本轮 `tenantAdmin` 声明待使用真实管理员/成员账号完成最终 E2E |
+| MateClaw 后端 `:18088` | ✅ | 最新 JAR 已重启，`/actuator/health` 为 `UP`，Flyway schema version `9020` |
+| 云盘助手 | ✅ / 测试租户治理链已启用 | 租户 1 已通过应用中心安装、连接测试并启用；capability、签名 launchContext、真实身份 SSO、MCP entitlement、configVersion 失效、通用可拖动非模态窗口与单 Header 均已实测；文件预览共存/小屏和完整双租户矩阵仍待 E2E |
 
 Windows 启动、凭据生成、日志位置与健康检查见 `scripts/yliyun-dev/README.md`。本机开发按前后端分离运行，推荐顺序为“云盘后端 → MCP → MateClaw 后端 → MateClaw UI → 云盘前端”；`18088` 不作为开发环境的 MateClaw 前端入口。
 
@@ -60,6 +68,7 @@ Windows 启动、凭据生成、日志位置与健康检查见 `scripts/yliyun-d
 
 - 当前提供的 Compose 实际位于 `D:\project\ai\wenshu\docker-compose.test.yml`，用途声明为 **WenShu 测试中间件**，不是 MateClaw 仓库内的生产部署文件。
 - PostgreSQL 对外端口为 `5434`，使用命名卷 `postgres-test-data`。云盘恢复库 `cloud_drive_dev` 和应用角色 `yliyun` 当前运行在该实例中；已执行的表、序列及默认权限授权会随命名卷保留，普通容器重启不会丢失。删除卷、重建库或再次执行恢复后，仍必须重新执行应用角色授权复验。
+- 2026-08-01 首次安装 AI 助手暴露出恢复库的应用中心 `@KeySequence` 仍落后于表内最大 ID，表现为 `cloud_app_config_group_pkey` 重复。已同步 `cloud_app_market/instance/config_group/config_item` 四个序列，并把通用 serial/identity 与应用中心显式序列修复写入 `sql/postgresql/grant-yliyun-application-role.sql`、`cloud-drive-reset-sequences.sql`；再次恢复数据库后必须执行其中之一。
 - 该 Compose 的 MinIO API/Console 分别为 `192.168.0.135:19010/19011`，初始化 bucket 为 `wenshu`。云盘当前对象仍位于独立 endpoint `192.168.250.130:9001`、bucket `yly`；未完成对象迁移前不得把两者直接互换。
 - 该 Compose 未定义 Redis。云盘配置指向的 `192.168.0.135` Redis 由其他进程或部署单元提供，不能把本文件作为 Redis 可恢复部署依据。
 
@@ -132,7 +141,7 @@ Windows 启动、凭据生成、日志位置与健康检查见 `scripts/yliyun-d
 | 文件 | 改动 | 说明 |
 |---|---|---|
 | `AiAssistantWorkspace.vue` | 新增 | iframe 嵌入 MateClaw + ticket 传递；文件切换通过宿主消息同步，不重载会话 |
-| `CloudAIAssistantDrawer.vue` | 新增 | 云盘右侧非阻塞 Drawer，左侧云盘保持可操作 |
+| `CloudAIAssistantDrawer.vue` | 新增 | 文件名沿用历史；当前实际为通用非模态 `FloatingWindow` 宿主，左侧云盘保持可操作 |
 | `CloudDriveSidebar.vue` | 修改 | 添加“AI助手”独立入口；“问数”保持原 `/cloud-drive/wenshu` 路由 |
 | `CloudFileContextMenu.vue` | 修改 | 文件右键 "AI助手分析" |
 | `CloudFileDetailPane.vue` | 修改 | 当前文件/文件夹直接打开 AI 助手 |
@@ -201,16 +210,16 @@ Java MCP SDK (`spring-ai-starter-mcp-client` 1.1.8) 与 FastMCP httpStream 模�
 用户登录云盘 (:8080)
   │
   ├─ 方式 1: 点击侧边栏 "AI助手"
-  │   └── 非阻塞右侧 Drawer → ticket → iframe /embed/cloud-agent → 兑票 → 精简 Chat
+  │   └── 通用非模态 FloatingWindow → ticket → iframe /embed/cloud-agent → 兑票 → 精简 Chat
   │
   ├─ 方式 2: 文件右键 "AI助手分析"
-  │   └── Drawer + fileId → MateClaw 自动加载文件到附件
+  │   └── FloatingWindow + fileId → MateClaw 自动加载文件到附件
   │
   ├─ 左侧选择/预览切换文件
   │   └── contextChanged 消息 → 替换右侧待发送附件；iframe 与 conversationId 保持不变
   │
   ├─ 点击侧边栏 "问数"
-  │   └── 关闭助手 Drawer → 原 `/cloud-drive/wenshu` 路由与 WenShu SSO 逻辑
+  │   └── 关闭助手窗口 → 原 `/cloud-drive/wenshu` 路由与 WenShu SSO 逻辑
   │
   └─ 在 MateClaw Chat 中:
       ├── 输入 @ → CloudFilePicker（搜索云盘文件）
@@ -237,10 +246,10 @@ Java MCP SDK (`spring-ai-starter-mcp-client` 1.1.8) 与 FastMCP httpStream 模�
 | P1 | 云盘文件引用非一等上下文 | ⚠️ V1 已缓解 | 附件已确定性预读、显示消息卡片和执行过程，不再依赖模型猜测；签名 `CloudResourceRef`、版本和固定引用仍未完成 |
 | P1 | 文件选择交互重复 | ⚠️ | 回形针、`+`、`@` 三条入口语义重叠，缺少上下文条 |
 | P1 | 保存回云盘 | ⚠️ 部分完成 | Agent 直接调用 `file.create/file.save` 已可用，真实回存文件 `17490` 已复验；`SaveToCloudDialog`、目标目录/覆盖确认和完成后宿主刷新仍未接线 |
-| P1 | 云盘内嵌形态过重 | ✅ 已解决 | 新增 `/embed/cloud-agent` 精简路由和非阻塞右侧 Drawer，保留完整界面入口 |
+| P1 | 云盘内嵌形态过重 | ✅ 已解决 | 新增 `/embed/cloud-agent` 精简路由，并嵌入云盘通用非模态可拖动窗口，保留外层完整界面入口 |
 | P1 | 当前文件与助手上下文不同步 | ✅ 已解决 | 宿主消息按 channelId + parent origin 校验，替换待发送附件且不重载会话 |
 | P1 | 云盘身份显示为内部映射名 | ✅ 已解决 | 内部主键继续使用 `yliyun_{tenant}_{user}`，界面改用真实昵称与租户名 |
-| P1 | AI 助手与 AI 问数入口混淆 | ✅ 已解决 | 助手只打开 Drawer；问数继续走原 WenShu 路由，切换时关闭 Drawer |
+| P1 | AI 助手与 AI 问数入口混淆 | ✅ 已解决 | 助手只打开通用浮动窗口；问数继续走原 WenShu 路由，切换时关闭助手窗口 |
 | P1 | MCP Server 生产部署 | ⚠️ | 需完成 `tsc`、容器构建、健康检查和密钥注入 |
 | P1 | MCP API Key 配置 | ❌ | 外部 AI 客户端需要 API Key，当前 `MCP_API_KEYS` 为空 |
 | P1 | 自动化测试覆盖不足 | ⚠️ | 身份、通用 Runtime、附件预读、流事件、Workspace Provider 已有定向测试；新增真实对象存储与 TC-6 可重复脚本，Picker 已做浏览器实测；保存 UI 和跨客户端回归仍不完整 |
@@ -364,14 +373,14 @@ nohup /Users/qinjinlong/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Hom
 
 - 免登录与身份：浏览器 ticket E2E 无登录页闪现；`/api/v1/auth/session` 返回真实 `displayName/tenantName`，内部鉴权用户名不再直接用于界面。
 - 会话侧栏 Agent 切换去重：顶部 `AgentPickerDialog` 的数据来自当前 Workspace 的 `GET /api/v1/agents?enabled=true`，用于切换运行 Agent；原“全部员工”下拉的数据却是从 `GET /api/v1/conversations` 返回的历史会话中按 `agentId` 临时去重，只会显示有历史会话的 Agent，因而出现“四个员工”和过期名称。两者均来自上游 `001cb1a2` 的侧栏重构，不是云盘 V1 定制逻辑，但在现有交互中语义重复且数据范围不一致，现已移除下方历史会话筛选，只保留 Workspace Agent 选择器；历史会话仍完整展示，点击历史会话仍会切换到对应 Agent。
-- 精简面板：`/embed/cloud-agent` 仅展示会话主体；云盘 Drawer 使用点击穿透层，左侧云盘不被遮罩阻塞。
+- 精简面板：`/embed/cloud-agent` 仅展示会话主体；云盘通用浮动窗口以 opt-in 点击穿透运行，左侧云盘不被遮罩阻塞。
 - 文件跟随：初始 `readme.txt` 附件可见；宿主切换为另一文件后附件被替换，URL 中 `conversationId` 不变且无页面错误。
 - 完整界面：从精简页展开后无登录页，保留相同 `conversationId` 与最新文件附件。
 - 附件消息卡片：发送后的 `yliyun://file/{id}` / `yliyun://folder/{id}` 结构化内容片段会渲染为普通附件卡片，并标注“云盘附件”；历史消息中仅保存了 `path` 的旧数据也可正常展示。
 - 读取过程：确定性附件预读会发布 `cloud_attachment_started/completed` 事件，并复用现有工具时间线组件展示；该段只写入 UI `segments`，不会伪造模型 Provider 的 `toolCalls`，不会污染下一轮 LLM 历史。
 - 会话历史：嵌入页新增“会话列表”按钮，只列出当前云盘助手 Agent 的历史会话；浏览器实测侧栏可打开并切换到旧会话。
-- 会话恢复：云盘宿主按真实 `userId + fileId/folderId` 保存最近 `conversationId`；Drawer 关闭时保留 iframe，重新打开同一文件优先恢复原会话。MateClaw SSO 白名单参数已允许安全透传合法 `conversationId`。
-- 业务隔离：WenShu 源码、Store、Bridge、文件策略和 API 文件均无改动；问数仍进入 `/cloud-drive/wenshu`，仅在路由切换前关闭助手 Drawer。
+- 会话恢复：云盘宿主按真实 `userId + fileId/folderId` 保存最近 `conversationId`；助手窗口关闭时保留 iframe，重新打开同一文件优先恢复原会话。MateClaw SSO 白名单参数已允许安全透传合法 `conversationId`。
+- 业务隔离：WenShu 源码、Store、Bridge、文件策略和 API 文件均无改动；问数仍进入 `/cloud-drive/wenshu`，仅在路由切换前关闭助手窗口。
 - 构建检查：MateClaw 后端定向测试 6/6、fat jar 打包成功；MateClaw UI 与云盘前端生产构建成功；两端前端定向 ESLint 0 error；五个开发端口全部在线。
 - 浏览器检查：560px 嵌入视口中仅保留一层云盘助手标题，真实租户/账号、DeepSeek、当前附件和会话列表均可见；历史会话切换后云盘附件卡片正常，未出现页面脚本错误。
 
@@ -440,10 +449,10 @@ nohup /Users/qinjinlong/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Hom
 | 范围 | 已完成 | 进行中 | 待验收 | 待实施/待确认 | 结论 |
 |---|---:|---:|---:|---:|---|
 | P0 | 28/28 | 0 | 0 | 0 | 核心链路与 TC-6 安全 E2E 全部完成 |
-| P1 | 16/32 | 2 | 1 | 13 | 精简面板、附件链路、会话恢复、角色/Provider 已落地；一等资源引用、输入框收敛和保存审批未完成 |
+| P1 | 20/36 | 2 | 1 | 13 | 精简面板、附件链路、会话恢复、角色/Provider、通用可拖动窗口、非模态保活、单 Header 和多窗口 E2E 已落地；固定引用、输入框收敛和保存审批仍未完成 |
 | P2 | 0/7 | 0 | 0 | 7 | WenShu 委派、生产化、兼容性和文档收口尚未启动 |
 | V3 | 2/34 | 0 | 0 | 32 | V3-A04 对象存储恢复回归、V3-D07 云盘助手工具配置去硬限制完成；媒体播放、外链、客户端动作与本地 Office 场景仍待确认实施 |
-| IG | 0/28 | 0 | 0 | 28 | 问数已有应用中心闭环；AI 助手尚未纳入租户应用实例，统一 capability、三层启停强制、动态地址和 MCP 配置治理待实施 |
+| IG | 15/28 | 1 | 0 | 12 | 平台/租户配置隔离、应用扩展、capability、动态菜单/地址、一次性 ticket、出票权限与脱敏审计、MCP entitlement/configVersion、平台管理员 MCP 边界、独立部署 Profile、分层诊断、第二租户矩阵、MateClaw Cookie/MCP 专用 delegation 主动失效、AI/WenShu 撤销失败补偿与告警、双密钥轮换、动态改址回滚/广播及完整发布矩阵已完成；AI 远端 Workspace/Agent 停用语义仍待收口 |
 
 > 计数口径：只把已有实现且验收证据已回填的任务计为“已完成”；V1 兼容实现不等于 V2 专用 API 或 V3 资源动作协议已经完成。
 
@@ -522,12 +531,31 @@ nohup /Users/qinjinlong/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Hom
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
 | P1-C01 | 复用 Chat Runtime | MateClaw UI | P0 验收 | 完整页和嵌入页共用会话、流式、审批、附件逻辑 | 已完成：以 `embedded` 可选模式最小改造复用 `ChatConsole` |
-| P1-C02 | 新建精简会话页 | MateClaw UI | P1-C01 | 仅包含单层标题栏、消息列表、状态、输入框 | 已完成：`/embed/cloud-agent`；2026-07-29 已移除云盘 Drawer 的重复 Header |
-| P1-C03 | 云盘详情右侧容器 | 云盘前端 | P1-C02 | 右侧抽屉不阻塞云盘主页面，小屏可用 | 已完成：560px / 最大 94vw 非阻塞 Drawer；关闭与完整界面入口共用同一标题行 |
+| P1-C02 | 新建精简会话页 | MateClaw UI | P1-C01 | 仅包含单层标题栏、消息列表、状态、输入框 | 已完成：`/embed/cloud-agent` 支持 `hostHeader=1`；路由同步保留该参数，浏览器实测 iframe 内 Header 数为 0 |
+| P1-C03 | 云盘详情通用浮动容器 | 云盘前端 | P1-C02 | 助手窗口不阻塞云盘主页面，内容保持原嵌入实现，小屏可用 | 已完成：AI 助手复用云盘 `FloatingWindow`，首选宽度 580px、非模态点击穿透，保留原 `AiAssistantWorkspace` 内容 |
 | P1-C04 | 定义宿主事件协议 | 云盘前端、MateClaw UI | P1-C02 | 当前上下文消息具有 channel 与 origin 校验 | 进行中：`contextChanged`、`conversation-change` 已完成，openFile/saveCompleted 待后续 |
 | P1-C05 | 精简嵌入认证 | 云盘、MateClaw | P0-C05 | 面板加载不携带长期 token，无登录页闪现 | 已完成 |
 | P1-C06 | “展开完整 MateClaw”能力 | MateClaw UI | P1-C02 | 保留同一会话和上下文进入完整页面 | 已完成 |
 | P1-C07 | 面板浏览器 E2E | 全部 | P1-C03–P1-C06 | 选择、预览、提问、切换、固定、展开场景通过 | 待验收（仅固定引用）：免登、SSO Picker、身份、附件展示/替换、历史切换、同文件会话恢复、展开、真实模型提问及对象存储回归均已通过 |
+| P1-C08 | 增强 `FloatingWindow` 非模态与保活能力 | 云盘前端 | P1-C03 | 新增显式 modeless/pass-through 与 keep-mounted 能力；默认行为不影响文件预览/编辑窗口；关闭或隐藏不销毁 AI iframe | 已完成：opt-in `modeless`、`keepMounted` 和根层点击穿透已落地；浏览器计算样式为根层 `pointer-events:none`、窗口 `auto`，原预览窗口默认值不变 |
+| P1-C09 | AI 助手接入云盘通用可拖动窗口 | 云盘前端 | P1-C08 | 仅把原固定容器替换为 `FloatingWindow`，原 iframe 内容和宽度语义不变；支持拖动、缩放、全屏和外部打开 | 已完成：按用户确认回退三态定制，保留 580px 首选宽度；1440×1000 浏览器中窗口从 `(430,50)` 拖至 `(510,88)`，尺寸保持 `580×900` |
+| P1-C10 | 单 Header 与同 iframe 保活 | 云盘前端、MateClaw UI | P1-C08–P1-C09 | 外层窗口承载标题和窗口动作，嵌入页进入 host-header 模式；关闭再开、文件切换不重复 Header、不重新兑票、不丢会话 | 已完成：外层为唯一 Header；`ChatConsole.syncRouteState` 保留 `hostHeader`，实测 iframe 内 Header 数为 0，原会话/文件上下文继续复用 |
+| P1-C11 | 浮动助手与云盘多窗口 E2E | 云盘前端、MateClaw UI | P1-C09–P1-C10 | 浮窗存在时文件选择、目录切换和预览仍可操作；验证层级聚焦、与文件预览共存、拖拽缩放、浏览器缩放、小屏、跨 Origin 消息和会话恢复 | 已完成：实测 AI 浮窗可拖动和右下缩放，并与 Markdown 文件预览窗口共存；预览沿用原模态聚焦，关闭后 AI 会话仍在。关闭再开复用同一 iframe URL/会话，480×800 小屏完整收敛，跨 Origin 外部打开免登进入完整会话 |
+
+#### P1-C 嵌入通道与窗口形态确认（2026-08-01）
+
+1. 当前 `/embed/cloud-agent` 是云盘真实用户经一次性 ticket 登录 MateClaw 后复用完整 `ChatConsole` 的精简外壳，继承 Workspace、Agent、模型、会话历史、云盘 OBO、附件、工具过程和审批能力。
+2. MateClaw `webchat` 是另一条面向外部网站访客的渠道：共享 Channel API Key，按 `visitorId + visitorToken` 隔离，conversation owner 为 `webchat:*`。当前小部件只实现基础气泡、文本消息和流式回复；它不映射云盘租户账号，也不应把 Channel API Key 放进云盘前端，因此不能替换云盘 AI 助手。
+3. 推荐只在底层收敛通用 SSE 事件、消息渲染和附件/审批组件，不合并两种认证与会话所有权。若后续需要无 iframe 的深度嵌入，应新增“登录态 Embed SDK”，使用短时 launch ticket 和当前用户会话接口，而不是套用 WebChat 访客身份。
+4. 云盘通用 `Dialog` 仅启用 Element Plus `draggable`；文件预览使用的 `FloatingWindow` 已有拖拽、四角缩放、最小化和全屏，因此作为 AI 助手窗口基座。P1-C08/C10 已用 opt-in 非模态/保活和 `hostHeader=1` 解决背景拦截、slot 卸载与双 Header；AI 助手未再增加停靠布局、位置持久化等定制状态。
+
+| 对比维度 | 当前云盘 `/embed/cloud-agent` | MateClaw WebChat |
+|---|---|---|
+| 身份认证 | 云盘一次性 ticket → MateClaw HttpOnly 登录态 | Channel API Key + `visitorId/visitorToken`，不依赖 MateClaw 用户 JWT |
+| 租户与会话所有权 | 真实云盘用户映射到租户 Workspace，沿用本人会话 | Channel 绑定 Workspace/Agent，会话归属 `webchat:*` 访客主体 |
+| 云盘权限与 MCP | 每次 Tool Call 通过 OBO 代表当前云盘用户，继续执行云盘 ACL | 默认没有云盘真实账号/OBO；强行复用会造成身份降级或共享密钥前置 |
+| UI 能力 | 复用 `ChatConsole`：历史、Agent、模型、附件、工具过程和审批均可用 | 当前 SDK 是固定角落的基础气泡，只渲染文本与基础 SSE 回复 |
+| 推荐用途 | 云盘、业务系统等可信登录态深度嵌入 | 官网客服、匿名访客、第三方轻量对话或后端 SSE API |
 
 ### P1-D：保存回云盘和写操作审批
 
@@ -711,12 +739,12 @@ V3 将 MateClaw 会话作为主要使用页面，但不把云盘大文件、媒�
 
 问数 `wenshu_integration` 已具备“系统租户维护平台连接、当前租户维护策略、enable/disable 远端生命周期、capability 控制菜单、一次性 ticket + 短时 delegation”的闭环，应作为统一应用接入的兼容基线。
 
-AI 助手当前仍有四个未统一点：
+AI 助手实施前存在以下四个未统一点；本轮已分别由 IG-P0-A05、A03/A04、B02 和 B04 完成收口：
 
-1. 云盘前端固定展示 AI 助手菜单，没有读取租户应用 capability。
-2. MateClaw 地址来自前端构建变量 `VITE_AI_BASE_URL`，地址变化需要重新构建云盘前端。
-3. `/admin-api/yliyun/ai/ticket` 只依赖已登录用户，尚未强制检查当前租户的应用实例、启用状态、健康状态和使用权限。
-4. MCP OBO 换取云盘 Token 依赖全局 `YLIYUN_APP_KEY`，尚未在换票或 Tool Call 阶段校验当前租户是否已启用 AI 助手。
+1. 云盘前端曾固定展示 AI 助手菜单，未读取租户应用 capability；现已由独立 AI capability 驱动。
+2. MateClaw 地址曾来自前端构建变量 `VITE_AI_BASE_URL`；现已由系统租户平台配置动态下发。
+3. `/admin-api/yliyun/ai/ticket` 曾只依赖已登录用户；现已强制检查应用实例、启用/健康状态和角色权限，并记录脱敏审计。
+4. MCP OBO 换取云盘 Token 曾只依赖全局 appKey；现已在换票和每次 Tool Call 校验租户 entitlement/configVersion。
 
 ### 14.2 统一目标流程
 
@@ -741,7 +769,20 @@ AI 助手当前仍有四个未统一点：
 2. **会话闸门**：拒绝签发新的 SSO/launch ticket，并撤销已有 delegation、应用会话或相关缓存。
 3. **工具闸门**：MCP OBO 换票和受保护 Tool Call 再次校验租户 entitlement；不能仅依靠隐藏前端入口。
 
+撤销通知采用“本地先关闭、远端最终一致”的补偿策略。`cloud_app_instance.runtime_json.aiRevocation` 只保存 configVersion、失败子步骤、尝试次数和时间，不保存 Token、密钥或任意远端 URL；重试时重新读取当前平台连接配置。默认参数为 `yliyun.ai.revocation-retry.poll-interval-ms=30000`、`initial-delay-seconds=30`、`max-delay-seconds=900`、`batch-size=50`、`alert-attempts=3`，可通过部署配置覆盖，`enabled=false` 可关闭 worker。任务扫描可跨租户，但每个实例的读取、撤销和更新都会切回其真实 tenant context；重复执行依赖 configVersion 单调性和撤销接口幂等性保证安全。
+
 AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少包含 MateClaw API 地址、嵌入地址、allowed origin、ticket/OIDC 配置和关联 MCP audience；租户字段至少包含 enabled、allowed roles、文件读写/分享/删除范围、打开方式和导航显示策略。前端只消费服务端 capability，不再持有外部服务地址或密钥。
+
+配置采用“一个统一应用清单 + 每租户一个应用实例 + 每 Workspace 一组运行配置”的分层模型，不采用全局单开关，也不允许普通租户自定义服务地址或密钥：
+
+| 层级 | 管理者 | 建议配置 | 明确边界 |
+|---|---|---|---|
+| 平台应用配置 | 平台管理员 | MateClaw API/嵌入地址、可信 Origin、SSO/OIDC Profile、ticket 密钥、MCP audience、健康检查和协议版本 | 全平台共享并加密保存；租户不可见、不可改 |
+| 租户应用实例 | 租户管理员 | install/enabled、允许角色、导航名称/显示、停靠或浮动默认方式、文件 read/write/share/delete 策略、可用工具域策略 | 只作用当前租户；不能修改远端 Host、共享密钥或平台 MCP 连接 |
+| MateClaw Workspace | 当前租户的 Workspace owner/admin | 模型供应商、默认/回退模型、Agent、Skill 和工具绑定 | 继续复用现有 Workspace 隔离，不复制到云盘应用配置 |
+| 用户偏好 | 当前用户 | 窗口位置、尺寸、最近会话等非安全偏好 | 不作为授权依据；服务端策略始终优先 |
+
+因此，“指定租户启用 AI 助手”由 `cloud_app_instance(tenant_id, app_key)` 和 capability 实现；AI 助手本身仍是统一注册的一项平台应用，但允许租户在安全边界内定制使用策略和界面偏好。租户工具域策略只作为 entitlement/risk 上限，不硬编码具体工具清单；实际可用工具继续由 MateClaw Workspace 的 Agent/Skill 绑定、渐进披露和运行时 Guard 决定。若未来确需租户独享 MateClaw 部署，应新增平台审核的 deployment profile，不复用普通租户策略字段直接接收任意 URL。
 
 ### 14.3 IG-P0：租户开关、安全闸门与动态配置（最高优先级）
 
@@ -749,32 +790,32 @@ AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少�
 
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| IG-P0-A01 | 固化应用、认证和凭据责任矩阵 | 云盘、MateClaw、MCP、WenShu | 无 | 文档和配置模板明确 SSO ticket secret、MCP internal token、OBO 密钥对、云盘 appKey、WenShu client secret 的持有方、用途、轮换和禁止复用规则 | 待确认 |
-| IG-P0-A02 | 注册 `mateclaw_ai_assistant` 应用扩展 | 云盘后端 | IG-P0-A01 | 应用中心可安装 AI 助手并为每个租户创建独立 `cloud_app_instance`，不影响现有 WenShu 扩展 | 待确认 |
-| IG-P0-A03 | 定义平台连接配置与租户策略 Schema | 云盘后端 | IG-P0-A02 | 系统租户维护地址、Origin 和认证配置；租户管理员只维护 enabled、角色和文件能力策略；密钥加密且不回显 | 待确认 |
-| IG-P0-A04 | 建立通用应用 capability 契约 | 云盘后端、云盘前端 | IG-P0-A02–A03 | capability 同时反映 installed/enabled/healthy/allowed，返回服务端解析后的安全 launch 元数据，不泄露密钥 | 待确认 |
-| IG-P0-A05 | 云盘前端改为 capability 驱动菜单和动态地址 | 云盘前端 | IG-P0-A04 | AI 助手与问数分别按 capability 展示；移除 AI 助手“所有用户固定可见”和 `VITE_AI_BASE_URL` 运行依赖；地址修改无需重新构建前端 | 待确认 |
-| IG-P0-A06 | 实现 AI 助手 enable/disable/health 生命周期 | 云盘、MateClaw | IG-P0-A03–A04 | 启用前健康检查并 provision 租户 Workspace/Agent；停用先本地 fail closed，再通知远端；状态和失败原因可刷新、可审计 | 待确认 |
+| IG-P0-A01 | 固化应用、认证和凭据责任矩阵 | 云盘、MateClaw、MCP、WenShu | 无 | 文档和配置模板明确 SSO ticket secret、MCP internal token、OBO 密钥对、云盘 appKey、WenShu client secret 的持有方、用途、轮换和禁止复用规则 | 已完成：第 14.1–14.2 节及本机配置模板明确五类凭据的事实源、用途和禁止复用边界 |
+| IG-P0-A02 | 注册 `mateclaw_ai_assistant` 应用扩展 | 云盘后端 | IG-P0-A01 | 应用中心可安装 AI 助手并为每个租户创建独立 `cloud_app_instance`，不影响现有 WenShu 扩展 | 已完成：manifest 返回独立应用 ID 5；租户 1 通过标准应用中心 API 安装为独立实例，WenShu 扩展和入口未改动 |
+| IG-P0-A03 | 定义平台连接配置与租户策略 Schema | 云盘后端 | IG-P0-A02 | 系统租户维护地址、Origin 和认证配置；租户管理员只维护 enabled、角色和文件能力策略；密钥加密且不回显 | 已完成：系统租户维护 MateClaw URL/Origin/ticket 协议字段，业务租户仅暴露角色、文件能力、openMode/nav 等策略；平台字段对业务租户列表隐藏且写入按“不存在”拒绝，enabled/configVersion 只能走生命周期接口。3 项定向边界测试通过；长期密钥不进入该 Schema/前端响应 |
+| IG-P0-A04 | 建立通用应用 capability 契约 | 云盘后端、云盘前端 | IG-P0-A02–A03 | capability 同时反映 installed/enabled/healthy/allowed，返回服务端解析后的安全 launch 元数据，不泄露密钥 | 已完成：运行接口显式返回 `appKey/installed/enabled/healthy/allowed/configVersion`、安全 URL/Origin 和文件策略；租户 1 当前均为 true（delete 策略为 false），未返回密钥 |
+| IG-P0-A05 | 云盘前端改为 capability 驱动菜单和动态地址 | 云盘前端 | IG-P0-A04 | AI 助手与问数分别按 capability 展示；移除 AI 助手“所有用户固定可见”和 `VITE_AI_BASE_URL` 运行依赖；地址修改无需重新构建前端 | 已完成：侧栏、文件菜单和打开动作均由独立 AI capability 驱动，MateClaw URL/Origin 取服务端配置；租户 1 同时显示 AI 助手/AI 问数，未安装二者的租户 135 均不显示，直接派发打开事件也不创建窗口；AI 直接出票按未安装拒绝，WenShu 原 capability 与入口保持独立 |
+| IG-P0-A06 | 实现 AI 助手 enable/disable/health 生命周期 | 云盘、MateClaw | IG-P0-A03–A04 | 启用前健康检查并 provision 租户 Workspace/Agent；停用先本地 fail closed，再通知远端；状态和失败原因可刷新、可审计 | 进行中：连接测试、安装、启用、停用、配置版本递增、首登懒 provision、本地 fail-closed、MateClaw 应用会话与 MCP 专用 delegation 主动撤销已在租户 1/135 运行验证；默认租户管理员权限模板升级到 v2，已有租户自动补齐应用查询/更新/卸载权限，首位租户管理员真实映射为 Workspace owner。撤销失败已持久化到实例 `runtimeJson`，支持指数退避、分步骤幂等重试、管理状态查询、第三次失败告警和恢复通知，健康刷新不再清除失败状态。尚缺停用/卸载时的远端 Workspace/Agent deprovision |
 
 #### IG-P0-B：统一 SSO 与三层强制开关
 
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| IG-P0-B01 | 定义通用一次性 launch ticket 契约 | 云盘、MateClaw、WenShu | IG-P0-A01 | 统一 appKey、tenant/user、state/nonce、aud、iat/exp、jti、configVersion 和 launchContext；ticket 不包含长期 Token | 待确认 |
-| IG-P0-B02 | AI 助手出票增加租户 entitlement 与权限校验 | 云盘后端 | IG-P0-A04、IG-P0-B01 | 未安装、停用、不健康、无角色权限均无法出票；拒绝原因结构化且留审计日志 | 待确认 |
-| IG-P0-B03 | MateClaw 验票绑定 app/audience/configVersion | MateClaw | IG-P0-B01 | 仅接受允许的 appKey/audience/redirect/origin；一次性、防重放、过期和配置版本失效测试通过 | 待确认 |
-| IG-P0-B04 | MCP OBO 换票和 Tool Call 增加租户应用校验 | MCP、云盘 | IG-P0-A04、IG-P0-B01 | 停用租户即使绕过菜单或持有 MateClaw Cookie也无法换取新云盘 Token或调用受保护工具；云盘 ACL 仍是最终权限源 | 待确认 |
-| IG-P0-B05 | 停用时撤销 delegation、应用会话和身份缓存 | 云盘、MateClaw、MCP、WenShu | IG-P0-A06、IG-P0-B04 | 停用在目标 SLA 内阻断新旧调用；缓存键包含 tenant/app/configVersion，不出现跨租户误清理 | 待确认 |
-| IG-P0-B06 | 密钥加密、双密钥轮换和安全审计 | 云盘、MateClaw、MCP、WenShu | IG-P0-A03、IG-P0-B01 | current/previous 窗口可无中断轮换；管理接口不回显明文；URL、日志、错误和前端构建产物不含密钥 | 待确认 |
+| IG-P0-B01 | 定义通用一次性 launch ticket 契约 | 云盘、MateClaw、WenShu | IG-P0-A01 | 统一 appKey、tenant/user、state/nonce、aud、iat/exp、jti、configVersion 和 launchContext；ticket 不包含长期 Token | 已完成：AI ticket 包含全部约定声明且 TTL 限制 30–300 秒；运行兑换只产生 302 和 HttpOnly Cookie，URL/会话接口不返回长期 MateClaw Token；WenShu 原链路不变 |
+| IG-P0-B02 | AI 助手出票增加租户 entitlement 与权限校验 | 云盘后端 | IG-P0-A04、IG-P0-B01 | 未安装、停用、不健康、无角色权限均无法出票；拒绝原因结构化且留审计日志 | 已完成：出票前强制校验 installed/enabled/healthy/allowed，launchContext 由服务端签名；ALLOW/DENY 使用统一结构化审计，拒绝只记录 app/tenant/user/reasonCode/规范化原因，不记录不可信 Origin 或凭据。4 项拒绝审计测试通过，租户 135 真实未安装请求返回 `1042013000` 且日志产生 `reason=not_installed` |
+| IG-P0-B03 | MateClaw 验票绑定 app/audience/configVersion | MateClaw | IG-P0-B01 | 仅接受允许的 appKey/audience/redirect/origin；一次性、防重放、过期和配置版本失效测试通过 | 已完成：运行验证错误 state 返回 401、正确 ticket 返回 302、相同 ticket 重放返回 401；签名文件上下文、`parentOrigin`、`hostHeader=1` 和真实云盘租户/账号进入会话；JDK 21 定向 18 项测试通过 |
+| IG-P0-B04 | MCP OBO 换票和 Tool Call 增加租户应用校验 | MCP、云盘 | IG-P0-A04、IG-P0-B01 | 停用租户即使绕过菜单或持有 MateClaw Cookie也无法换取新云盘 Token或调用受保护工具；云盘 ACL 仍是最终权限源 | 已完成：启用时 config/transport/protocol/identity/read 五阶段诊断全通过；停用后同一旧 Cookie 的 identity/read 立即失败，重新启用后旧 configVersion 仍失败，新 ticket 后恢复；租户 135 恢复态 traceId `mcp-diagnostic-97e8c745-175b-491c-988b-5b34cd97da38` |
+| IG-P0-B05 | 停用时撤销 delegation、应用会话和身份缓存 | 云盘、MateClaw、MCP、WenShu | IG-P0-A06、IG-P0-B04 | 停用在目标 SLA 内阻断新旧调用；缓存键包含 tenant/app/configVersion，不出现跨租户误清理 | 已完成：云盘启用、停用和策略变更发送带时间戳/nonce 的 HMAC 签名撤销通知；MateClaw 回调绑定固定 appKey，云盘 JWT 绑定 app/configVersion，MCP OBO 使用独立 `yliyun_mcp_obo_client` Token 并按 tenant+client 精确撤销。AI 助手和 WenShu 均在本地 fail closed 后把失败子步骤持久化到实例 runtimeJson，按租户/app/configVersion 指数退避，只重试失败步骤，达到阈值通知租户管理员，恢复后清理和通知；旧远端地址随待办保存，健康刷新不覆盖待办，卸载不丢失补偿载体。AI 已完成停机/恢复实测，WenShu 失败→重试→恢复、改址后命中旧端点、告警及卸载分支 7 项新增回归通过；跨应用合计问数 9/9、AI/认证 24/24 |
+| IG-P0-B06 | 密钥外置、双密钥轮换和安全审计 | 云盘、MateClaw、MCP、WenShu | IG-P0-A03、IG-P0-B01 | current/previous 窗口可无中断轮换；管理接口不回显明文；URL、日志、错误和前端构建产物不含密钥 | 已完成：ticket 与撤销签名统一使用带 key id 的 current/previous 密钥环，MateClaw 双验签、云盘只签 current；短密钥/重复密钥/重复 id 启动 fail-fast，兼容旧单密钥配置。轮换脚本只输出 key id，secret 由环境变量或 Git 忽略文件外置注入；旧签发端 + 新消费端、新签发端 + 新消费端两阶段 SSO 均实测通过，管理面、URL、日志和前端无 secret |
 
 #### IG-P0-C：MCP 配置治理和安全验收
 
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| IG-P0-C01 | 将平台共享 MCP 配置限制为平台管理员 | MateClaw | 无 | `mate_mcp_server` 全局连接只有平台管理员可增删改、启停和修改 headers；租户管理员只配置本 Workspace 的 Agent/模型/应用授权 | 待确认 |
-| IG-P0-C02 | 固化一粒云 MCP 独立部署 Profile | MateClaw、MCP、云盘 | IG-P0-A01、IG-P0-C01 | 配置模板覆盖 URL/transport、internal token、OBO 私钥/公钥、issuer/audience、云盘 API/appKey；启动时 fail-fast 校验错误配对 | 待确认 |
-| IG-P0-C03 | 拆分通用 MCP 与一粒云身份诊断 | MateClaw、MCP | IG-P0-C02 | 管理页分别显示 transport/tools、连接凭据、OBO、云盘换票、tenant entitlement、只读和可回滚写入阶段 | 待确认 |
-| IG-P0-C04 | 完成应用启停和认证跨租户 E2E | 全部 | IG-P0-A、IG-P0-B、IG-P0-C03 | 覆盖两租户独立启停、动态改址、密钥轮换、停用旧会话、普通成员越权、伪造 audience/appKey 和 MCP 重连；保留 traceId 证据 | 待确认 |
+| IG-P0-C01 | 将平台共享 MCP 配置限制为平台管理员 | MateClaw | 无 | `mate_mcp_server` 全局连接只有平台管理员可增删改、启停和修改 headers；租户管理员只配置本 Workspace 的 Agent/模型/应用授权 | 已完成：10 个管理端点统一使用 `@RequireGlobalAdmin`；云盘租户管理员 API 为 403 且路由回到会话，平台 `admin` 调用为 200，响应不回显密钥；定向测试通过 |
+| IG-P0-C02 | 固化一粒云 MCP 独立部署 Profile | MateClaw、MCP、云盘 | IG-P0-A01、IG-P0-C01 | 配置模板覆盖 URL/transport、internal token、OBO 私钥/公钥、issuer/audience、云盘 API/appKey；启动时 fail-fast 校验错误配对 | 已完成：MCP HTTP 启动校验默认 appKey、issuer/audience、RSA 公钥和内部认证边界；开发验证脚本校验 OBO 密钥对及 ticket/appKey 隔离，5 项配置单测、typecheck/build 与五服务检查通过 |
+| IG-P0-C03 | 拆分通用 MCP 与一粒云身份诊断 | MateClaw、MCP | IG-P0-C02 | 管理页分别显示 transport/tools、连接凭据、OBO、云盘换票、tenant entitlement、只读和可回滚写入阶段 | 已完成：管理页显示 config/transport/protocol/identity/read/write、建议与 traceId；诊断会刷新正式连接以修复 MCP 重启后的失效 session，普通调用失败也触发现有异步重连。当前租户只读五阶段全通过；delete 策略关闭时写诊断无副作用跳过并明确提示 |
+| IG-P0-C04 | 完成应用启停和认证跨租户 E2E | 全部 | IG-P0-A、IG-P0-B、IG-P0-C03 | 覆盖两租户独立启停、动态改址、密钥轮换、停用旧会话、普通成员越权、伪造 audience/appKey 和 MCP 重连；保留 traceId 证据 | 已完成：租户 1/135 独立安装启停矩阵、旧会话与 delegation 失效、current/previous 两阶段轮换、动态地址候选拒绝/广播/旧端点撤销/恢复、普通成员越权、伪造租户/audience/appKey/key id、MCP 重连和撤销补偿均有自动化或 traceId 证据；发布矩阵见 14.7 |
 
 ### 14.4 IG-P1：通用应用连接框架与运维治理
 
@@ -803,14 +844,69 @@ AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少�
 1. **批次 0：口径冻结（IG-P0-A01）**。先确定四种配置域和五类凭据的唯一事实源、轮换与责任人；在此之前不新增新的共享密钥或前端地址变量。
 2. **批次 1：AI 助手应用中心化（IG-P0-A02–A06）**。优先解决租户级安装、启停、动态地址、capability 和健康状态；这是后续统一 SSO 的入口基础。
 3. **批次 2：安全强制（IG-P0-B01–B06）**。出票、验票、MCP 换票/Tool Call 三层同时落闸，并补停用撤销和密钥轮换；完成前不得把 AI 助手应用中心开关宣称为安全边界。
-4. **批次 3：MCP 治理与验收（IG-P0-C01–C04）**。把全局 MCP 配置收回平台管理员，固化独立部署 Profile 和分层诊断，完成两租户真实 E2E 后方可默认开放。
-5. **批次 4：框架复用（IG-P1）**。在 AI 助手 P0 闭环稳定后抽象通用 SPI，再让 WenShu 兼容迁移，避免先抽象后反复修改；全程保持问数现有入口和业务逻辑不回退。
-6. **批次 5：MCP 扩展（IG-P2）**。先模块化和安全策略，再做声明式只读映射；全文检索与审计报告分别复用 V3-A05、V3-E，不重复建设第二套 API。
-7. P1-A/P1-B 的 `CloudResourceRef` 与固定引用可在 IG-P0 接口冻结后并行；V3-B/C/D 的资源动作主链不依赖 IG-P1 完成，但所有新租户开放必须经过 IG-P0 的 entitlement 闸门。
+4. **批次 3：嵌入窗口优化（P1-C08–C11）**。已按最终确认方案把原固定容器替换为云盘通用非模态 `FloatingWindow`，保持原 iframe 内容、同一会话和单 Header，不切换到 WebChat 访客渠道；多窗口共存、缩放、小屏、关闭恢复和外部打开矩阵均已验收。
+5. **批次 4：MCP 治理与验收（IG-P0-C01–C04）**。把全局 MCP 配置收回平台管理员，固化独立部署 Profile 和分层诊断，完成两租户真实 E2E 后方可默认开放。
+6. **批次 5：框架复用（IG-P1）**。在 AI 助手 P0 闭环稳定后抽象通用 SPI，再让 WenShu 兼容迁移，避免先抽象后反复修改；全程保持问数现有入口和业务逻辑不回退。
+7. **批次 6：MCP 扩展（IG-P2）**。先模块化和安全策略，再做声明式只读映射；全文检索与审计报告分别复用 V3-A05、V3-E，不重复建设第二套 API。
+8. P1-A/P1-B 的 `CloudResourceRef` 与固定引用可在 IG-P0 接口冻结后并行；V3-B/C/D 的资源动作主链不依赖 IG-P1 完成，但所有新租户开放必须经过 IG-P0 的 entitlement 闸门。
+
+### 14.7 2026-08-01 本轮实施证据与剩余闸门
+
+本轮已完成以下实现，均保持 WenShu 入口、capability、delegation 和业务控制器不变：
+
+1. **云盘后端**：新增 `mateclaw_ai_assistant` 应用扩展、平台/租户配置服务、租户生命周期、capability、连接测试及启停 API；AI ticket 改为 entitlement 出票并签名 launchContext。JDK 17 编译和 JDK 21 可执行 JAR 打包均成功；新 JAR 已在 30303 运行。租户 1 已通过标准 API 安装、连接测试并启用，最终 `configVersion=5`。
+2. **云盘前端**：菜单、文件右键入口、工作区和应用中心改为独立 AI capability 驱动；MateClaw URL/Origin 不再依赖 `VITE_AI_BASE_URL`；AI 助手仅把原内容装入通用非模态 `FloatingWindow`，没有保留已回退的三态定制；外层窗口负责外部打开/全屏/关闭，iframe 内 Header 已隐藏。`pnpm exec vite build --mode env.local` 两轮构建成功，8080 Vite 保持在线。
+3. **MateClaw**：验票新增 issuer/audience/appKey/state/nonce/configVersion/parentOrigin 校验；用户映射保存应用版本；OBO 透传 entitlement；嵌入页支持宿主单 Header。全局 MCP 管理端点和页面已限制为平台管理员；诊断改为刷新正式连接，工具调用异常触发现有断线重连。JDK 21 下身份 18 项、MCP 管理授权 1 项、连接快照/重连 4 项定向测试通过。
+4. **MCP**：OBO 强制 appKey/configVersion，每次 Tool Call 重查租户 AI capability，并依据通用 manifest 风险执行 read/write/share/delete 策略上限，不增加云盘助手专用工具白名单。HTTP 启动增加 fail-fast 配置校验，`user.profile` 暴露当前生效文件策略供诊断预检；`pnpm typecheck`、配置/manifest 8 项定向测试和 `pnpm build` 均通过，新 dist 已在 18100 运行。
+5. **静态质量**：四个工作区 `git diff --check` 通过。云盘前端与 MateClaw UI 的全量 `vue-tsc` 仍包含仓库既有类型错误；本轮以 Vite 生产构建作为增量可构建证据，不能替代浏览器 E2E。
+
+运行验收证据：
+
+- MateClaw Flyway 从 9019 升级为 9020，后端 health 为 `UP`；MCP health 为 `ok`、manifest 为 14 个工具。
+- 一次性 ticket 使用错误 state 返回 401，正确兑换返回 302 + 1 个 Cookie，相同 ticket 重放返回 401；重定向保留签名 `fileId/fileName/channelId/parentOrigin/hostHeader`。
+- Cookie 会话返回 `tenantName=一粒云`、`cloudTenantId=1`、`cloudUserId=100`、`displayName=张明 (admin)`，未回退为匿名或固定共享账号。
+- entitlement 开启时 MCP 五阶段只读诊断全通过；停用后旧 Cookie 立即被拒绝，重新启用后旧 configVersion 继续被拒绝，新 ticket 后恢复。测试结束时 AI 助手已恢复启用，`configVersion=5`。
+- 2026-08-01 最终浏览器回归 traceId `mcp-diagnostic-c6e85718-18b9-4494-b443-5096fc75d792` 的 config/transport/protocol/identity/read 全部通过；MCP 重启后诊断可替换失效的正式 session，不再出现“临时测试成功、运行调用 401”。`includeWrite=true` 在当前 `allowFileDelete=false` 策略下返回 `skipped=true` 且日志确认未调用 `file.create`。
+- 云盘租户管理员访问 `/api/v1/mcp/servers` 为 403，直接进入 `/settings/mcp-servers` 被路由守卫送回会话；平台管理员同接口为 200 且敏感头已脱敏。
+- 通用窗口在 1440×1000 视口中为 `580×900`，已实际拖动 80×38px；根层/窗口点击策略分别为 `none/auto`，嵌入 Header 数为 0。
+- 多窗口补充回归：AI 窗口由 `580×900` 缩放到 `680×950`，与真实 Markdown 预览同时可见；预览保持云盘原模态聚焦，关闭预览后 AI 不丢失。关闭/重开 AI 仍为 `conv_1785576902180_nkiisc`，480×800 视口窗口收敛到 `456×776` 且未越界；外部打开进入 5173 完整会话且无登录页。
+- 两租户只读回归：系统租户 1 的 AI/WenShu capability、菜单及 AI 打开链路均可用；业务租户 135 未安装 AI/WenShu 时两个菜单分别隐藏，AI 出票返回“尚未安装”，直接派发打开事件不会创建窗口。生命周期测试结束后云盘侧仅租户 1 保留 AI 应用实例；租户 135 的 MateClaw 身份/Workspace 映射按懒 provision 设计保留，应用 entitlement 已撤销。
+- 租户 135 生命周期回归：通过标准应用中心 API 临时安装、连接检测并启用 AI 助手，SSO 会话返回 `cloudTenantId=135`、`cloudUserId=215`、真实租户/账号，工作空间角色为 `owner`；`/api/v1/settings` 和模型目录在带工作空间上下文时均为 200，MCP 五阶段全通过。停用后旧 Cookie 的 identity/read 立即失败且新出票返回 `1042013001`；重新启用后旧 configVersion 仍失败，新 ticket 五阶段恢复。最后已停用并卸载，capability 为 `installed=false/visible=false`，出票返回 `1042013000`。
+- 应用会话主动撤销回归：云盘对租户 135 的 enable/disable/uninstall 回调均记录 `decision=ALLOW`，MateClaw 按 configVersion 23→24→25→26 单调推进映射；停用后旧 Cookie 访问受保护 API 立即返回 401 并下发过期 Cookie，重新启用后仍不能复活，只有新 ticket 恢复。恢复态 MCP traceId 为 `mcp-diagnostic-97e8c745-175b-491c-988b-5b34cd97da38`；回调已固定 `mateclaw_ai_assistant` appKey，合法签名不能被其他应用复用。`YliyunSessionRevocationControllerTest` 与 `JwtAuthFilterYliyunEntitlementTest` 共 4/4 通过。
+- MCP 专用 delegation 回归：内部换票仅使用 `yliyun_mcp_obo_client` 且不再回退到用户第一方 Token；租户 135 首次诊断创建 1 个专用 Token，停用 configVersion 24 精确撤销 1 个，重新启用后新 ticket 可再次换票，清理 configVersion 26 再撤销 1 个。同一云盘登录态在停用后仍可调 capability、重新启用与卸载，证明未误撤销用户登录。新增隔离/撤销/凭据轮换测试与既有应用回归共 14/14 通过。
+- 撤销失败补偿回归：租户 135 在 MateClaw 停机时停用，MCP 专用 delegation 立即撤销，实例写入 `configVersion=29/delegationPending=false/sessionPending=true/attempts=1`；首次调度仍不可达后为 attempts=2，MateClaw 恢复后下一次调度记录 `decision=RECOVERED/attempts=3`，管理状态回到 `pending=false/attempts=0`。随后卸载临时实例，capability 恢复 `installed=false/visible=false`。新增 `AiAssistantRevocationRetryTest` 2/2，连同原应用/OAuth 回归共 16/16 通过。
+- WenShu 跨应用撤销回归：新增 `wenshuRevocation` 持久化状态、通用跨租户待办扫描、30 秒调度器、分步骤幂等重试、旧 API 地址固化、租户管理员告警/恢复通知、健康刷新保护和卸载保护。自动化模拟远端首次 500、随后恢复以及平台地址已变化，确认只补偿 remote 子步骤且两次均命中原端点；另模拟 delegation 连续失败，第二次达到测试阈值且只发送一次 `WENSHU_REVOCATION` 告警。问数 9/9、AI/认证 24/24 通过，生产 fat JAR 已重启到 PID 49336。
+- 应用中心权限边界：`AiAssistantAppMarketExtensionTest` 3/3 通过，覆盖系统租户可见平台字段、业务租户隐藏/拒写平台字段，以及 enabled/configVersion 禁止直接编辑；23 模块 Maven Reactor 构建成功。
+- 租户管理员权限模板：`tenant_admin` 模板版本从 1 升到 2，并将 `cloud-drive:app-market:` 纳入保留前缀；已有租户启动同步后自动获得 query/update/uninstall。`TenantAdminAppMarketPermissionTest` 2/2 通过，连同应用边界与出票审计共 9/9 定向测试通过。
+- 出票审计：`AiTicketControllerTest` 4/4 通过，覆盖未安装、停用/不健康、角色拒绝和 parentOrigin 不匹配；恶意 Origin 不进入日志。2026-08-02 完整 Reactor 重新打包的 fat JAR 已在 30303 运行（当前 PID 46472），真实租户 135 清理后 capability 为 `installed=false/visible=false`。
+- 凭据日志边界：本地 DEBUG 环境已将 OAuth2 Client/AccessToken/RefreshToken Mapper 单独降为 INFO，三类 SQL 参数日志计数均为 0；首次创建期曾进入旧日志的 MCP OBO 客户端凭据已自动轮换并写入一次性版本标记，后续启动不重复轮换。
+- 恢复库的 `cloud_app_* @KeySequence` 漂移已修复并写入可重复 SQL；修复前安装稳定复现主键 19/20 冲突，修复后标准安装成功。
+
+#### IG-P0-C04 发布验收矩阵（2026-08-03 收口）
+
+| 闸门 | 当前证据 | 结果 |
+|---|---|---|
+| 两租户独立 entitlement | 当前只读复验：租户 1 `installed/enabled/healthy/allowed=true`、configVersion 23；租户 135 `installed/visible/enabled=false`。租户 135 临时安装、owner SSO、停用、重启用、新票恢复、卸载全过程见上方 trace | 通过 |
+| 一次性 ticket 与旧会话失效 | 错 state/重放 401；停用后旧 Cookie 与旧 configVersion 均 401，新 ticket 恢复；应用 Cookie 和 MCP delegation 分别撤销 | 通过 |
+| 伪造契约 | `YliyunAuthControllerContractTest` 覆盖伪造 audience、跨应用 appKey、声明 key id 与实际验签 key 不一致，均在 replay/provision 前 401；3/3 通过 | 通过 |
+| 双密钥无中断轮换 | 先重启 MateClaw：旧 `dev-current` 通过 previous 验签；再切云盘：新 `dev-20260803013227` 通过 current 验签；两次租户/用户/session 来源一致 | 通过 |
+| 动态地址与回滚 | `verify-dynamic-ai-address.mjs`：不可达 API 地址拒绝且版本不变；浏览器/API 等价地址切换、capability、SSO、旧端点撤销均成功；原值恢复，17→23，补偿队列为空 | 通过 |
+| MCP 重连 | traceId `mcp-diagnostic-c6e85718-18b9-4494-b443-5096fc75d792` 与 `mcp-diagnostic-97e8c745-175b-491c-988b-5b34cd97da38` 的 config/transport/protocol/identity/read 全通过；MCP 重启后正式 session 自动刷新 | 通过 |
+| 普通成员 ACL / 跨租户 / 限流 | 2026-08-03 重跑 `verify-live-cloud-security.mjs`：三轮 15,396,246 bytes、SHA-256 前缀 `968418d5e95864c7` 一致；越权读/删 `PERMISSION_DENIED`，文件仍 ACTIVE；伪造租户不出票；105 次突发产生 3 次 `RATE_LIMITED` | 通过 |
+| 撤销失败补偿 | MateClaw 停机后 sessionPending 持久化、指数重试，恢复后自动清零；旧 API 端点随补偿状态持久化并由 `AiAssistantRevocationRetryTest` 验证重试仍命中旧端点 | 通过 |
+| 构建与定向回归 | 云盘后端 24/24、MateClaw 11/11；两端 Reactor 编译/打包成功；云盘前端定向 ESLint 与 `vite build --mode env.local` 成功；五个服务在线，新 key SSO 复验成功 | 通过 |
+
+结论：IG-P0-C04 验收项已全部覆盖并归档，状态改为“已完成”。IG-P0-B05 的 WenShu 撤销补偿也已完成代码、自动调度、管理状态、告警和跨应用定向回归。
+
+尚未越过的发布闸门：
+
+- 租户 1 已安装并启用；其他业务租户仍必须各自安装、启用并配置角色/文件策略。平台地址/Origin 继续由系统租户维护，未配置租户按设计 fail closed。
+- 普通业务租户的平台字段不可见/拒写、租户 135 独立生命周期、双密钥两阶段轮换、动态改址和完整发布矩阵均已通过；新增业务租户仍必须逐租户安装并验收其真实角色/文件策略。
+- IG-P0-B05/B06 已完成 MateClaw 应用 Cookie、MCP 专用 delegation 主动失效、AI/WenShu 撤销失败补偿/告警和 ticket/撤销签名双密钥轮换；当前 IG-P0 剩余项为 A06 的 MateClaw Workspace/Agent 远端停用语义与回收策略。
 
 发布闸门：
 
-- IG-P0-C04 未通过前，只允许测试租户使用新的 AI 助手应用实例。
+- AI 助手跨租户矩阵及 AI/WenShu 跨应用撤销治理已通过；后续新应用只能复用通用待办扫描和状态约束，远端撤销步骤仍由各应用适配器实现，不得复用 AI 助手专用回调协议。
 - 动态地址必须经过协议、Origin/SSRF、健康检查和回滚校验，不能把任意租户输入直接作为后端请求目标。
 - MCP 新工具被发现不等于自动授权；仍需通过平台 MCP 启用、Agent 工具绑定、租户应用策略和云盘资源权限。
 - 当前实现新增工具仍需重新构建/部署 MCP；完成 IG-P2-01/P2-02 后，仅批准的简单只读映射可免代码重打包，复杂认证、转换和副作用工具仍走版本化模块发布。
@@ -826,18 +922,18 @@ AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少�
 3. **身份协议**：每次 Tool Call 使用短时签名 OBO token，包含 Yliyun 用户和租户声明。
 4. **登录协议**：一次性 code 换 HttpOnly、SameSite Cookie，不再把 MateClaw JWT 放在 URL/localStorage。
 5. **嵌入形态**：优先实现可复用 `CloudAgentPanel`；若跨仓库独立部署必须使用 iframe，则仅嵌入精简路由并启用严格 origin 协议。
-6. **当前执行批次**：P0 核心已实施；P1 已落地精简面板、真实身份显示、当前文件跟随、附件一次性注入、会话历史恢复、Agent 切换去重、租户角色同步与工作空间级模型供应商隔离；云盘助手工具配置已回归 MateClaw 通用 Agent 工具链，保持普通会话主逻辑最小改动。V1 生产收口、V2、V3 和 IG 尚未全部完成。
+6. **当前执行批次**：P0 核心已实施；P1 已落地精简面板、真实身份显示、当前文件跟随、附件一次性注入、会话历史恢复、Agent 切换去重、租户角色同步、工作空间级模型供应商隔离，以及最终确认的通用可拖动非模态窗口/单 Header 和多窗口 E2E。IG-P0-A03/A05、B02–B06 与 C01–C04 已完成，包含第二租户独立启停、Cookie/delegation 撤销、AI/WenShu 失败补偿、双密钥轮换、动态改址和发布矩阵；当前剩 IG-P0-A06 的远端 Workspace/Agent 停用语义与回收策略。普通会话主逻辑保持最小改动。
 7. **应用治理口径**：云盘应用中心是租户启停和业务配置事实源；OAuth2 Client 只负责平台认证；MateClaw 全局 MCP 连接与 MCP 服务密钥不得下放给普通租户管理员。
 
-下一次确认建议用语：
+本轮需求确认结论：
 
-> 确认先实施 IG-P0-A01–A06 与 IG-P0-B01–B06，把 AI 助手纳入应用中心并完成租户 capability、动态地址和三层启停强制；随后实施 IG-P0-C01–C04 的 MCP 平台治理与跨租户验收。`CloudResourceRef`/固定引用可在接口冻结后并行推进。
+> AI 助手采用“统一平台应用 + 租户实例/策略 + MateClaw Workspace 配置”三层模型；保留当前登录态 `/embed/cloud-agent`，不改用 WebChat 访客渠道；云盘窗口已按 P1-C08–C11 完成“原内容不变 + 通用可拖动非模态窗口 + 单 Header + 多窗口/小屏回归”。AI/WenShu 撤销补偿、双密钥轮换、动态改址和发布矩阵已完成，当前优先级为 IG-P0-A06 远端停用语义收口 → P1 资源引用与 V3-A。
 
-未经下一次确认，不执行以下动作：
+已收到“按计划实施”指令；以下仍不在本轮授权范围或需额外发布闸门：
 
 - 不在未确认前继续 P1-A 的签名 `CloudResourceRef`、固定引用和输入框入口合并。
 - 不在未确认前实施 V3 的云盘新 API、artifact 传输、审计问数或知识库同步。
-- 不在未确认前创建 `mateclaw_ai_assistant` 租户应用实例、迁移现有 AI ticket 或改变 MCP 管理权限。
+- 不直接写库为真实租户创建 `mateclaw_ai_assistant` 实例；安装、平台配置和租户启用通过应用中心完成并保留审计。全局 MCP 管理权限已按 IG-P0-C01 收回平台管理员。
 - 不创建额外真实租户/用户或写入非临时业务数据。
 - 不改动生产密钥、API Key 或生产部署配置。
 - 不清理、合并或重写已可能发布的 Flyway 迁移。

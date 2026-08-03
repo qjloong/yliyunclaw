@@ -237,6 +237,12 @@ public class McpClientManager {
             return ToolCallResult.success(content, latency);
         } catch (Exception e) {
             String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            // A pooled Streamable HTTP client keeps the session id negotiated
+            // during initialize(). If the upstream MCP process restarts that
+            // session becomes invalid even though a throwaway health check can
+            // still connect successfully. Notify the service layer so it can
+            // replace the managed client and invalidate cached agent graphs.
+            eventPublisher.publishEvent(new McpConnectionLostEvent(serverId, "callTool-failed"));
             return ToolCallResult.failure("MCP_CALL_FAILED", message,
                     "mcp.transport", System.currentTimeMillis() - startedAt);
         }

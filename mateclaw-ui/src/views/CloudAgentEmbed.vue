@@ -1,6 +1,6 @@
 <template>
   <div class="cloud-agent-embed">
-    <header class="cloud-agent-embed__header">
+    <header v-if="!hostProvidesHeader" class="cloud-agent-embed__header">
       <div class="cloud-agent-embed__identity">
         <span class="cloud-agent-embed__mark">AI</span>
         <div>
@@ -45,6 +45,7 @@ const currentContext = ref<CloudContext>({
 })
 const channelId = route.query.channelId ? String(route.query.channelId) : ''
 const parentOrigin = route.query.parentOrigin ? String(route.query.parentOrigin) : ''
+const hostProvidesHeader = computed(() => route.query.hostHeader === '1')
 
 const identityLabel = computed(() => {
   const tenantName = localStorage.getItem('tenantName') || '云盘租户'

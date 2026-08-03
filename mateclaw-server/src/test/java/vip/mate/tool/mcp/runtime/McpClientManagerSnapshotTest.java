@@ -66,6 +66,35 @@ class McpClientManagerSnapshotTest {
     }
 
     @Test
+    @DisplayName("failed pooled tool call requests a managed reconnect")
+    @SuppressWarnings("unchecked")
+    void failedToolCallRequestsReconnect() throws Exception {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        McpClientManager manager = new McpClientManager(publisher,
+                new McpIdentityForwardService(new McpIdentityForwardProperties(),
+                        mock(YliyunUserMappingService.class)),
+                null, new com.fasterxml.jackson.databind.ObjectMapper());
+
+        long serverId = 88L;
+        McpSyncClient deadClient = mock(McpSyncClient.class);
+        when(deadClient.callTool(any())).thenThrow(
+                new RuntimeException("Unauthorized: No valid session ID provided"));
+        io.modelcontextprotocol.spec.McpSchema.Tool fileListTool =
+                mock(io.modelcontextprotocol.spec.McpSchema.Tool.class);
+        when(fileListTool.name()).thenReturn("file.list");
+        ((Map<Long, McpSyncClient>) field(manager, "clients")).put(serverId, deadClient);
+        ((Map<Long, List<io.modelcontextprotocol.spec.McpSchema.Tool>>) field(manager, "toolsCache"))
+                .put(serverId, List.of(fileListTool));
+
+        McpClientManager.ToolCallResult result = manager.callTool(
+                serverId, "file.list", Map.of(), new ToolContext(Map.of()));
+
+        assertFalse(result.success());
+        assertEquals("MCP_CALL_FAILED", result.code());
+        verify(publisher, times(1)).publishEvent(any(McpConnectionLostEvent.class));
+    }
+
+    @Test
     @DisplayName("structured MCP tool errors preserve their domain code and stage")
     void structuredToolErrorsPreserveDomainMetadata() {
         McpClientManager.ToolCallResult result =

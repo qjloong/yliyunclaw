@@ -51,9 +51,11 @@ import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMediaQuery, BREAKPOINTS } from '@/composables/useBreakpoint'
 import { useI18n } from 'vue-i18n'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 const route = useRoute()
 const { t } = useI18n()
+const workspaceStore = useWorkspaceStore()
 
 // The desktop preload bridge marks that we run inside the desktop shell.
 const isDesktop = typeof window !== 'undefined' && !!window.mateClawAPI
@@ -233,7 +235,7 @@ const sections = computed(() => [
     label: t('settings.sections.about'),
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
   },
-])
+].filter((section) => section.id !== 'mcp-servers' || workspaceStore.isGlobalAdmin))
 
 function isActive(path: string) {
   return route.path === path

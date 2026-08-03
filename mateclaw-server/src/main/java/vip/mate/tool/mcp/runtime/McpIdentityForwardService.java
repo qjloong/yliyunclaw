@@ -106,9 +106,10 @@ public class McpIdentityForwardService {
     /** A typed identity resolved from the request origin. Empty = inject nothing. */
     record ResolvedIdentity(String subject, String trust, String channelType,
                             Long mateclawUserId, String yliyunUserId,
-                            String tenantId, Long workspaceId) {
+                            String tenantId, Long workspaceId,
+                            String appKey, Integer configVersion) {
         static final ResolvedIdentity NONE =
-                new ResolvedIdentity(null, null, null, null, null, null, null);
+                new ResolvedIdentity(null, null, null, null, null, null, null, null, null);
         boolean present() { return subject != null && !subject.isBlank(); }
     }
 
@@ -156,12 +157,13 @@ public class McpIdentityForwardService {
                 McWorkspaceUserEntity cloud = mapping.get();
                 return new ResolvedIdentity(String.valueOf(origin.requesterUserId()),
                         TRUST_AUTHENTICATED, "web", origin.requesterUserId(),
-                        cloud.getYliyunUserId(), cloud.getYliyunTenantId(), cloud.getWorkspaceId());
+                        cloud.getYliyunUserId(), cloud.getYliyunTenantId(), cloud.getWorkspaceId(),
+                        cloud.getAppKey(), cloud.getConfigVersion());
             }
             String user = ToolExecutionContext.username(ctx);
             return user != null && !user.isBlank()
                     ? new ResolvedIdentity(user, TRUST_AUTHENTICATED, "web",
-                            null, null, null, origin.workspaceId())
+                            null, null, null, origin.workspaceId(), null, null)
                     : ResolvedIdentity.NONE;
         }
         // webchat visitor ("api") or IM sender (feishu/wecom/…): external id,
@@ -173,7 +175,7 @@ public class McpIdentityForwardService {
         }
         String trust = "api".equals(channel) ? TRUST_ANONYMOUS : TRUST_EXTERNAL;
         return new ResolvedIdentity(requester, trust, channel,
-                null, null, null, origin.workspaceId());
+                null, null, null, origin.workspaceId(), null, null);
     }
 
     /**
@@ -224,6 +226,8 @@ public class McpIdentityForwardService {
                     .claim("tenant_id", id.tenantId())
                     .claim("workspace_id", id.workspaceId() != null
                             ? id.workspaceId().toString() : null)
+                    .claim("app_key", id.appKey())
+                    .claim("config_version", id.configVersion())
                     .claim("trace_id", traceId)
                     .id(UUID.randomUUID().toString())
                     .issuedAt(Date.from(now))

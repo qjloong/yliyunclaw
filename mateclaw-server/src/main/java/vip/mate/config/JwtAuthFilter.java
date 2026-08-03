@@ -17,6 +17,7 @@ import vip.mate.auth.pat.PersonalAccessTokenEntity;
 import vip.mate.auth.pat.PersonalAccessTokenService;
 import vip.mate.auth.service.AuthService;
 import vip.mate.auth.yliyun.YliyunAuthCookieService;
+import vip.mate.auth.yliyun.YliyunUserMappingService;
 
 import java.io.IOException;
 import java.util.List;
@@ -43,6 +44,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
      */
     private final PersonalAccessTokenService patService;
     private final YliyunAuthCookieService yliyunAuthCookieService;
+    private final YliyunUserMappingService yliyunUserMappingService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -99,6 +101,20 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             UserEntity user = authService.findByUsername(username);
             if (user == null || !Boolean.TRUE.equals(user.getEnabled())) return;
 
+            String authSource = claims.get("authSource", String.class);
+            boolean cloudIdentity = "yliyun".equals(authSource)
+                    || (username != null && username.startsWith("yliyun_"));
+            String appKey = claims.get("appKey", String.class);
+            Number rawConfigVersion = claims.get("configVersion", Number.class);
+            Integer configVersion = rawConfigVersion != null ? rawConfigVersion.intValue() : null;
+            if (cloudIdentity && !yliyunUserMappingService.isCurrentEntitlement(
+                    user.getId(), appKey, configVersion)) {
+                if (yliyunAuthCookieService.read(request) != null) {
+                    response.addHeader("Set-Cookie", yliyunAuthCookieService.clearHeaderValue());
+                }
+                return;
+            }
+
             var auth = new UsernamePasswordAuthenticationToken(
                     username, null,
                     List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().toUpperCase()))
@@ -108,7 +124,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
             // 滑动窗口续期：Token 接近过期时自动签发新 Token
             if (authService.isNearExpiry(claims)) {
-                String newToken = authService.renewToken(username);
+                String newToken = cloudIdentity
+                        ? authService.generateYliyunToken(user, appKey, configVersion)
+                        : authService.renewToken(username);
                 if (newToken != null) {
                     response.setHeader("X-New-Token", newToken);
                     response.setHeader("Access-Control-Expose-Headers", "X-New-Token");

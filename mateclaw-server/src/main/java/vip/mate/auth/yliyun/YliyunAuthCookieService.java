@@ -55,4 +55,18 @@ public class YliyunAuthCookieService {
         }
         return builder.build().toString();
     }
+
+    public String clearHeaderValue() {
+        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie
+                .from(cookieName, "")
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite(sameSite)
+                .path("/")
+                .maxAge(Duration.ZERO);
+        if (domain != null && !domain.isBlank()) {
+            builder.domain(domain.trim());
+        }
+        return builder.build().toString();
+    }
 }

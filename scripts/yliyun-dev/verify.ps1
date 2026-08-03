@@ -23,15 +23,23 @@ function Write-Check([string]$Name, [bool]$Success, [string]$Detail) {
 }
 
 function Test-Port([int]$Port) {
-    $client = [System.Net.Sockets.TcpClient]::new()
-    try {
-        $task = $client.ConnectAsync("127.0.0.1", $Port)
-        return $task.Wait(800) -and $client.Connected
-    } catch {
-        return $false
-    } finally {
-        $client.Dispose()
+    if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+        return $true
     }
+    foreach ($hostName in @("127.0.0.1", "localhost")) {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $task = $client.ConnectAsync($hostName, $Port)
+            if ($task.Wait(800) -and $client.Connected) {
+                return $true
+            }
+        } catch {
+            # Try the other loopback family. Vite may bind localhost to ::1.
+        } finally {
+            $client.Dispose()
+        }
+    }
+    return $false
 }
 
 $checks = @()
@@ -46,6 +54,9 @@ $checks += Write-Check "OBO private key" (Test-Path (Join-Path $CredentialRoot "
 $checks += Write-Check "OBO public key" (Test-Path (Join-Path $CredentialRoot "obo-public.pem")) $CredentialRoot
 $checks += Write-Check "Ticket secret" (Test-Path (Join-Path $CredentialRoot "ticket-secret.txt")) $CredentialRoot
 $checks += Write-Check "MCP app key" (Test-Path (Join-Path $CredentialRoot "mcp-app-key.txt")) $CredentialRoot
+$credentialOutput = & node (Join-Path $ScriptRoot "verify-credentials.mjs") 2>&1
+$credentialPairOk = $LASTEXITCODE -eq 0
+$checks += Write-Check "Credential pairing" $credentialPairOk ($credentialOutput -join " ")
 
 $services = @(
     @{ Name = "Cloud frontend"; Port = 8080 },
@@ -59,7 +70,7 @@ foreach ($service in $services) {
     $checks += Write-Check $service.Name $up ("127.0.0.1:{0}" -f $service.Port)
 }
 
-$prerequisiteCount = 11
+$prerequisiteCount = 12
 $prerequisitesOk = ($checks[0..($prerequisiteCount - 1)] -notcontains $false)
 $servicesOk = ($checks[$prerequisiteCount..($checks.Count - 1)] -notcontains $false)
 if (-not $prerequisitesOk -or ($RequireServices -and -not $servicesOk)) {

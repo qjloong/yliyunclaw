@@ -217,10 +217,32 @@ public class AuthService {
      * 生成 JWT token。SSO 登录路径复用此方法签发格式一致的 token。
      */
     public String generateToken(UserEntity user) {
-        return Jwts.builder()
+        return generateToken(user, null, null, null);
+    }
+
+    /**
+     * Sign a cloud-application session token whose entitlement version can be
+     * invalidated independently of ordinary MateClaw logins.
+     */
+    public String generateYliyunToken(UserEntity user, String appKey, Integer configVersion) {
+        if (appKey == null || appKey.isBlank() || configVersion == null || configVersion < 1) {
+            throw new IllegalArgumentException("Yliyun session entitlement is incomplete");
+        }
+        return generateToken(user, "yliyun", appKey, configVersion);
+    }
+
+    private String generateToken(UserEntity user, String authSource,
+                                 String appKey, Integer configVersion) {
+        var builder = Jwts.builder()
                 .subject(user.getUsername())
                 .claim("userId", user.getId())
-                .claim("role", user.getRole())
+                .claim("role", user.getRole());
+        if (authSource != null) {
+            builder.claim("authSource", authSource)
+                    .claim("appKey", appKey)
+                    .claim("configVersion", configVersion);
+        }
+        return builder
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + jwtExpiration))
                 .signWith(getSignKey())

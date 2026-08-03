@@ -285,6 +285,23 @@ public class McpServerService {
     }
 
     /**
+     * Replace the managed client synchronously and keep persisted connection
+     * status/tool metadata in sync. Diagnostics uses this instead of a
+     * throwaway test client so a successful check also repairs a stale
+     * Streamable HTTP session left behind after an MCP server restart.
+     */
+    public ConnectionResult refreshManagedConnection(McpServerEntity entity) {
+        log.info("Refreshing managed MCP connection: name={}", entity.getName());
+        ConnectionResult result = mcpClientManager.replace(entity);
+        if (result.success()) {
+            onConnectSuccess(entity.getId());
+        } else {
+            updateStatus(entity.getId(), "error", result.message(), 0);
+        }
+        return result;
+    }
+
+    /**
      * List the tools the given MCP server has surfaced to the runtime.
      *
      * <p>Reads from {@link McpClientManager#getServerTools(Long)} which
