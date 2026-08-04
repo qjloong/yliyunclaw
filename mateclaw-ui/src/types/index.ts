@@ -84,6 +84,66 @@ export interface AgentHomeQuickStart {
 export type AgentEntity = Agent
 export type AgentState = 'IDLE' | 'RUNNING' | 'PAUSED' | 'ERROR' | 'COMPLETED'
 
+// ==================== 项目上下文与执行审查（MetaY） ====================
+export interface ProjectInsightSummary {
+  projectName?: string
+  rootPath: string
+  relativePath?: string
+  workingDirectoryPath?: string
+  workingDirectoryRelativePath?: string
+  locatorType?: string
+  locatorMarkers?: string[]
+  stackHints: string[]
+  keyFiles: string[]
+  moduleHints: string[]
+  materialIndexHints?: string[]
+  commandHints: string[]
+  packageManager?: string
+  buildSystem?: string
+  gitRootPath?: string
+  gitRootRelativePath?: string
+  changedFileCount?: number
+  changedFiles?: ProjectChangeRecord[]
+  lastScannedAt?: string
+}
+
+export interface ContextRouterMemoryFileSummary {
+  filename: string
+  enabled: boolean
+  fileSize?: number
+}
+
+export interface ContextRouterKnowledgeBaseSummary {
+  id?: string | number
+  name: string
+  externalKey?: string
+  templateMatched: boolean
+  kbKind?: string
+  domainProfileId?: string
+  domainProfileDisplayName?: string
+}
+
+export interface ContextRouterSessionSummary {
+  conversationId: string
+  title?: string
+  messageCount?: number
+  lastActiveTime?: string
+}
+
+export interface ContextRouterSummary {
+  rootPath: string
+  relativePath?: string
+  activeSources: string[]
+  templateKnowledgeKeys: string[]
+  missingKnowledgeBindings: string[]
+  sessionTemporaryEnabled: boolean
+  projectDerivedEnabled: boolean
+  memoryFiles: ContextRouterMemoryFileSummary[]
+  knowledgeBases: ContextRouterKnowledgeBaseSummary[]
+  recentSessions: ContextRouterSessionSummary[]
+  generatedAt?: string
+}
+
 // ==================== 会话与消息 ====================
 export interface Conversation {
   id?: string | number
@@ -154,6 +214,119 @@ export interface ToolCallMeta {
   result?: string
   success?: boolean
   startTime?: number
+}
+
+export type FileChangeType = 'added' | 'modified'
+export type ProjectChangeType = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+
+export interface FileChangeRecord {
+  path: string
+  changeType: FileChangeType
+  toolName: string
+  summary?: string
+  bytesWritten?: number
+  replacements?: number
+  timestamp?: number
+}
+
+export interface ProjectChangeRecord {
+  path: string
+  changeType: ProjectChangeType
+}
+
+export interface CheckpointCapability {
+  supported: boolean
+  reason?: string
+}
+
+export interface ReviewValidationRecord {
+  command: string
+  toolName: string
+  status: 'passed' | 'failed' | 'running' | 'pending' | 'approved' | 'denied' | 'completed'
+  result?: string
+  exitCode?: number
+  timestamp?: number
+}
+
+export interface GeneratedArtifactRecord {
+  name: string
+  url?: string
+  previewUrl?: string
+  path?: string
+  mimeType?: string
+  source?: string
+}
+
+export interface ReviewSummary {
+  totalFiles: number
+  addedCount: number
+  modifiedCount: number
+  files: FileChangeRecord[]
+  validations?: ReviewValidationRecord[]
+  projectChangedFiles?: ProjectChangeRecord[]
+  generatedArtifacts?: GeneratedArtifactRecord[]
+  checkpointCapability?: CheckpointCapability
+}
+
+export type HarnessRunStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED'
+
+export interface HarnessStep {
+  id: string
+  name: string
+  phase: string
+  status: string
+  startedAt?: string
+  completedAt?: string
+  metadata?: Record<string, any>
+}
+
+export interface HarnessToolInvocation {
+  id: string
+  stepId?: string
+  toolName: string
+  status: string
+  riskLevel?: string
+  startedAt?: string
+  completedAt?: string
+  metadata?: Record<string, any>
+}
+
+export interface HarnessApproval {
+  id: string
+  toolInvocationId?: string
+  status: string
+  scope?: string
+  requestedBy?: string
+  resolvedBy?: string
+  requestedAt?: string
+  resolvedAt?: string
+  metadata?: Record<string, any>
+}
+
+export interface HarnessExecutionSummary {
+  promptTokens?: number
+  completionTokens?: number
+  runtimeModelName?: string
+  runtimeProviderId?: string
+  finishReason?: string
+  errorMessage?: string
+  finalAnswerPreview?: string
+}
+
+export interface HarnessRun {
+  id: string
+  conversationId: string
+  agentId?: string
+  agentName?: string
+  mode?: string
+  status?: HarnessRunStatus
+  startedAt?: string
+  completedAt?: string
+  steps?: HarnessStep[]
+  toolInvocations?: HarnessToolInvocation[]
+  approvals?: HarnessApproval[]
+  summary?: HarnessExecutionSummary
+  metadata?: Record<string, any>
 }
 
 export interface PlanMeta {

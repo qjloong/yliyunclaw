@@ -15,6 +15,21 @@ describe('cloud context attachment policy', () => {
     expect(cloudContextKey(context)).toBe('yliyun://file/17485|yliyun://folder/200')
   })
 
+  it('prefers opaque signed references over legacy raw ids', () => {
+    const context = {
+      fileId: '17485',
+      resourceRefs: [{
+        refId: 'payload.signature',
+        path: 'yliyun-ref://payload.signature',
+        resourceType: 'file' as const,
+        resourceId: '17485',
+        binding: 'current-preview' as const,
+      }],
+    }
+    expect(cloudContextPaths(context)).toEqual(['yliyun-ref://payload.signature'])
+    expect(cloudContextKey(context)).toBe('yliyun-ref://payload.signature')
+  })
+
   it('queues a new context for its first turn', () => {
     expect(shouldQueueManagedCloudContext({
       context: { fileId: '17485' },

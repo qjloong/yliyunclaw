@@ -610,7 +610,9 @@ function openFileAttachment(attachment: ChatAttachment) {
 
 function isCloudAttachment(attachment: ChatAttachment) {
   return attachment.path?.startsWith('yliyun://')
+    || attachment.path?.startsWith('yliyun-ref://')
     || attachment.url?.startsWith('yliyun://')
+    || attachment.url?.startsWith('yliyun-ref://')
 }
 
 function attachmentMeta(attachment: ChatAttachment) {

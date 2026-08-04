@@ -16,7 +16,15 @@
       </button>
     </header>
     <main class="cloud-agent-embed__body">
-      <ChatConsole embedded :cloud-context="currentContext" />
+      <ChatConsole v-show="contextReady" embedded :cloud-context="currentContext" />
+      <div v-if="!contextReady && contextError" class="cloud-agent-embed__context-state is-error">
+        <strong>云盘文件上下文加载失败</strong>
+        <span>{{ contextError }}</span>
+        <button type="button" @click="applyCloudContext(latestRawContext)">重试</button>
+      </div>
+      <div v-else-if="!contextReady" class="cloud-agent-embed__context-state">
+        <span>正在验证云盘文件权限…</span>
+      </div>
     </main>
   </div>
 </template>
@@ -24,25 +32,27 @@
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { yliyunResourceRefApi, type CloudResourceBinding } from '@/api'
+import type { CloudContextLike, CloudResourceRefLike } from '@/utils/cloudContextPolicy'
 import ChatConsole from '@/views/ChatConsole.vue'
 
 defineOptions({ name: 'CloudAgentEmbed' })
 
 const route = useRoute()
 const router = useRouter()
-type CloudContext = {
-  fileId?: string
-  fileName?: string
-  folderId?: string
-  folderName?: string
-}
+type CloudContext = CloudContextLike
 
-const currentContext = ref<CloudContext>({
+const initialContext: CloudContext = {
   fileId: route.query.fileId as string | undefined,
   fileName: route.query.fileName as string | undefined,
   folderId: route.query.folderId as string | undefined,
   folderName: route.query.folderName as string | undefined,
-})
+}
+const currentContext = ref<CloudContext>({})
+const latestRawContext = ref<CloudContext>({ ...initialContext })
+const contextReady = ref(false)
+const contextError = ref('')
+let contextSequence = 0
 const channelId = route.query.channelId ? String(route.query.channelId) : ''
 const parentOrigin = route.query.parentOrigin ? String(route.query.parentOrigin) : ''
 const hostProvidesHeader = computed(() => route.query.hostHeader === '1')
@@ -68,12 +78,55 @@ const handleCloudContextMessage = (event: MessageEvent) => {
     || message?.channelId !== channelId
   ) return
   const context = message.context || {}
-  currentContext.value = {
+  void applyCloudContext({
     fileId: context.fileId != null ? String(context.fileId) : undefined,
     fileName: context.fileName != null ? String(context.fileName) : undefined,
     folderId: context.folderId != null ? String(context.folderId) : undefined,
     folderName: context.folderName != null ? String(context.folderName) : undefined,
+  })
+}
+
+async function issueResourceRef(
+  resourceType: 'file' | 'folder',
+  resourceId: string,
+  displayName: string | undefined,
+  binding: CloudResourceBinding,
+): Promise<CloudResourceRefLike> {
+  const response = await yliyunResourceRefApi.issue({
+    resourceType,
+    resourceId,
+    displayName,
+    binding,
+  })
+  return response.data
+}
+
+async function applyCloudContext(
+  context: CloudContext,
+  binding: CloudResourceBinding = 'current-preview',
+) {
+  latestRawContext.value = { ...context }
+  contextReady.value = false
+  contextError.value = ''
+  const sequence = ++contextSequence
+  const refs: CloudResourceRefLike[] = []
+  try {
+    if (context.fileId) {
+      refs.push(await issueResourceRef('file', context.fileId, context.fileName, binding))
+    }
+    if (context.folderId) {
+      refs.push(await issueResourceRef('folder', context.folderId, context.folderName, binding))
+    }
+  } catch (error) {
+    if (sequence !== contextSequence) return
+    console.warn('[CloudAgentEmbed] Failed to seal cloud context:', error)
+    currentContext.value = {}
+    contextError.value = error instanceof Error ? error.message : '请重新打开 AI 助手'
+    return
   }
+  if (sequence !== contextSequence) return
+  currentContext.value = { ...context, resourceRefs: refs }
+  contextReady.value = true
   notifyHostConversation()
 }
 
@@ -97,10 +150,15 @@ const openFullConsole = () => {
   const query: Record<string, string> = { authSource: 'yliyun' }
   if (route.query.agentId) query.agentId = String(route.query.agentId)
   if (route.query.conversationId) query.conversationId = String(route.query.conversationId)
-  if (currentContext.value.fileId) query.fileId = currentContext.value.fileId
-  if (currentContext.value.fileName) query.fileName = currentContext.value.fileName
-  if (currentContext.value.folderId) query.folderId = currentContext.value.folderId
-  if (currentContext.value.folderName) query.folderName = currentContext.value.folderName
+  const resourceRef = currentContext.value.resourceRefs?.[0]
+  if (resourceRef) {
+    query.resourceRef = resourceRef.refId
+    query.resourceType = resourceRef.resourceType
+    if (resourceRef.displayName) query.resourceName = resourceRef.displayName
+    if (resourceRef.mimeType) query.resourceMimeType = resourceRef.mimeType
+    query.resourceBinding = resourceRef.binding
+    if (resourceRef.expiresAt) query.resourceExpiresAt = String(resourceRef.expiresAt)
+  }
   const href = router.resolve({ path: '/chat', query }).href
   window.open(href, '_blank', 'noopener,noreferrer')
 }
@@ -113,6 +171,7 @@ watch(
 
 onMounted(() => {
   window.addEventListener('message', handleCloudContextMessage)
+  void applyCloudContext(initialContext)
   notifyHostConversation()
 })
 onBeforeUnmount(() => window.removeEventListener('message', handleCloudContextMessage))
@@ -212,5 +271,32 @@ onBeforeUnmount(() => window.removeEventListener('message', handleCloudContextMe
   min-height: 0;
   flex: 1;
   overflow: hidden;
+}
+
+.cloud-agent-embed__context-state {
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  color: #718096;
+  font-size: 13px;
+  text-align: center;
+}
+
+.cloud-agent-embed__context-state.is-error strong {
+  color: #c2413b;
+}
+
+.cloud-agent-embed__context-state button {
+  padding: 6px 12px;
+  border: 1px solid #cbd8eb;
+  border-radius: 7px;
+  background: #fff;
+  color: #356fc5;
+  cursor: pointer;
 }
 </style>

@@ -125,6 +125,66 @@ export const ssoApi = {
     http.post('/auth/sso/bind', { bindToken, username, password }),
 }
 
+export type CloudResourceType = 'file' | 'folder'
+export type CloudResourceBinding = 'current-preview' | 'mention' | 'pinned'
+export type CloudResourceState = 'CURRENT' | 'UPDATED' | 'DELETED' | 'PERMISSION_REVOKED' | 'UNAVAILABLE'
+
+export interface CloudResourceStatus {
+  state: CloudResourceState
+  referencedVersionId?: string
+  currentVersionId?: string
+  displayName?: string
+  mimeType?: string
+  checkedAt: number
+  message: string
+  retryable: boolean
+}
+
+export interface IssuedCloudResourceRef {
+  refId: string
+  path: string
+  resourceType: CloudResourceType
+  resourceId: string
+  displayName?: string
+  versionId?: string
+  binding: CloudResourceBinding
+  mimeType?: string
+  expiresAt: number
+  status?: CloudResourceState
+  currentVersionId?: string
+  checkedAt?: number
+  statusMessage?: string
+}
+
+export const yliyunResourceRefApi = {
+  issue: (data: {
+    resourceType: CloudResourceType
+    resourceId: string
+    displayName?: string
+    versionId?: string
+    binding?: CloudResourceBinding
+    mimeType?: string
+  }) => http.post<IssuedCloudResourceRef, { code: number; msg: string; data: IssuedCloudResourceRef }>(
+    '/auth/yliyun/resource-refs',
+    data,
+  ),
+  rebind: (data: { refId: string; binding: CloudResourceBinding }) =>
+    http.post<IssuedCloudResourceRef, { code: number; msg: string; data: IssuedCloudResourceRef }>(
+      '/auth/yliyun/resource-refs/rebind',
+      data,
+    ),
+  status: (refId: string) =>
+    http.post<CloudResourceStatus, { code: number; msg: string; data: CloudResourceStatus }>(
+      '/auth/yliyun/resource-refs/status',
+      { refId },
+    ),
+  refresh: (refId: string) =>
+    http.post<IssuedCloudResourceRef, { code: number; msg: string; data: IssuedCloudResourceRef }>(
+      '/auth/yliyun/resource-refs/refresh',
+      { refId },
+    ),
+}
+
 // ==================== Agent ====================
 export const agentApi = {
   /**

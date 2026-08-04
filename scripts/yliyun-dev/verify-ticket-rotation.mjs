@@ -9,6 +9,7 @@ const mateclawBaseUrl = process.env.MATECLAW_BASE_URL || 'http://127.0.0.1:18088
 const parentOrigin = process.env.YLIYUN_CLOUD_PARENT_ORIGIN || 'http://localhost:8080';
 const tenantId = Number(process.env.YLIYUN_TEST_TENANT_ID || '1');
 const userId = Number(process.env.YLIYUN_TEST_OWNER_USER_ID || '100');
+const resourceId = String(process.env.YLIYUN_TEST_READABLE_FILE_ID || '17485');
 const appKeyPath = fileURLToPath(new URL('../../data/yliyun-dev/mcp-app-key.txt', import.meta.url));
 const appKey = (await readFile(appKeyPath, 'utf8')).trim();
 
@@ -57,12 +58,57 @@ assert(session.code === 200, `MateClaw session failed: ${session.code}`);
 assert(String(session.data?.cloudTenantId) === String(tenantId), 'session tenant does not match');
 assert(String(session.data?.cloudUserId) === String(userId), 'session user does not match');
 
+const issuedResource = await json(`${mateclawBaseUrl}/api/v1/auth/yliyun/resource-refs`, {
+  method: 'POST',
+  headers: { cookie, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    resourceType: 'file',
+    resourceId,
+    displayName: `runtime-resource-${resourceId}.txt`,
+    binding: 'current-preview',
+  }),
+});
+assert(issuedResource.code === 200, `resource ref issuance failed: ${issuedResource.code}`);
+assert(issuedResource.data?.path?.startsWith('yliyun-ref://'), 'resource ref path is not signed');
+assert(issuedResource.data?.binding === 'current-preview', 'resource ref binding is invalid');
+
+const resourceStatus = await json(`${mateclawBaseUrl}/api/v1/auth/yliyun/resource-refs/status`, {
+  method: 'POST',
+  headers: { cookie, 'content-type': 'application/json' },
+  body: JSON.stringify({ refId: issuedResource.data.refId }),
+});
+assert(resourceStatus.code === 200, `resource status failed: ${resourceStatus.code}`);
+assert(resourceStatus.data?.state === 'CURRENT', `resource is not current: ${resourceStatus.data?.state}`);
+assert(
+  resourceStatus.data?.currentVersionId === issuedResource.data?.versionId,
+  'issued resource version does not match the server-verified current version',
+);
+
+const pinnedResource = await json(`${mateclawBaseUrl}/api/v1/auth/yliyun/resource-refs/rebind`, {
+  method: 'POST',
+  headers: { cookie, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    refId: issuedResource.data.refId,
+    binding: 'pinned',
+  }),
+});
+assert(pinnedResource.code === 200, `resource ref rebind failed: ${pinnedResource.code}`);
+assert(pinnedResource.data?.binding === 'pinned', 'resource ref was not pinned');
+assert(pinnedResource.data?.refId !== issuedResource.data.refId, 'rebind did not rotate the signed ref');
+
 console.log(JSON.stringify({
   success: true,
   ticketKeyId: payload.kid,
   tenantId,
   userId,
   sessionAuthSource: session.data?.authSource,
+  resourceRef: {
+    resourceId,
+    versionId: issuedResource.data.versionId || null,
+    state: resourceStatus.data.state,
+    issuedBinding: issuedResource.data.binding,
+    reboundBinding: pinnedResource.data.binding,
+  },
 }, null, 2));
 
 async function json(url, init) {

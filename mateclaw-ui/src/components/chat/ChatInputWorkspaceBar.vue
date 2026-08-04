@@ -481,7 +481,7 @@ const emit = defineEmits<{
   talk: []
   'toggle-thinking': []
   // === MetaY custom === 工作区操作
-  'switch-workspace': [id: string | number]
+  'switch-workspace': [id?: string | number]
   'open-permission': []
   'add-menu': []
   'switch-permission-level': [level: 'full' | 'limited']
@@ -813,7 +813,7 @@ const atDismissed = ref(false)
 const atMatch = computed(() => { const m = /@([^\s]*)$/.exec(props.modelValue); return m ? m[1] : null })
 const atActive = computed(() => (atMatch.value !== null || showCloudPicker.value) && !atDismissed.value && !props.disabled && !props.pendingApproval)
 watch(atMatch, (val) => { if (val === null && !showCloudPicker.value) atDismissed.value = false })
-function handleCloudFileSelect(files: Array<{ id: number; name: string; size: number; mimeType: string }>) {
+function handleCloudFileSelect(files: Array<{ id: string; name: string; size: number; mimeType: string }>) {
   emit('add-attachments', files.map(f => ({ name: f.name, size: f.size, contentType: f.mimeType || 'application/octet-stream', storedName: `cloud:${f.id}`, path: `yliyun://file/${f.id}`, source: 'yliyun-mcp' as const })))
   emit('update:modelValue', props.modelValue.replace(/@[^\s]*$/, ''))
   showCloudPicker.value = false

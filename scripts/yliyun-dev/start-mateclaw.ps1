@@ -9,7 +9,19 @@ $CredentialRoot = Join-Path $MateClawRoot "data\yliyun-dev"
 $LogRoot = Join-Path $CredentialRoot "logs"
 $JdkHome = "C:\Users\loong\.jdks\ms-21.0.7"
 $Maven = "D:\program\IntelliJ IDEA 2025.1.3\plugins\maven\lib\maven3\bin\mvn.cmd"
-$Jar = Join-Path $MateClawRoot "mateclaw-server\target\mateclaw-server-2.0.0-SNAPSHOT.jar"
+$TargetRoot = Join-Path $MateClawRoot "mateclaw-server\target"
+
+function Resolve-MateClawExecutableJar {
+    if (-not (Test-Path -LiteralPath $TargetRoot)) { return $null }
+    $candidate = Get-ChildItem -LiteralPath $TargetRoot -File -Filter "mateclaw-server-*.jar" |
+        Where-Object {
+            $_.Name -notmatch '-(sources|javadoc|tests)\.jar$' -and $_.Length -gt 10MB
+        } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if ($candidate) { return $candidate.FullName }
+    return $null
+}
 
 & node (Join-Path $ScriptRoot "generate-credentials.mjs") | Out-Null
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
@@ -34,9 +46,11 @@ if (-not $SkipBuild) {
     }
 }
 
-if (-not (Test-Path $Jar)) {
-    throw "MateClaw executable jar not found: $Jar"
+$Jar = Resolve-MateClawExecutableJar
+if (-not $Jar -or -not (Test-Path -LiteralPath $Jar)) {
+    throw "MateClaw executable jar not found under: $TargetRoot"
 }
+Write-Host "Using MateClaw executable jar: $Jar"
 
 $previousTicketSecret = $env:YLIYUN_TICKET_SECRET
 $previousTicketSecretCurrent = $env:YLIYUN_TICKET_SECRET_CURRENT

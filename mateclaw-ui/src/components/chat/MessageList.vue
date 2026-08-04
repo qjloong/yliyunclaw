@@ -165,6 +165,7 @@ const props = withDefaults(defineProps<Props>(), {
   title: 'MateClaw',
   subtitle: '',
   suggestions: () => [],
+  homeQuickStarts: () => [],
   autoScroll: true,
   hasMore: false,
   loadingOlder: false,

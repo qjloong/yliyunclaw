@@ -1379,9 +1379,10 @@ public class ConversationService {
         String name = safe(part.getFileName());
         String path = safe(part.getPath());
         String caption = safe(part.getCaption());
+        boolean signedCloudResource = path.startsWith("yliyun-ref://");
         String label = path.startsWith("yliyun://folder/")
                 ? "[云盘文件夹]"
-                : path.startsWith("yliyun://file/") ? "[云盘附件]" : "[附件]";
+                : path.startsWith("yliyun://file/") || signedCloudResource ? "[云盘附件]" : "[附件]";
         StringBuilder rendered = new StringBuilder(label).append(' ').append(name);
         if (!includePath || path.isBlank()) {
             // Keep the display path private for external renderers, but the
@@ -1392,7 +1393,7 @@ public class ConversationService {
         if (!caption.isBlank()) {
             String contentLabel = path.startsWith("yliyun://folder/")
                     ? "云盘文件夹列表"
-                    : path.startsWith("yliyun://file/") ? "云盘文件内容" : "附件内容";
+                    : path.startsWith("yliyun://file/") || signedCloudResource ? "云盘文件内容" : "附件内容";
             rendered.append("\n[").append(contentLabel)
                     .append("，已由服务端按当前用户权限读取]\n")
                     .append(caption.trim())

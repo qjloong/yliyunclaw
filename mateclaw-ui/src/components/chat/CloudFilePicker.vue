@@ -47,7 +47,7 @@ import { ref, watch, nextTick } from 'vue'
 import { mcpApi } from '@/api'
 
 interface CloudFile {
-  id: number; name: string; isFolder: boolean; size: number; mimeType: string;
+  id: string; name: string; isFolder: boolean; size: number; mimeType: string;
 }
 
 const props = defineProps<{
@@ -120,9 +120,9 @@ function toCloudFile(value: unknown): CloudFile | null {
   const file = asRecord(value)
   if (!file) return null
 
-  const id = Number(file.id)
+  const id = normalizeFileId(file.id)
   const name = typeof file.name === 'string' ? file.name : ''
-  if (!Number.isSafeInteger(id) || id <= 0 || !name) return null
+  if (!id || !name) return null
 
   const size = Number(file.size)
   return {
@@ -132,6 +132,17 @@ function toCloudFile(value: unknown): CloudFile | null {
     size: Number.isFinite(size) && size > 0 ? size : 0,
     mimeType: typeof file.mimeType === 'string' ? file.mimeType : '',
   }
+}
+
+function normalizeFileId(value: unknown): string {
+  if (typeof value === 'string') {
+    const id = value.trim()
+    return /^[1-9]\d*$/.test(id) ? id : ''
+  }
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+    return String(value)
+  }
+  return ''
 }
 
 function retrySearch() {
@@ -169,7 +180,7 @@ function toggleSelect(item: CloudFile) {
   if (idx >= 0) { selectedFiles.value.splice(idx, 1) }
   else { selectedFiles.value.push(item) }
 }
-function isSelected(id: number) { return selectedFiles.value.some(f => f.id === id) }
+function isSelected(id: string) { return selectedFiles.value.some(f => f.id === id) }
 
 function confirm() {
   emit('select', [...selectedFiles.value])

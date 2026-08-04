@@ -1,9 +1,37 @@
+import type { CloudResourceBinding, CloudResourceState, CloudResourceType } from '@/api'
+
+export interface CloudResourceRefLike {
+  refId: string
+  path: string
+  resourceType: CloudResourceType
+  resourceId?: string
+  displayName?: string
+  versionId?: string
+  binding: CloudResourceBinding
+  mimeType?: string
+  expiresAt?: number
+  status?: CloudResourceState
+  currentVersionId?: string
+  checkedAt?: number
+  statusMessage?: string
+}
+
 export interface CloudContextLike {
+  resourceRefs?: CloudResourceRefLike[]
   fileId?: string
+  fileName?: string
   folderId?: string
+  folderName?: string
 }
 
 export function cloudContextPaths(context: CloudContextLike): string[] {
+  const signedPaths = (context.resourceRefs || [])
+    .map(ref => ref.path)
+    .filter(path => path.startsWith('yliyun-ref://'))
+  if (signedPaths.length > 0) return [...new Set(signedPaths)]
+
+  // Compatibility only: new Yliyun embed contexts are sealed as refIds before
+  // they reach ChatConsole. Legacy/full-page links can still finish one turn.
   const paths: string[] = []
   if (context.fileId) paths.push(`yliyun://file/${context.fileId}`)
   if (context.folderId) paths.push(`yliyun://folder/${context.folderId}`)

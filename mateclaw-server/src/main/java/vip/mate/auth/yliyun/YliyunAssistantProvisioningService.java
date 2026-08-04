@@ -38,7 +38,7 @@ public class YliyunAssistantProvisioningService {
             WorkspaceMapper workspaceMapper,
             AgentMapper agentMapper,
             @Lazy TemplateService templateService,
-            AgentService agentService) {
+            @Lazy AgentService agentService) {
         this.workspaceMapper = workspaceMapper;
         this.agentMapper = agentMapper;
         this.templateService = templateService;

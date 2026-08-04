@@ -189,7 +189,7 @@ const deletingWs = ref<Workspace | null>(null)
 // === MetaY custom start === 策略与权限对话框
 const showPolicyDialog = ref(false)
 const policyWs = ref<Workspace | null>(null)
-const policyWsId = computed(() => policyWs.value?.id ?? currentWorkspaceId.value)
+const policyWsId = computed(() => String(policyWs.value?.id ?? currentWorkspaceId.value ?? ''))
 function openPolicyDialog(ws: Workspace) {
   policyWs.value = ws
   showPolicyDialog.value = true

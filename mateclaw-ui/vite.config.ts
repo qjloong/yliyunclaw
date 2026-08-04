@@ -52,7 +52,7 @@ function elementPlusSubpathResolver() {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     vue({
       template: {
@@ -80,7 +80,10 @@ export default defineConfig({
     Components({
       dirs: [],
       resolvers: [elementPlusSubpathResolver()],
-      dts: 'src/types/components.d.ts',
+      // The dev server owns this generated declaration file. A production
+      // build may run beside `pnpm dev` on Windows; letting both processes
+      // rewrite it can fail with UNKNOWN/EPERM and leave a partial file.
+      dts: command === 'serve' ? 'src/types/components.d.ts' : false,
     }),
     tailwindcss(),
     // ANALYZE=1 pnpm build writes dist/stats.html. Skipped on normal builds so
@@ -189,4 +192,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

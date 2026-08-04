@@ -237,6 +237,40 @@
         <ContextUsagePanel :usage="contextUsage" />
       </div>
 
+      <div v-if="activeCloudContextLabel" class="cloud-context-strip">
+        <div class="cloud-context-strip__resource" :title="activeCloudContextLabel">
+          <span class="cloud-context-strip__badge">云盘</span>
+          <span class="cloud-context-strip__name">{{ activeCloudContextLabel }}</span>
+          <span class="cloud-context-strip__mode">
+            {{ isCloudContextPinned ? '已固定到本会话' : '跟随云盘当前文件' }}
+          </span>
+          <span
+            class="cloud-context-strip__status"
+            :class="activeCloudContextStatusClass"
+          >
+            {{ activeCloudContextStatusLabel }}
+          </span>
+        </div>
+        <button
+          v-if="cloudContextStatusActionLabel"
+          type="button"
+          class="cloud-context-strip__status-action"
+          :disabled="cloudContextStatusBusy"
+          @click="handleCloudContextStatusAction"
+        >
+          {{ cloudContextStatusBusy ? '处理中…' : cloudContextStatusActionLabel }}
+        </button>
+        <button
+          type="button"
+          class="cloud-context-strip__pin"
+          :class="{ 'is-pinned': isCloudContextPinned }"
+          :disabled="cloudContextPinning"
+          @click="toggleCloudContextPin"
+        >
+          {{ cloudContextPinning ? '处理中…' : (isCloudContextPinned ? '取消固定' : '固定') }}
+        </button>
+      </div>
+
       <!-- 组件化的 ChatInput（MetaY: 替换为 ChatInputWorkspaceBar） -->
       <ChatInputWorkspaceBar
         ref="chatInputRef"
@@ -308,12 +342,24 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
 import { ChatDotRound, Delete, Setting, UploadFilled } from '@element-plus/icons-vue'
-import { conversationApi, agentApi, modelApi, chatApi, cronJobApi, approvalApi } from '@/api/index'
+import {
+  conversationApi,
+  agentApi,
+  modelApi,
+  chatApi,
+  cronJobApi,
+  approvalApi,
+  yliyunResourceRefApi,
+  type CloudResourceStatus,
+  type IssuedCloudResourceRef,
+} from '@/api/index'
 import { copyToClipboard } from '@/utils/clipboard'
 import {
   cloudContextKey,
   cloudContextPaths,
   shouldQueueManagedCloudContext,
+  type CloudContextLike,
+  type CloudResourceRefLike,
 } from '@/utils/cloudContextPolicy'
 import { useFileDrop } from '@/composables/useFileDrop'
 import { useIsMobile, useMediaQuery, BREAKPOINTS } from '@/composables/useBreakpoint'
@@ -345,12 +391,7 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import GoalSetInlinePrompt from '@/components/goal/GoalSetInlinePrompt.vue'
 import GoalSystemLine from '@/components/goal/GoalSystemLine.vue'
 
-type CloudContext = {
-  fileId?: string
-  fileName?: string
-  folderId?: string
-  folderName?: string
-}
+type CloudContext = CloudContextLike
 
 const props = withDefaults(defineProps<{
   embedded?: boolean
@@ -423,17 +464,126 @@ const suggestions = computed(() => {
 const router = useRouter()
 const route = useRoute()
 const chatRoutePath = computed(() => props.embedded ? '/embed/cloud-agent' : '/chat')
+function routeCloudResourceRefs(): CloudResourceRefLike[] {
+  const rawRef = Array.isArray(route.query.resourceRef)
+    ? route.query.resourceRef[0]
+    : route.query.resourceRef
+  const refId = rawRef ? String(rawRef) : ''
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(refId)) return []
+  const resourceType = route.query.resourceType === 'folder' ? 'folder' : 'file'
+  const rawBinding = String(route.query.resourceBinding || 'current-preview')
+  const binding = rawBinding === 'mention' || rawBinding === 'pinned'
+    ? rawBinding
+    : 'current-preview'
+  const expiresAt = Number(route.query.resourceExpiresAt)
+  return [{
+    refId,
+    path: `yliyun-ref://${refId}`,
+    resourceType,
+    displayName: route.query.resourceName ? String(route.query.resourceName) : undefined,
+    mimeType: route.query.resourceMimeType ? String(route.query.resourceMimeType) : undefined,
+    binding,
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
+  }]
+}
+
 const pendingRouteCloudContext = ref<CloudContext>({
-  fileId: route.query.fileId ? String(route.query.fileId) : undefined,
-  fileName: route.query.fileName ? String(route.query.fileName) : undefined,
-  folderId: route.query.folderId ? String(route.query.folderId) : undefined,
-  folderName: route.query.folderName ? String(route.query.folderName) : undefined,
+  resourceRefs: routeCloudResourceRefs(),
+  fileId: !props.embedded && route.query.fileId ? String(route.query.fileId) : undefined,
+  fileName: !props.embedded && route.query.fileName ? String(route.query.fileName) : undefined,
+  folderId: !props.embedded && route.query.folderId ? String(route.query.folderId) : undefined,
+  folderName: !props.embedded && route.query.folderName ? String(route.query.folderName) : undefined,
 })
 // The selected cloud resource remains active route/host context, but its
 // attachment card is injected only on the first turn (and again after a host
 // resource switch). Keeping these concerns separate prevents every follow-up
 // user message from repeating the same attachment.
 const activeCloudContext = ref<CloudContext>({ ...pendingRouteCloudContext.value })
+const latestHostCloudContext = ref<CloudContext>({ ...pendingRouteCloudContext.value })
+const cloudContextPinning = ref(false)
+const cloudContextStatusChecking = ref(false)
+const cloudContextStatusBusy = ref(false)
+let cloudContextStatusSequence = 0
+const CLOUD_CONTEXT_PIN_STORAGE_PREFIX = 'mc-yliyun-cloud-context-pins-v1'
+
+function cloneCloudContext(context: CloudContext): CloudContext {
+  return {
+    ...context,
+    resourceRefs: context.resourceRefs?.map(resource => ({ ...resource })),
+  }
+}
+
+function cloudContextPinStorageKey() {
+  const userId = localStorage.getItem('userId') || 'anonymous'
+  const workspaceId = localStorage.getItem('mc-workspace-id') || 'default'
+  return `${CLOUD_CONTEXT_PIN_STORAGE_PREFIX}:${userId}:${workspaceId}`
+}
+
+function loadPinnedCloudContexts(): Record<string, CloudContext> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(cloudContextPinStorageKey()) || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const now = Math.floor(Date.now() / 1000)
+    const contexts: Record<string, CloudContext> = {}
+    for (const [conversationId, value] of Object.entries(parsed)) {
+      const context = value as CloudContext
+      const resourceRefs = (context.resourceRefs || []).filter(resource =>
+        resource.binding === 'pinned'
+        && resource.path?.startsWith('yliyun-ref://')
+        && (!resource.expiresAt || resource.expiresAt > now + 30)
+      )
+      if (conversationId && resourceRefs.length) {
+        contexts[conversationId] = {
+          resourceRefs,
+          fileName: context.fileName,
+          folderName: context.folderName,
+        }
+      }
+    }
+    return contexts
+  } catch {
+    return {}
+  }
+}
+
+const pinnedCloudContexts = ref<Record<string, CloudContext>>(loadPinnedCloudContexts())
+
+function savePinnedCloudContexts() {
+  localStorage.setItem(cloudContextPinStorageKey(), JSON.stringify(pinnedCloudContexts.value))
+}
+
+function pinnedCloudContext(conversationId = currentConversationId.value): CloudContext | undefined {
+  return conversationId ? pinnedCloudContexts.value[conversationId] : undefined
+}
+
+const isCloudContextPinned = computed(() => Boolean(pinnedCloudContext()))
+const activeCloudContextLabel = computed(() => {
+  const resource = activeCloudContext.value.resourceRefs?.[0]
+  return resource?.displayName
+    || activeCloudContext.value.fileName
+    || activeCloudContext.value.folderName
+    || ''
+})
+const activeCloudResource = computed(() => activeCloudContext.value.resourceRefs?.[0])
+const activeCloudContextStatus = computed(() => activeCloudResource.value?.status)
+const activeCloudContextStatusLabel = computed(() => {
+  if (cloudContextStatusChecking.value && !activeCloudContextStatus.value) return '校验中'
+  return {
+    CURRENT: '最新',
+    UPDATED: '已有新版本',
+    DELETED: '已删除',
+    PERMISSION_REVOKED: '权限已失效',
+    UNAVAILABLE: '状态验证失败',
+  }[activeCloudContextStatus.value || 'CURRENT']
+})
+const activeCloudContextStatusClass = computed(() =>
+  `is-${(activeCloudContextStatus.value || 'current').toLowerCase().replace('_', '-')}`
+)
+const cloudContextStatusActionLabel = computed(() => {
+  if (activeCloudContextStatus.value === 'UPDATED') return '使用最新版本'
+  if (activeCloudContextStatus.value === 'UNAVAILABLE') return '重新校验'
+  return ''
+})
 const { t } = useI18n()
 const wsStore = useWorkspaceStore()
 
@@ -1308,6 +1458,7 @@ async function pollActivity() {
 onMounted(async () => {
   captureRouteAction()
   window.addEventListener('mc:chat-shortcut', handleChatShortcut)
+  window.addEventListener('focus', handleCloudContextWindowFocus)
   document.addEventListener('click', handleCodeCopy)
   startECharts()
   startKatex()
@@ -1323,6 +1474,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('mc:chat-shortcut', handleChatShortcut)
+  window.removeEventListener('focus', handleCloudContextWindowFocus)
   document.removeEventListener('click', handleCodeCopy)
   disposeECharts()
   disposeKatex()
@@ -1372,6 +1524,7 @@ onActivated(async () => {
   // reached this component's own `agents` list otherwise, and stayed
   // invisible in the picker until a full page reload forced a fresh mount.
   await loadAgents()
+  void checkActiveCloudContextStatus()
   activityPollTimer = window.setInterval(pollActivity, ACTIVITY_POLL_MS)
   elapsedTickTimer = window.setInterval(() => {
     if (activeCronRuns.value.length > 0) elapsedNow.value = Date.now()
@@ -1394,7 +1547,7 @@ watch(() => route.query, () => {
   // If a fresh action arrives (e.g. user re-fires Ctrl+K via the URL while
   // the view is already alive), pick it up immediately.
   captureRouteAction()
-  if (route.query.fileId || route.query.folderId) {
+  if (!props.embedded && (route.query.fileId || route.query.folderId)) {
     pendingRouteCloudContext.value = {
       fileId: route.query.fileId ? String(route.query.fileId) : undefined,
       fileName: route.query.fileName ? String(route.query.fileName) : undefined,
@@ -1714,6 +1867,23 @@ async function refreshCurrentConversationMessages(conversationId: string) {
 }
 
 function appendCloudContextAttachments(context: CloudContext) {
+  if (context.resourceRefs?.length) {
+    for (const resource of context.resourceRefs) {
+      if (pendingAttachments.value.some((item) => item.path === resource.path)) continue
+      const isFolder = resource.resourceType === 'folder'
+      pendingAttachments.value.push({
+        name: resource.displayName || (isFolder ? '云盘文件夹' : '云盘文件'),
+        size: 0,
+        contentType: isFolder ? 'inode/directory' : (resource.mimeType || 'application/octet-stream'),
+        storedName: `cloud-ref:${resource.refId}`,
+        path: resource.path,
+        url: '',
+        source: 'yliyun-mcp',
+      } as any)
+    }
+    return
+  }
+
   if (context.fileId) {
     const path = `yliyun://file/${context.fileId}`
     if (!pendingAttachments.value.some((item) => item.path === path)) {
@@ -1760,6 +1930,7 @@ function isCloudAttachment(attachment?: ChatAttachment) {
   return Boolean(
     attachment?.path?.startsWith('yliyun://file/')
     || attachment?.path?.startsWith('yliyun://folder/')
+    || attachment?.path?.startsWith('yliyun-ref://')
   )
 }
 
@@ -1797,11 +1968,14 @@ function conversationContainsCloudContext(context: CloudContext) {
 function replaceManagedCloudContextAttachment(context: CloudContext) {
   removePendingManagedCloudContextAttachments()
   appendCloudContextAttachments(context)
-  if (context.fileId) managedCloudContextPaths.add(`yliyun://file/${context.fileId}`)
-  if (context.folderId) managedCloudContextPaths.add(`yliyun://folder/${context.folderId}`)
+  for (const path of cloudContextPaths(context)) managedCloudContextPaths.add(path)
 }
 
 function reconcileManagedCloudContextAttachment(context: CloudContext) {
+  if (!cloudContextCanBeAttached(context)) {
+    removePendingManagedCloudContextAttachments()
+    return
+  }
   const nextKey = cloudContextKey(context)
   const conversationId = currentConversationId.value
   const lastDeliveredKey = conversationId
@@ -1824,23 +1998,277 @@ function reconcileManagedCloudContextAttachment(context: CloudContext) {
   replaceManagedCloudContextAttachment(context)
 }
 
+function cloudContextIdentity(context: CloudContext) {
+  if (context.resourceRefs?.length) {
+    return context.resourceRefs
+      .map(resource => `${resource.resourceType}:${resource.resourceId || resource.displayName || resource.versionId || resource.refId}`)
+      .sort()
+      .join('|')
+  }
+  const identities: string[] = []
+  if (context.fileId) identities.push(`file:${context.fileId}`)
+  if (context.folderId) identities.push(`folder:${context.folderId}`)
+  return identities.join('|')
+}
+
+function transferDeliveredMarker(previous: CloudContext, next: CloudContext) {
+  const conversationId = currentConversationId.value
+  if (!conversationId || cloudContextIdentity(previous) !== cloudContextIdentity(next)) return
+  const previousKey = cloudContextKey(previous)
+  const nextKey = cloudContextKey(next)
+  if (!nextKey) return
+  if (
+    deliveredManagedCloudContextByConversation.get(conversationId) === previousKey
+    || conversationContainsCloudContext(previous)
+  ) {
+    deliveredManagedCloudContextByConversation.set(conversationId, nextKey)
+  }
+}
+
+async function rebindCloudContext(
+  context: CloudContext,
+  binding: 'current-preview' | 'pinned',
+): Promise<CloudContext> {
+  const refs: CloudResourceRefLike[] = []
+  if (context.resourceRefs?.length) {
+    for (const resource of context.resourceRefs) {
+      const response = await yliyunResourceRefApi.rebind({
+        refId: resource.refId,
+        binding,
+      })
+      refs.push(response.data)
+    }
+  } else {
+    if (context.fileId) {
+      const response = await yliyunResourceRefApi.issue({
+        resourceType: 'file',
+        resourceId: context.fileId,
+        displayName: context.fileName,
+        binding,
+      })
+      refs.push(response.data)
+    }
+    if (context.folderId) {
+      const response = await yliyunResourceRefApi.issue({
+        resourceType: 'folder',
+        resourceId: context.folderId,
+        displayName: context.folderName,
+        binding,
+      })
+      refs.push(response.data)
+    }
+  }
+  if (!refs.length) throw new Error('没有可固定的云盘文件')
+  return { ...context, resourceRefs: refs }
+}
+
+function replaceResourceRef(
+  context: CloudContext,
+  refId: string,
+  replacement: CloudResourceRefLike,
+): CloudContext {
+  if (!context.resourceRefs?.some(resource => resource.refId === refId)) return context
+  return {
+    ...context,
+    resourceRefs: context.resourceRefs.map(resource =>
+      resource.refId === refId ? { ...replacement } : resource
+    ),
+  }
+}
+
+function statusResourceRef(
+  resource: CloudResourceRefLike,
+  status: CloudResourceStatus,
+): CloudResourceRefLike {
+  return {
+    ...resource,
+    displayName: status.displayName || resource.displayName,
+    mimeType: status.mimeType || resource.mimeType,
+    versionId: status.referencedVersionId || resource.versionId,
+    currentVersionId: status.currentVersionId,
+    status: status.state,
+    checkedAt: status.checkedAt,
+    statusMessage: status.message,
+  }
+}
+
+function updateResourceRefEverywhere(
+  refId: string,
+  replacement: CloudResourceRefLike,
+) {
+  activeCloudContext.value = replaceResourceRef(activeCloudContext.value, refId, replacement)
+  latestHostCloudContext.value = replaceResourceRef(latestHostCloudContext.value, refId, replacement)
+  let pinnedChanged = false
+  for (const [conversationId, context] of Object.entries(pinnedCloudContexts.value)) {
+    const next = replaceResourceRef(context, refId, replacement)
+    if (next !== context) {
+      pinnedCloudContexts.value[conversationId] = persistentPinnedContext(next)
+      pinnedChanged = true
+    }
+  }
+  if (pinnedChanged) savePinnedCloudContexts()
+}
+
+function cloudContextCanBeAttached(context: CloudContext) {
+  return !(context.resourceRefs || []).some(resource =>
+    resource.status === 'UPDATED'
+    || resource.status === 'DELETED'
+    || resource.status === 'PERMISSION_REVOKED'
+    || resource.status === 'UNAVAILABLE'
+  )
+}
+
+async function checkActiveCloudContextStatus() {
+  const resources = (activeCloudContext.value.resourceRefs || [])
+    .filter(resource => resource.refId && resource.path.startsWith('yliyun-ref://'))
+    .map(resource => ({ ...resource }))
+  if (!resources.length) return
+
+  const sequence = ++cloudContextStatusSequence
+  cloudContextStatusChecking.value = true
+  try {
+    for (const resource of resources) {
+      let status: CloudResourceStatus
+      try {
+        const response = await yliyunResourceRefApi.status(resource.refId)
+        status = response.data
+      } catch (error: any) {
+        status = {
+          state: 'UNAVAILABLE',
+          referencedVersionId: resource.versionId,
+          currentVersionId: resource.currentVersionId,
+          checkedAt: Math.floor(Date.now() / 1000),
+          message: error?.response?.data?.msg || error?.message || '暂时无法验证资源状态',
+          retryable: true,
+        }
+      }
+      if (sequence !== cloudContextStatusSequence) return
+      const current = activeCloudContext.value.resourceRefs
+        ?.find(item => item.refId === resource.refId)
+      if (!current) continue
+      updateResourceRefEverywhere(resource.refId, statusResourceRef(current, status))
+    }
+    if (cloudContextCanBeAttached(activeCloudContext.value)) {
+      reconcileManagedCloudContextAttachment(activeCloudContext.value)
+    } else {
+      removePendingManagedCloudContextAttachments()
+    }
+  } finally {
+    if (sequence === cloudContextStatusSequence) cloudContextStatusChecking.value = false
+  }
+}
+
+async function handleCloudContextStatusAction() {
+  const resource = activeCloudResource.value
+  if (!resource || cloudContextStatusBusy.value) return
+  if (resource.status !== 'UPDATED') {
+    await checkActiveCloudContextStatus()
+    return
+  }
+
+  cloudContextStatusBusy.value = true
+  try {
+    const response = await yliyunResourceRefApi.refresh(resource.refId)
+    const issued: IssuedCloudResourceRef = response.data
+    const refreshed: CloudResourceRefLike = {
+      ...issued,
+      status: 'CURRENT',
+      currentVersionId: issued.versionId,
+      checkedAt: Math.floor(Date.now() / 1000),
+      statusMessage: '资源为最新状态',
+    }
+    removePendingManagedCloudContextAttachments()
+    updateResourceRefEverywhere(resource.refId, refreshed)
+    reconcileManagedCloudContextAttachment(activeCloudContext.value)
+    syncRouteState()
+    mcToast.success('已切换到云盘文件最新版本')
+  } catch (error: any) {
+    mcToast.error(error?.response?.data?.msg || error?.message || '刷新云盘文件版本失败')
+    await checkActiveCloudContextStatus()
+  } finally {
+    cloudContextStatusBusy.value = false
+  }
+}
+
+function handleCloudContextWindowFocus() {
+  void checkActiveCloudContextStatus()
+}
+
+function persistentPinnedContext(context: CloudContext): CloudContext {
+  return {
+    resourceRefs: (context.resourceRefs || []).map(resource => {
+      const { resourceId: _resourceId, ...persisted } = resource
+      return persisted
+    }),
+    fileName: context.fileName,
+    folderName: context.folderName,
+  }
+}
+
+async function toggleCloudContextPin() {
+  if (cloudContextPinning.value) return
+  if (!currentConversationId.value) newConversation()
+  const conversationId = currentConversationId.value
+  const previous = cloneCloudContext(activeCloudContext.value)
+  cloudContextPinning.value = true
+  try {
+    if (pinnedCloudContext(conversationId)) {
+      let next = cloneCloudContext(latestHostCloudContext.value)
+      if (!cloudContextKey(next)) {
+        next = await rebindCloudContext(previous, 'current-preview')
+      }
+      delete pinnedCloudContexts.value[conversationId]
+      savePinnedCloudContexts()
+      transferDeliveredMarker(previous, next)
+      activeCloudContext.value = next
+    } else {
+      const pinned = await rebindCloudContext(previous, 'pinned')
+      pinnedCloudContexts.value[conversationId] = persistentPinnedContext(pinned)
+      savePinnedCloudContexts()
+      transferDeliveredMarker(previous, pinned)
+      activeCloudContext.value = pinned
+    }
+    reconcileManagedCloudContextAttachment(activeCloudContext.value)
+    syncRouteState()
+  } catch (error: any) {
+    mcToast.error(error?.message || '云盘文件固定状态更新失败')
+  } finally {
+    cloudContextPinning.value = false
+  }
+}
+
 watch(
   () => props.cloudContext,
   (context) => {
+    latestHostCloudContext.value = cloneCloudContext(context)
+    const pinned = pinnedCloudContext()
+    const nextContext = pinned || context
     if (props.embedded) {
-      activeCloudContext.value = { ...context }
+      activeCloudContext.value = cloneCloudContext(nextContext)
     } else if (context.fileId || context.folderId) {
-      activeCloudContext.value = { ...context }
+      activeCloudContext.value = cloneCloudContext(nextContext)
     }
     if (props.embedded) {
-      reconcileManagedCloudContextAttachment(context)
+      reconcileManagedCloudContextAttachment(activeCloudContext.value)
       syncRouteState()
+      void checkActiveCloudContextStatus()
       return
     }
-    reconcileManagedCloudContextAttachment(context)
+    reconcileManagedCloudContextAttachment(activeCloudContext.value)
+    void checkActiveCloudContextStatus()
   },
   { deep: true, immediate: true }
 )
+
+watch(currentConversationId, () => {
+  const pinned = pinnedCloudContext()
+  const next = pinned || latestHostCloudContext.value
+  if (!cloudContextKey(next)) return
+  activeCloudContext.value = cloneCloudContext(next)
+  reconcileManagedCloudContextAttachment(activeCloudContext.value)
+  syncRouteState()
+  void checkActiveCloudContextStatus()
+})
 
 async function hydrateStateFromRoute() {
   if (route.path !== chatRoutePath.value) return
@@ -1908,22 +2336,27 @@ async function hydrateStateFromRoute() {
   }
 
   // Yliyun 云盘集成：从 URL 参数加载文件/文件夹上下文
-  const fileId = route.query.fileId
+  const fileId = !props.embedded && route.query.fileId
     ? String(route.query.fileId)
     : pendingRouteCloudContext.value.fileId || activeCloudContext.value.fileId
-  const fileName = route.query.fileName
+  const fileName = !props.embedded && route.query.fileName
     ? String(route.query.fileName)
     : pendingRouteCloudContext.value.fileName || activeCloudContext.value.fileName
-  const folderId = route.query.folderId
+  const folderId = !props.embedded && route.query.folderId
     ? String(route.query.folderId)
     : pendingRouteCloudContext.value.folderId || activeCloudContext.value.folderId
-  const folderName = route.query.folderName
+  const folderName = !props.embedded && route.query.folderName
     ? String(route.query.folderName)
     : pendingRouteCloudContext.value.folderName || activeCloudContext.value.folderName
 
-  if (fileId || folderId) {
+  const routeResourceRefs = routeCloudResourceRefs()
+  const resourceRefs = routeResourceRefs.length
+    ? routeResourceRefs
+    : (pendingRouteCloudContext.value.resourceRefs || activeCloudContext.value.resourceRefs || [])
+
+  if (resourceRefs.length || fileId || folderId) {
     if (!currentConversationId.value) newConversation()
-    activeCloudContext.value = { fileId, fileName, folderId, folderName }
+    activeCloudContext.value = { resourceRefs, fileId, fileName, folderId, folderName }
     reconcileManagedCloudContextAttachment(activeCloudContext.value)
     pendingRouteCloudContext.value = {}
 
@@ -1940,10 +2373,20 @@ function syncRouteState() {
   }
   if (selectedAgentId.value) query.agentId = String(selectedAgentId.value)
   if (currentConversationId.value) query.conversationId = currentConversationId.value
-  if (activeCloudContext.value.fileId) query.fileId = activeCloudContext.value.fileId
-  if (activeCloudContext.value.fileName) query.fileName = activeCloudContext.value.fileName
-  if (activeCloudContext.value.folderId) query.folderId = activeCloudContext.value.folderId
-  if (activeCloudContext.value.folderName) query.folderName = activeCloudContext.value.folderName
+  const resourceRef = activeCloudContext.value.resourceRefs?.[0]
+  if (resourceRef) {
+    query.resourceRef = resourceRef.refId
+    query.resourceType = resourceRef.resourceType
+    if (resourceRef.displayName) query.resourceName = resourceRef.displayName
+    if (resourceRef.mimeType) query.resourceMimeType = resourceRef.mimeType
+    query.resourceBinding = resourceRef.binding
+    if (resourceRef.expiresAt) query.resourceExpiresAt = String(resourceRef.expiresAt)
+  } else {
+    if (activeCloudContext.value.fileId) query.fileId = activeCloudContext.value.fileId
+    if (activeCloudContext.value.fileName) query.fileName = activeCloudContext.value.fileName
+    if (activeCloudContext.value.folderId) query.folderId = activeCloudContext.value.folderId
+    if (activeCloudContext.value.folderName) query.folderName = activeCloudContext.value.folderName
+  }
   router.replace({ path: chatRoutePath.value, query })
 }
 
@@ -2112,7 +2555,15 @@ function newConversation() {
 // Drop them from the local list and reset the chat area if the conversation
 // currently open was among those deleted.
 function onConversationsDeleted(ids: string[]) {
-  for (const id of ids) deliveredManagedCloudContextByConversation.delete(id)
+  let removedPinnedContext = false
+  for (const id of ids) {
+    deliveredManagedCloudContextByConversation.delete(id)
+    if (pinnedCloudContexts.value[id]) {
+      delete pinnedCloudContexts.value[id]
+      removedPinnedContext = true
+    }
+  }
+  if (removedPinnedContext) savePinnedCloudContexts()
   conversations.value = conversations.value.filter(c => !ids.includes(c.conversationId))
   if (ids.includes(currentConversationId.value)) {
     resetStreamingState()
@@ -2551,6 +3002,10 @@ function removeAttachment(key: string) {
     activeCloudContext.value.folderId = undefined
     activeCloudContext.value.folderName = undefined
   }
+  if (removed?.path?.startsWith('yliyun-ref://')) {
+    activeCloudContext.value.resourceRefs = (activeCloudContext.value.resourceRefs || [])
+      .filter(resource => resource.path !== removed.path)
+  }
   if (removed?.path && isCloudAttachment(removed)) {
     managedCloudContextPaths.delete(removed.path)
     syncRouteState()
@@ -2772,6 +3227,88 @@ function handleCodeCopy(e: MouseEvent) {
   display: flex;
   justify-content: flex-end;
   padding: 0 4px 4px;
+}
+.cloud-context-strip {
+  min-width: 0;
+  margin: 0 10px 6px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #dbe7f7;
+  border-radius: 10px;
+  background: #f7faff;
+  color: #53657f;
+  font-size: 12px;
+}
+.cloud-context-strip__resource {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cloud-context-strip__badge {
+  flex: none;
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: #e8f1ff;
+  color: #3977d7;
+  font-weight: 600;
+}
+.cloud-context-strip__name {
+  min-width: 0;
+  overflow: hidden;
+  color: #2e405d;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cloud-context-strip__mode {
+  flex: none;
+  color: #8a98aa;
+}
+.cloud-context-strip__status {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #eaf7ef;
+  color: #278454;
+}
+.cloud-context-strip__status.is-updated {
+  background: #fff4dd;
+  color: #b06b00;
+}
+.cloud-context-strip__status.is-deleted,
+.cloud-context-strip__status.is-permission-revoked {
+  background: #fff0f0;
+  color: #c94747;
+}
+.cloud-context-strip__status.is-unavailable {
+  background: #f1f3f6;
+  color: #6f7a89;
+}
+.cloud-context-strip__status-action,
+.cloud-context-strip__pin {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid #c9d8ec;
+  border-radius: 7px;
+  background: #fff;
+  color: #53657f;
+  cursor: pointer;
+  font-size: 12px;
+}
+.cloud-context-strip__status-action:hover:not(:disabled),
+.cloud-context-strip__pin:hover:not(:disabled),
+.cloud-context-strip__pin.is-pinned {
+  border-color: #82acf0;
+  color: #2f6dce;
+}
+.cloud-context-strip__status-action:disabled,
+.cloud-context-strip__pin:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 .cron-running-bar {
   display: flex;

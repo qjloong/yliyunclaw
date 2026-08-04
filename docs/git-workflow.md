@@ -1,11 +1,29 @@
 # upstream/dev → dev-v2 完整合并执行方案
 
+> 2026-08-03 实际执行状态：本轮同步已完成，`dev-v2` 已快进到合并提交
+> `fa6920c1`。合并前本地提交为 `dbb62646`，上游目标为 `bfd84fd5`，共同基点为
+> `e294b325`。当前仓库的业务远程名是 `dev`，官方远程名是 `upstream`；官方仓库为
+> `matevip/mateclaw`，不是旧文档中的 `mateaix/mateclaw`。
+>
+> 本轮合并后的运行故障也已纳入本文检查项：上游发布版把 Maven revision 从
+> `2.0.0-SNAPSHOT` 改为 `2.0.0`，硬编码旧 JAR 名会误启动缓存产物；此外，编译通过后仍发现
+> 一粒云 provision 链路的 Spring Bean 环，以及上游新增测试未同步本地
+> `ModelProviderService` 构造参数。以后必须同时通过“测试源码编译 + 可执行 JAR 重建 +
+> Spring 健康启动”，不能只以 Git 无冲突或 `mvn package -DskipTests` 作为完成标准。
+> 前端也必须执行真实的 `pnpm build`：本轮发现构建脚本引用了不存在的 Shell 校验文件、
+> Windows `bash` 误走 WSL、定制组件依赖的类型/桌面桥接文件漏合，以及 dev/build 并发改写
+> `components.d.ts`。这些问题不会由 Vite dev 热更新完整暴露。
+>
+> 下文带 `20260803` 的分支名和 SHA 是本次执行记录，不是每次同步都可原样复制的常量。
+> 当前 `backup/dev-v2-before-upstream-20260803` 与 `sync/upstream-dev-20260803` 已存在；后续同步应先
+> `git fetch`，重新计算 merge-base，并使用新的日期/批次名，不能重复创建或把旧 SHA 当成新基线。
+
 ## 一、合并目标
 
 将官方上游：
 
 ```text
-mateaix/mateclaw:dev
+matevip/mateclaw:dev
 ```
 
 的最新功能、缺陷修复和基础能力合并到本地开发分支：
@@ -36,11 +54,11 @@ qjloong/yliyunclaw:dev
 
 # 二、分支和远程定义
 
-建议统一远程名称：
+本仓库当前远程名称：
 
 ```text
-origin    = qjloong/yliyunclaw
-upstream  = mateaix/mateclaw
+dev       = qjloong/yliyunclaw
+upstream  = matevip/mateclaw
 ```
 
 检查：
@@ -52,14 +70,14 @@ git remote -v
 预期至少包含：
 
 ```text
-origin    https://github.com/qjloong/yliyunclaw.git
-upstream  https://github.com/mateaix/mateclaw.git
+dev       https://github.com/qjloong/yliyunclaw.git
+upstream  https://github.com/matevip/mateclaw.git
 ```
 
 缺少官方上游时执行：
 
 ```bash
-git remote add upstream https://github.com/mateaix/mateclaw.git
+git remote add upstream https://github.com/matevip/mateclaw.git
 ```
 
 本次基准关系：
@@ -188,12 +206,15 @@ git status
 nothing to commit, working tree clean
 ```
 
-如果存在未提交修改，不建议直接 `stash` 后合并。
-
-优先提交本地快照：
+如果存在未提交修改，不建议直接 `stash` 后合并，也不能用 `git add -A` 不经审查地把日志、
+密钥、数据库或构建产物一起提交。先查看每个变更，再只暂存确认属于源码的路径：
 
 ```bash
-git add -A
+git status --short
+git diff
+git add -- <reviewed-source-paths>
+git diff --cached --name-status
+git diff --cached --check
 git commit -m "chore: snapshot dev-v2 before upstream sync"
 ```
 
@@ -202,7 +223,7 @@ git commit -m "chore: snapshot dev-v2 before upstream sync"
 ## 4.3 获取远程最新状态
 
 ```bash
-git fetch origin --prune
+git fetch dev --prune
 git fetch upstream dev --prune
 ```
 
@@ -563,10 +584,10 @@ vip/mate/wiki/dto/**
 
 ### 本地数据库迁移
 
-全部保留：
+全部保留；当前最高版本是 `V9020__yliyun_app_entitlement.sql`：
 
 ```text
-V9001-V9019
+V9001-V9020 中仓库实际存在的迁移文件
 ```
 
 禁止：
@@ -1088,7 +1109,7 @@ kingbase
 ## 11.2 确认本地迁移
 
 ```text
-V9001-V9019
+V9001-V9020 中仓库实际存在的迁移文件
 ```
 
 必须全部存在。
@@ -1107,7 +1128,8 @@ flyway clean
 flyway_schema_history
 ```
 
-禁止修改已执行迁移的内容。
+禁止修改已执行迁移的内容。不要假设三个数据库目录中的编号完全连续或文件集合完全相同；
+应逐目录比较合并前后的已跟踪文件，不能用“范围内每个编号都必须存在”作为判断条件。
 
 ## 11.4 H2 环境
 
@@ -1122,7 +1144,7 @@ flyway_schema_history
 ```text
 旧数据库升级成功
 V172-V174 正常执行
-V9001-V9019 不被重复执行
+既有 V9001-V9020 迁移不被重复执行
 不存在重复版本
 Agent Team 表成功建立
 本地一粒云表仍然存在
@@ -1132,6 +1154,29 @@ Workspace 模型表仍然存在
 ---
 
 # 十二、后端构建和测试
+
+## 12.0 当前 Windows 开发机前置条件
+
+MateClaw 2.0.0 要求 Java 21。当前电脑没有保证全局 `mvn` 和 `JAVA_HOME` 正确，PowerShell
+应在单条命令作用域内显式指定，不修改系统全局环境：
+
+```powershell
+$env:JAVA_HOME = 'C:\Users\loong\.jdks\ms-21.0.7'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$Maven = 'D:\program\IntelliJ IDEA 2025.1.3\plugins\maven\lib\maven3\bin\mvn.cmd'
+& $Maven -version
+```
+
+输出必须同时确认 Maven 使用 Java 21。不能只检查 `java -version`，因为 Maven 可能仍引用另一套
+JDK。
+
+PowerShell 调用包含 `-D...` 的 Maven 参数时，推荐使用字符串数组展开，避免宿主把属性参数错误
+拆成生命周期名称：
+
+```powershell
+$BuildArgs = @('-pl', 'mateclaw-server', '-am', '-Dmaven.test.skip=true', 'clean', 'install')
+& $Maven @BuildArgs
+```
 
 ## 12.1 完整测试
 
@@ -1152,6 +1197,15 @@ mvn -pl mateclaw-plugin-mem0 -am test
 ```bash
 mvn clean test
 ```
+
+在上述 Windows 环境中，把 `mvn` 替换为 `& $Maven`。如果正在运行的后端占用
+`mateclaw-server/target/*.jar`，`clean` 或 Spring Boot `repackage` 会失败；应先通过
+`Get-NetTCPConnection -LocalPort 18088` 和 `Win32_Process.CommandLine` 精确确认 PID 与 JAR
+路径，再停止该 MateClaw 进程。禁止按名称批量终止全部 `java.exe`。
+
+`-DskipTests` 只跳过执行，仍会编译测试源码；`-Dmaven.test.skip=true` 连测试编译也跳过。
+合并验收必须至少有一次不带这两个参数的 `test`，否则本轮出现的
+`ModelProviderServiceOptionsTest` 构造器不匹配不会被发现。
 
 ## 12.2 后端重点测试范围
 
@@ -1194,6 +1248,53 @@ ModelProviderService
 测试代码中手工 `new` 这些类的地方可能编译失败。
 
 优先采用上游已同步修改的测试构造参数，不要为了快速通过而删除正式依赖。
+
+本轮实际发现：`ModelProviderService` 的本地 Workspace 隔离增加了
+`WorkspaceModelProviderMapper`、`WorkspaceModelScope` 和 `SettingCrypto`，而上游新增的
+`ModelProviderServiceOptionsTest` 仍按上游较短构造器创建服务。正确修复是补齐 mock，并把测试
+scope 固定为默认 Workspace；不能删除本地隔离依赖，也不能排除该测试。
+
+## 12.4 可执行 JAR 与 Spring 启动验收
+
+上游 `bdfa8a6f` 发布后根 POM 的 revision 是 `2.0.0`，产物为：
+
+```text
+mateclaw-server/target/mateclaw-server-2.0.0.jar
+```
+
+不要在启动脚本、IDE 配置或文档中硬编码 `2.0.0-SNAPSHOT.jar`。本地启动脚本应从
+`target` 中解析当前构建生成的非 `sources`/`javadoc` 可执行 JAR，并优先最新构建时间。
+
+完成测试后执行：
+
+```powershell
+.\scripts\yliyun-dev\start-mateclaw.ps1
+Invoke-RestMethod http://127.0.0.1:18088/actuator/health
+```
+
+随后核对监听进程的 `CommandLine` 确实指向刚生成的 JAR，而不是旧 SNAPSHOT 缓存。启动失败时
+检查：
+
+```powershell
+Get-Content .\data\yliyun-dev\logs\mateclaw.out.log -Tail 300
+Get-Content .\data\yliyun-dev\logs\mateclaw.err.log -Tail 100
+```
+
+本轮实际启动发现的 Bean 环为：
+
+```text
+YliyunUserMappingService
+→ YliyunAssistantProvisioningService
+→ AgentService
+→ AgentGraphBuilder
+→ MCP runtime
+→ McpIdentityForwardService
+→ YliyunUserMappingService
+```
+
+这是运行期 Spring 装配错误，普通单元测试和跳过测试的 package 都可能漏掉。修复应在集成边界
+延迟注入 `AgentService`，保留 `AgentService.updateAgent` 的缓存失效和生命周期事件；不要打开
+`spring.main.allow-circular-references` 掩盖结构问题，也不要改为直接写 Agent 表绕过缓存。
 
 ---
 
@@ -1241,6 +1342,49 @@ pnpm test
 
 ```bash
 pnpm lint
+```
+
+## 13.0 Windows 与合并后构建约束
+
+Snowflake/Long ID 精度检查使用跨平台 Node 脚本：
+
+```bash
+pnpm lint:precision
+# 实际执行 scripts/check-snowflake-precision.mjs
+```
+
+不要在 `package.json` 中写成：
+
+```text
+bash ../scripts/check-snowflake-precision.sh
+```
+
+原因有两点：仓库可能并不存在该 `.sh` 文件；Windows PATH 中的 `bash.exe` 也可能是 WSL
+启动器而不是 Git Bash。业务实体的后端 `Long` ID 必须在前端全链路保留为字符串；确实不是
+实体 ID 的序号或时间戳，才允许使用带原因的 `snowflake-precision-ok` 标记。
+
+如果 `pnpm build` 在类型检查阶段出现下列错误，不应以跳过 `vue-tsc` 处理：
+
+```text
+ProjectChangesPanel.vue 引用的 ContextRouter/Review/Harness 类型不存在
+@/utils/desktop 不存在
+cloud_attachment_* 不属于 SSEEventType
+组件可选 prop 没有 withDefaults 默认值
+```
+
+这说明定制组件被保留，但其配套契约没有一起合入。应从本地业务历史和当前后端事件定义中恢复
+最小、准确的类型与桥接能力，不能把整个组件删除，也不能用全局 `any` 掩盖。
+
+开发服务器与生产构建可能并行运行。`unplugin-vue-components` 的声明文件只允许 dev server
+生成；production build 应设置 `dts: false`，否则 Windows 上两个进程可能同时写
+`src/types/components.d.ts`，报 `UNKNOWN`/`EPERM` 并留下不完整声明文件。
+
+本轮验证结果：
+
+```text
+pnpm lint:precision：通过
+pnpm build：通过（6276 modules transformed）
+pnpm test：13 files / 111 tests 全部通过
 ```
 
 ## 13.1 前端重点验证
@@ -1457,10 +1601,10 @@ git rm --cached <path>
 
 # 十六、提交合并
 
-测试全部通过后：
+测试全部通过后，只暂存已审查的合并结果：
 
 ```bash
-git add -A
+git add -- <reviewed-merge-paths>
 ```
 
 再次确认：
@@ -1563,7 +1707,7 @@ git log --oneline --decorate -n 10
 本地验收完成后，才执行：
 
 ```bash
-git push origin dev-v2
+git push dev dev-v2
 ```
 
 禁止未经确认执行：
@@ -1575,8 +1719,8 @@ git push --force
 如果远端 `dev-v2` 在合并期间产生了新提交：
 
 ```bash
-git fetch origin
-git log --oneline dev-v2..origin/dev-v2
+git fetch dev
+git log --oneline dev-v2..dev/dev-v2
 ```
 
 先分析新提交，再进行普通 merge。
@@ -1653,7 +1797,7 @@ git revert -m 1 <merge-commit-sha>
 4. 直接覆盖 AgentGraphBuilder
 5. 直接覆盖 ChatController
 6. 直接覆盖 ModelProviderService
-7. 删除或重编号 V9001-V9019
+7. 删除、覆盖或重编号既有 V9001-V9020 迁移
 8. 在生产数据库执行 Flyway clean
 9. 把 Goal/Website 新业务开发夹带进同步提交
 10. 未测试直接 push
@@ -1688,7 +1832,7 @@ Workspace Model 隔离存在
 Teacher Agent 存在
 Agent SPI 存在
 MetaY 品牌存在
-V9001-V9019 存在
+V9001-V9020 中已跟踪的一粒云迁移均存在
 ```
 
 ## 上游能力
@@ -1784,7 +1928,7 @@ Agent Teams 仅作为后续多 Agent 生成执行能力，不作为网站领域�
 # 1. 准备
 git switch dev-v2
 git status
-git fetch origin --prune
+git fetch dev --prune
 git fetch upstream dev --prune
 
 # 2. 备份
@@ -1812,7 +1956,8 @@ git grep -n "InboundMessageDeduplicator"
 git grep -n "listProviderOptions"
 git diff --check
 
-# 7. 后端测试
+# 7. 后端测试/打包前，先精确确认并停止占用 18088 和 target JAR 的 MateClaw 进程
+# 禁止按名称批量终止全部 java.exe；参见 12.1 节
 mvn -pl mateclaw-server -am clean test
 mvn -pl mateclaw-plugin-mem0 -am test
 
@@ -1823,16 +1968,20 @@ pnpm build
 pnpm test
 cd ..
 
-# 9. 提交
-git add -A
+# 9. 运行时验收（第 7 步已经释放旧 JAR 文件锁）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/yliyun-dev/start-mateclaw.ps1
+curl --fail http://127.0.0.1:18088/actuator/health
+
+# 10. 提交（只暂存已审查的源码和文档，不使用 git add -A）
+git add -- <reviewed-merge-paths>
 git diff --cached --check
 git commit -m "merge: sync upstream/dev into dev-v2 (2026-08-03)"
 
-# 10. 合入正式分支
+# 11. 合入正式分支
 git switch dev-v2
 git merge --ff-only sync/upstream-dev-20260803
 
-# 11. 最终检查
+# 12. 最终检查
 git status
 git log --oneline --decorate -n 10
 ```

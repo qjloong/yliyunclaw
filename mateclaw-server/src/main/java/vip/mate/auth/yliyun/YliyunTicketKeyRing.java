@@ -81,6 +81,22 @@ public class YliyunTicketKeyRing {
         return null;
     }
 
+    /** Sign an integration sub-protocol payload with the current key. */
+    public String signBase64Url(String payload) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(current.bytes(), "HmacSHA256"));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ex) {
+            throw new IllegalStateException("无法签发 Yliyun 集成引用", ex);
+        }
+    }
+
+    public String currentKeyId() {
+        return current.id();
+    }
+
     public boolean previousConfigured() {
         return previous != null;
     }

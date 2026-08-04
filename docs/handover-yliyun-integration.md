@@ -1,12 +1,28 @@
 # 一粒云 × MateClaw 集成 — 交接文档
 
-> 日期：2026-07-28 | 最后更新：2026-08-03 | 分支：`dev-v2` | 状态：P0 28/28 完成；P1 已完成 20/36、进行中 2、待验收 1；V3 2/34 完成；统一应用接入治理 IG 15/28 完成、进行中 1、待验收 0
+> **文档范围说明**
 >
-> 2026-08-01 实施结论：MateClaw 通过通用 MCP Runtime 发现 14 个工具，OBO 用户身份、一次性 ticket、HttpOnly Cookie、读写工具闭环均已实测。新增 `/embed/cloud-agent` 精简会话页，并把原 AI 助手内容不变地装入云盘通用 `FloatingWindow`：窗口可拖动/缩放/全屏、背景云盘可操作、iframe 保活且仅显示外层一层 Header。当前文件可在不重载 iframe/会话的情况下实时更新活动上下文，并可携带同一会话与上下文展开完整 MateClaw。云盘附件卡仅在当前会话首次提问或宿主切换文件/文件夹后再次发送，普通追问复用已持久化的会话上下文，不重复展示同一附件。租户管理员角色和模型供应商配置现已按 Workspace 隔离；租户 135 已通过标准应用中心 API 完成临时安装、连接检测、启停、真实身份 SSO、owner 工作空间、模型配置权限、新旧会话 configVersion 隔离和 MCP 五层诊断，测试结束后已停用并卸载。云盘本地数据库与 Redis 已切换到 `192.168.0.135`，五个开发进程现均在线。真实文件 `17485` 已使用工作空间模型 `deepseek/deepseek-chat` 完成首轮总结和无附件重传的同会话追问。最新增量已补齐云盘附件消息卡片、附件读取过程、嵌入式历史会话列表，以及按“云盘用户 + 文件/文件夹”恢复会话；从原会话重放 `file.create` 已成功把润色结果保存为云盘文件 `17490`。云盘助手不再按模板 ID 硬编码裁剪为仅云盘 MCP 工具，统一使用现有 Agent/Skill 工具绑定、渐进披露和运行时安全策略。平台共享 MCP 管理已收回全局管理员，独立部署 Profile 增加凭据配对和启动 fail-fast，诊断会刷新失效的正式 MCP session。这些能力均通过云盘专用上下文或嵌入模式开关接入，不改变普通 MateClaw 会话主链路。`CloudResourceRef`、固定引用、保存确认 UI 和 Codex 风格输入框合并仍待后续实施。
+> 本文仅维护现有一粒云通用 AI 助手、应用中心、SSO/OBO、MCP 和 MateClaw 集成链路的历史交接、运行状态与剩余兼容任务。
+>
+> Goal Agent、AI Website 和 Site Delivery 的业务设计与实施任务，以各自所属仓库中的正式文档为准；本文不再扩展为三套业务的统一任务清单。
+>
+> 云盘 ↔ MateClaw 正式契约主源：`yly-saas-cdms-ai/docs/ai-runtime/mateclaw-contract.md`。MateClaw 消费实现：`docs/integrations/yliyun/`。
+
+> 日期：2026-07-28 | 最后更新：2026-08-04（范围冻结） | 分支：`dev-v2` | 状态：P0 28/28 完成；P1 已完成 24/36、进行中 1、待验收 3；P2 0/7 完成；V3 3/34 完成、待验收 1；统一应用接入治理 IG 16/28 完成、进行中 0、待验收 0
+>
+> 2026-08-03 V2 AI 友好基础 API 增量：V3-A05 已完成。云盘后端新增版本化 `/cloud-drive/ai/v2` 契约，覆盖文件文本提取、UTF-8 内容新建/版本更新、当前用户可见的个人空间与部门空间元数据搜索、空间上下文和真实用户/租户资料；读取、搜索和写入继续复用云盘 ACL、版本与配额规则。文本提取已下沉云盘服务端，支持纯文本、PDF、Excel、Word 和 PowerPoint，返回提取器及页/工作表等结构元数据。MCP 的 `file.read/file.search/file.create/file.save/space.context/user.profile` 已切换到 V2 主链；旧接口仅在显式开启 `YLIYUN_AI_V2_FALLBACK_ENABLED=true` 且 V2 返回 404/405 时用于灰度兼容，默认关闭。真实租户 1/用户 100 已通过用户、13 个可见空间、创建、读取、搜索、MCP `user.profile/space.context/file.search/file.read/file.save`、版本更新和异步清理验证；云盘模块提取测试 2/2、MCP 13/13、票据轮换和文件夹渐进读取回归均通过。当前搜索是经过权限裁剪的名称/路径元数据搜索；分页、内容片段与全文索引仍归 V3-B02/IG-P2-04，未提前标记完成。
+>
+> 2026-08-01 实施结论：MateClaw 通过通用 MCP Runtime 发现 14 个工具，OBO 用户身份、一次性 ticket、HttpOnly Cookie、读写工具闭环均已实测。新增 `/embed/cloud-agent` 精简会话页，并把原 AI 助手内容不变地装入云盘通用 `FloatingWindow`：窗口可拖动/缩放/全屏、背景云盘可操作、iframe 保活且仅显示外层一层 Header。当前文件可在不重载 iframe/会话的情况下实时更新活动上下文，并可携带同一会话与上下文展开完整 MateClaw。云盘附件卡仅在当前会话首次提问或宿主切换文件/文件夹后再次发送，普通追问复用已持久化的会话上下文，不重复展示同一附件。租户管理员角色和模型供应商配置现已按 Workspace 隔离；租户 135 已通过标准应用中心 API 完成临时安装、连接检测、启停、真实身份 SSO、owner 工作空间、模型配置权限、新旧会话 configVersion 隔离和 MCP 五层诊断，测试结束后已停用并卸载。云盘本地数据库与 Redis 已切换到 `192.168.0.135`，五个开发进程现均在线。真实文件 `17485` 已使用工作空间模型 `deepseek/deepseek-chat` 完成首轮总结和无附件重传的同会话追问。最新增量已补齐云盘附件消息卡片、附件读取过程、嵌入式历史会话列表，以及按“云盘用户 + 文件/文件夹”恢复会话；从原会话重放 `file.create` 已成功把润色结果保存为云盘文件 `17490`。云盘助手不再按模板 ID 硬编码裁剪为仅云盘 MCP 工具，统一使用现有 Agent/Skill 工具绑定、渐进披露和运行时安全策略。平台共享 MCP 管理已收回全局管理员，独立部署 Profile 增加凭据配对和启动 fail-fast，诊断会刷新失效的正式 MCP session。这些能力均通过云盘专用上下文或嵌入模式开关接入，不改变普通 MateClaw 会话主链路。签名 `CloudResourceRef`、固定引用及版本/失效状态已实施；保存确认 UI、Codex 风格输入框入口合并和最终浏览器验收仍待后续实施。
 >
 > 2026-08-02 增量：AI 助手撤销失败已形成持久化补偿闭环。失败项按租户/应用/configVersion 写入 `cloud_app_instance.runtime_json.aiRevocation`，30 秒起指数退避、15 分钟封顶；只重试未完成的 delegation/session 子步骤，第三次失败写结构化 ERROR 审计并向租户联系人发送站内告警，恢复后清理任务并发送恢复通知。管理端新增 `revocation-status` 查询，实例健康刷新不会覆盖待办和错误。租户 135 实测 MateClaw 停机后停用产生 `configVersion=29/sessionPending=true/attempts=1`，重试失败递增为 2，MateClaw 恢复后下一次调度成功并清零；临时实例随后卸载。云盘后台定向回归 16/16、23 模块 Reactor 编译/打包通过，五服务检查全通过。
 >
 > 2026-08-03 增量：AI ticket 与撤销通知已完成 `current/previous + key id` 双密钥无中断轮换。云盘只用 current 签名，票据携带签名内 `kid`、撤销回调携带 `X-Yliyun-Key-Id`；MateClaw 同时接受 current/previous，并校验声明 key id 与实际验签 key 一致。两端对短密钥、重复密钥和重复 key id 启动 fail-fast，兼容旧 `YLIYUN_TICKET_SECRET` 作为 current 回退；密钥只通过环境变量或 Git 忽略的本机文件注入，管理接口、URL、日志和前端不回显 secret。已按“先 MateClaw 消费端、后云盘签发端”真实轮换：旧 `dev-current` 在 previous 窗口 SSO 成功，新 `dev-20260803013227` 切换后 SSO 成功，租户 1/用户 100 映射和 `authSource=yliyun` 均正确。MateClaw 定向回归 8/8、云盘后端定向回归 18/18、两端完整 Reactor 编译打包通过；五个服务在线。旧 key 至少保留 15 分钟撤销重试窗口后再退役。
+>
+> 2026-08-03 资源引用增量：P1-A01/A02 已完成。嵌入页从签名 launch ticket 取得原始文件上下文后，先调用 MateClaw `/api/v1/auth/yliyun/resource-refs` 签发防篡改 `yliyun-ref://<refId>`，再交给通用 `ChatConsole`；引用绑定 `tenantId/userId/workspaceId/appKey/configVersion/resourceType/resourceId/binding/version/exp`，使用 AI ticket 密钥环做独立域 HMAC，服务端解析时再次和当前云盘映射、Workspace、配置版本比对。后续宿主 `postMessage` 切换也必须先换成签名引用，失败时不把裸 ID 降级注入会话；`yliyun-ref://` 命名空间内的畸形引用也会进入解析器并失败关闭。附件预读继续复用通用 `McpClientManager + OBO + 云盘 ACL`，没有建立云盘助手专用工具链。新增 `/resource-refs/rebind` 可在不回传裸资源 ID 的情况下把 `current-preview` 改为 `pinned`；会话输入框上方显示“跟随云盘当前文件/已固定到本会话”，固定期间宿主切换不替换附件，取消固定后跟随最新文件，状态按用户、Workspace、会话保存且过期自动丢弃。服务端干净全量编译及定向回归 10/10、UI 回归 112/112、生产构建和真实租户 1/用户 100 的签发/rebind 均通过；固定/取消固定的浏览器交互仍列为 P1-B01/B04/P1-C07 待验收。
+>
+> 2026-08-03 资源状态增量：P1-A04 已完成。`/resource-refs` 签发前先通过正式 `McpClientManager + OBO` 调用 `file.versions`，忽略浏览器提供的版本号，以云盘当前版本行生成 `v-<versionId>`；没有版本历史的文件使用 `md5/updateTime/size/name` 的 SHA-256 元数据指纹作为稳定基线。新增 `/resource-refs/status` 与 `/refresh`，状态统一为 `CURRENT/UPDATED/DELETED/PERMISSION_REVOKED/UNAVAILABLE`；MCP 将云盘业务码 `1042003000` 映射为稳定 `FILE_NOT_FOUND`。会话上下文条显示“最新/已有新版本/已删除/权限已失效/状态验证失败”，支持使用最新版本和重试校验；不可用引用不再作为下一条附件发送，但不阻塞普通对话。附件真正读取前再次校验版本，避免 UI 校验后文件变化时静默读取新内容。MateClaw 定向回归 14/14、MCP 错误契约 3/3、UI 全量回归 112/112 和生产构建均通过；真实租户 1/用户 100/文件 17485 已签发版本 `meta-f0bf4364614bb95a2aea616f4c863f62` 并返回 `CURRENT`。
+>
+> 2026-08-03 文件夹上下文增量：P1-A05 已完成。文件夹引用先通过 `file.list` 获取最多 100 项，过滤目录和明显不适合文本分析的媒体/压缩包，再对按文件名初排的最多 12 个候选调用 `file.summarize`；服务端结合用户本轮问题、文件名、预览、标题和关键词重新排序，最多确定性调用 `file.read` 读取 5 个文件，总上下文继续受 60,000 字符上限约束。列表、概览、选读以三个聚合过程事件展示，单文件概览/读取失败只产生局部降级，不阻断其他文件和普通会话。MateClaw 相关定向回归 15/15；真实租户 1/用户 100 通过脚本自动发现文件夹 17371，完成签名文件夹引用和 SSE 会话，实际 `list → summarize → read_selected` 读取 3/3 个文件，验证后自动删除测试会话。MateClaw 当前 PID 16448，MCP PID 50664。
 >
 > 2026-08-03 动态改址增量：应用中心配置写入新增扩展级 before/after 生命周期。候选 `mateclaw_api_url` 必须先通过协议/格式和 `/actuator/health` 检查，失败由事务回滚；平台字段更新会广播全部已安装租户、逐租户递增 `configVersion` 并撤销旧会话。API 地址迁移若旧端点撤销失败，会把旧端点随补偿状态持久化，后续重试不会误打新端点；重置配置组也不再绕过不可编辑字段和扩展回调。云盘前端在用户显式打开/重新兑票时强制刷新 capability，不等待 60 秒缓存。真实验收从 configVersion 17 开始：不可达 `127.0.0.1:9` 被拒绝且版本不变，浏览器地址切到可达 `::1:5173` 后 capability/SSO 成功，API 地址切到 `localhost:18088` 后健康和撤销成功，最终恢复 `localhost:5173`、`127.0.0.1:18088`，configVersion 23、补偿队列为空。新增云盘回归后合计 24/24，前端定向 ESLint 通过，五服务和新 key SSO 复验通过。
 >
@@ -243,14 +259,14 @@ Java MCP SDK (`spring-ai-starter-mcp-client` 1.1.8) 与 FastMCP httpStream 模�
 | P0 | 登录 token 暴露风险 | ✅ 已解决 | 一次性 ticket 兑 HttpOnly Cookie；重放与非法 redirect 已实测拒绝 |
 | P0 | MCP 错误不可观察 | ✅ 已解决 | MCP 统一结构化错误，Picker 支持明确错误与重试 |
 | P0 | Agent 创建 | ✅ 已解决 | 首次建立租户映射时幂等种子化云盘助手 |
-| P1 | 云盘文件引用非一等上下文 | ⚠️ V1 已缓解 | 附件已确定性预读、显示消息卡片和执行过程，不再依赖模型猜测；签名 `CloudResourceRef`、版本和固定引用仍未完成 |
-| P1 | 文件选择交互重复 | ⚠️ | 回形针、`+`、`@` 三条入口语义重叠，缺少上下文条 |
+| P1 | 云盘文件引用非一等上下文 | ⚠️ 待最终验收 | 签名 `CloudResourceRef`、服务端版本/失效状态、文件夹渐进读取及跟随/固定逻辑已完成；P1-B01/B04/C07 的窄窗、固定/取消固定、关闭重开浏览器场景通过后收口 V3-A01 |
+| P1 | 文件选择交互重复 | ⚠️ 部分完成 | 输入框上下文条及当前文件/固定状态已实现待浏览器验收；回形针、`+`、`@` 的统一入口语义仍由 P1-B02/B03 收敛 |
 | P1 | 保存回云盘 | ⚠️ 部分完成 | Agent 直接调用 `file.create/file.save` 已可用，真实回存文件 `17490` 已复验；`SaveToCloudDialog`、目标目录/覆盖确认和完成后宿主刷新仍未接线 |
 | P1 | 云盘内嵌形态过重 | ✅ 已解决 | 新增 `/embed/cloud-agent` 精简路由，并嵌入云盘通用非模态可拖动窗口，保留外层完整界面入口 |
 | P1 | 当前文件与助手上下文不同步 | ✅ 已解决 | 宿主消息按 channelId + parent origin 校验，替换待发送附件且不重载会话 |
 | P1 | 云盘身份显示为内部映射名 | ✅ 已解决 | 内部主键继续使用 `yliyun_{tenant}_{user}`，界面改用真实昵称与租户名 |
 | P1 | AI 助手与 AI 问数入口混淆 | ✅ 已解决 | 助手只打开通用浮动窗口；问数继续走原 WenShu 路由，切换时关闭助手窗口 |
-| P1 | MCP Server 生产部署 | ⚠️ | 需完成 `tsc`、容器构建、健康检查和密钥注入 |
+| P1 | MCP Server 生产部署 | ⚠️ 部分完成 | `typecheck/build/test`、HTTP 健康检查、OBO/内部凭据配对和启动 fail-fast 已完成；容器镜像、生产密钥注入及滚动发布仍归 P2-05 |
 | P1 | MCP API Key 配置 | ❌ | 外部 AI 客户端需要 API Key，当前 `MCP_API_KEYS` 为空 |
 | P1 | 自动化测试覆盖不足 | ⚠️ | 身份、通用 Runtime、附件预读、流事件、Workspace Provider 已有定向测试；新增真实对象存储与 TC-6 可重复脚本，Picker 已做浏览器实测；保存 UI 和跨客户端回归仍不完整 |
 | P2 | Flyway V9014–V9016 清理 | ⚠️ | 发布前需按数据库是否已应用决定合并或保留，禁止直接改已发布迁移 |
@@ -449,10 +465,10 @@ nohup /Users/qinjinlong/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Hom
 | 范围 | 已完成 | 进行中 | 待验收 | 待实施/待确认 | 结论 |
 |---|---:|---:|---:|---:|---|
 | P0 | 28/28 | 0 | 0 | 0 | 核心链路与 TC-6 安全 E2E 全部完成 |
-| P1 | 20/36 | 2 | 1 | 13 | 精简面板、附件链路、会话恢复、角色/Provider、通用可拖动窗口、非模态保活、单 Header 和多窗口 E2E 已落地；固定引用、输入框收敛和保存审批仍未完成 |
+| P1 | 24/36 | 1 | 3 | 8 | 签名资源引用及服务端跨租户校验已完成；上下文条、固定/跟随和面板最终浏览器场景待验收；输入框入口收敛和保存审批仍未完成 |
 | P2 | 0/7 | 0 | 0 | 7 | WenShu 委派、生产化、兼容性和文档收口尚未启动 |
-| V3 | 2/34 | 0 | 0 | 32 | V3-A04 对象存储恢复回归、V3-D07 云盘助手工具配置去硬限制完成；媒体播放、外链、客户端动作与本地 Office 场景仍待确认实施 |
-| IG | 15/28 | 1 | 0 | 12 | 平台/租户配置隔离、应用扩展、capability、动态菜单/地址、一次性 ticket、出票权限与脱敏审计、MCP entitlement/configVersion、平台管理员 MCP 边界、独立部署 Profile、分层诊断、第二租户矩阵、MateClaw Cookie/MCP 专用 delegation 主动失效、AI/WenShu 撤销失败补偿与告警、双密钥轮换、动态改址回滚/广播及完整发布矩阵已完成；AI 远端 Workspace/Agent 停用语义仍待收口 |
+| V3 | 3/34 | 0 | 1 | 30 | V3-A01 签名资源引用待最终浏览器验收；V3-A04 对象存储恢复回归、V3-A05 V2 AI 友好基础 API、V3-D07 云盘助手工具配置去硬限制完成；全文检索、媒体播放、外链、客户端动作与本地 Office 场景仍待确认实施 |
+| IG | 16/28 | 0 | 0 | 12 | IG-P0 已全部完成：平台/租户配置隔离、应用扩展、capability、动态菜单/地址、一次性 ticket、出票权限与脱敏审计、MCP entitlement/configVersion、平台管理员 MCP 边界、独立部署 Profile、分层诊断、第二租户矩阵、Cookie/delegation 主动失效、AI/WenShu 撤销补偿与告警、双密钥轮换、动态改址、发布矩阵，以及“保留 Workspace/成员/模型/会话，仅停用应用 Agent”的远端停用语义均已收口 |
 
 > 计数口径：只把已有实现且验收证据已回填的任务计为“已完成”；V1 兼容实现不等于 V2 专用 API 或 V3 资源动作协议已经完成。
 
@@ -508,20 +524,20 @@ nohup /Users/qinjinlong/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Hom
 
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| P1-A01 | 定义 `CloudResourceRef` 前后端模型 | MateClaw、云盘前端 | P0 | 支持 file/folder/version/current-preview/mention/pinned | 待确认 |
-| P1-A02 | 实现签名或不透明 `refId` 解析 | MateClaw | P1-A01、P0-C 验收 | 前端不依赖裸 tenantId，不可伪造跨租户引用 | 待确认 |
-| P1-A03 | 文件引用确定性注入 Agent | MateClaw | P0-C | 发送消息时明确生成 fileId/folderId 工具上下文，不靠模型解析 URI | 已完成（V1 兼容）：服务端确定性预读并注入来源内容，UI 展示附件与执行过程；后续由 P1-A01/A02 升级为签名引用 |
-| P1-A04 | 文件版本与失效状态 | MateClaw、云盘 | P1-A02 | 可显示最新、版本变化、已删除、权限失效 | 待确认 |
-| P1-A05 | 文件夹渐进式读取策略 | MateClaw | P1-A03 | 先 list/summarize，再按相关性读取 3–5 个文件 | 待确认 |
+| P1-A01 | 定义 `CloudResourceRef` 前后端模型 | MateClaw、云盘前端 | P0 | 支持 file/folder/version/current-preview/mention/pinned | 已完成：统一模型含签名 refId/path、资源类型/版本、展示元数据、绑定语义和过期时间；嵌入页在原始上下文进入 ChatConsole 前完成签发 |
+| P1-A02 | 实现签名或不透明 `refId` 解析 | MateClaw | P1-A01、P0-C 验收 | 前端不依赖裸 tenantId，不可伪造跨租户引用 | 已完成：独立域 HMAC 绑定 tenant/user/workspace/app/configVersion，解析时与当前身份重比对；篡改与跨租户重放测试通过，旧 `yliyun://` 仅保留完整页兼容 |
+| P1-A03 | 文件引用确定性注入 Agent | MateClaw | P0-C | 发送消息时明确生成 fileId/folderId 工具上下文，不靠模型解析 URI | 已完成：签名引用由服务端解析后确定性预读并注入来源内容，UI 展示附件与执行过程；实际读取仍走通用 MCP Runtime、OBO 和云盘 ACL |
+| P1-A04 | 文件版本与失效状态 | MateClaw、云盘 | P1-A02 | 可显示最新、版本变化、已删除、权限失效 | 已完成：签发时记录服务端版本/元数据指纹，状态与刷新端点、发送前二次校验、五态上下文提示和恢复动作均已落地；真实 CURRENT 与自动化 UPDATED/DELETED/PERMISSION_REVOKED 已通过 |
+| P1-A05 | 文件夹渐进式读取策略 | MateClaw | P1-A03 | 先 list/summarize，再按相关性读取 3–5 个文件 | 已完成：最多 100 项列表、12 个受限概览、按问题/文件名/预览/标题/关键词重排并选读最多 5 个；局部失败降级、总字符上限、三阶段过程和真实 3/3 文件 SSE 已验证 |
 
 ### P1-B：参考 Codex 的输入框与文件交互
 
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| P1-B01 | 增加输入框上方上下文条 | MateClaw UI | P1-A | 当前文件、已固定文件、文件夹以卡片展示 | 待确认 |
+| P1-B01 | 增加输入框上方上下文条 | MateClaw UI | P1-A | 当前文件、已固定文件、文件夹以卡片展示 | 待验收：已显示资源名与“跟随云盘当前文件/已固定到本会话”，支持文件和文件夹；待浏览器检查窄窗口和长文件名 |
 | P1-B02 | 合并重复附件入口 | MateClaw UI | P1-B01 | `@`=快速搜索，`+`=浏览/上传/引用当前文件，移除重复回形针语义 | 待确认 |
 | P1-B03 | 升级云盘 Picker | MateClaw UI | P0-D、P1-A | 支持搜索、目录浏览、多选、键盘操作、明确错误与重试 | 待确认 |
-| P1-B04 | 当前预览跟随/固定交互 | 云盘前端、MateClaw UI | P1-A | 未固定上下文随预览变化，固定引用保持不变 | 进行中：当前文件跟随及“首次/切换时一次性附件注入”完成，普通追问不重复展示；固定引用待实施 |
+| P1-B04 | 当前预览跟随/固定交互 | 云盘前端、MateClaw UI | P1-A | 未固定上下文随预览变化，固定引用保持不变 | 待验收：当前文件跟随、首次/切换时一次性附件注入、普通追问不重复展示均已完成；新增签名 rebind、会话级固定/取消固定和关闭重开恢复，待真实浏览器交互确认 |
 | P1-B05 | 工具过程渐进披露 | MateClaw UI | P0-B06 | 默认显示“正在读取 3 个文件”，原始工具细节可展开 | 已完成：云盘附件预读复用通用时间线展示，且不写入 Provider 工具历史 |
 | P1-B06 | 大文件上下文控制 | MCP、MateClaw | P1-A | 默认 summarize/grep/maxChars，避免无界全文注入 | 待确认 |
 | P1-B07 | 合并会话侧栏重复 Agent 选择器 | MateClaw UI | 无 | 仅保留 Workspace Agent 选择器；历史会话不因 Agent 过滤而丢失 | 已完成：定向 ESLint 与浏览器检查通过；“全部员工”及历史会话派生下拉已移除 |
@@ -536,7 +552,7 @@ nohup /Users/qinjinlong/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Hom
 | P1-C04 | 定义宿主事件协议 | 云盘前端、MateClaw UI | P1-C02 | 当前上下文消息具有 channel 与 origin 校验 | 进行中：`contextChanged`、`conversation-change` 已完成，openFile/saveCompleted 待后续 |
 | P1-C05 | 精简嵌入认证 | 云盘、MateClaw | P0-C05 | 面板加载不携带长期 token，无登录页闪现 | 已完成 |
 | P1-C06 | “展开完整 MateClaw”能力 | MateClaw UI | P1-C02 | 保留同一会话和上下文进入完整页面 | 已完成 |
-| P1-C07 | 面板浏览器 E2E | 全部 | P1-C03–P1-C06 | 选择、预览、提问、切换、固定、展开场景通过 | 待验收（仅固定引用）：免登、SSO Picker、身份、附件展示/替换、历史切换、同文件会话恢复、展开、真实模型提问及对象存储回归均已通过 |
+| P1-C07 | 面板浏览器 E2E | 全部 | P1-C03–P1-C06 | 选择、预览、提问、切换、固定、展开场景通过 | 待验收（固定交互）：免登、SSO Picker、身份、附件展示/替换、历史切换、同文件会话恢复、展开、真实模型提问及对象存储回归均已通过；签名引用和固定/取消固定已实现并通过自动测试，待浏览器最终确认 |
 | P1-C08 | 增强 `FloatingWindow` 非模态与保活能力 | 云盘前端 | P1-C03 | 新增显式 modeless/pass-through 与 keep-mounted 能力；默认行为不影响文件预览/编辑窗口；关闭或隐藏不销毁 AI iframe | 已完成：opt-in `modeless`、`keepMounted` 和根层点击穿透已落地；浏览器计算样式为根层 `pointer-events:none`、窗口 `auto`，原预览窗口默认值不变 |
 | P1-C09 | AI 助手接入云盘通用可拖动窗口 | 云盘前端 | P1-C08 | 仅把原固定容器替换为 `FloatingWindow`，原 iframe 内容和宽度语义不变；支持拖动、缩放、全屏和外部打开 | 已完成：按用户确认回退三态定制，保留 580px 首选宽度；1440×1000 浏览器中窗口从 `(430,50)` 拖至 `(510,88)`，尺寸保持 `580×900` |
 | P1-C10 | 单 Header 与同 iframe 保活 | 云盘前端、MateClaw UI | P1-C08–P1-C09 | 外层窗口承载标题和窗口动作，嵌入页进入 host-header 模式；关闭再开、文件切换不重复 Header、不重新兑票、不丢会话 | 已完成：外层为唯一 Header；`ChatConsole.syncRouteState` 保留 `hostHeader`，实测 iframe 内 Header 数为 0，原会话/文件上下文继续复用 |
@@ -653,11 +669,11 @@ V3 将 MateClaw 会话作为主要使用页面，但不把云盘大文件、媒�
 
 | ID | 任务 | 责任仓库 | 依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| V3-A01 | 完成签名/不透明 `CloudResourceRef` | MateClaw、云盘、MCP | P1-A | 文件、文件夹、版本、当前预览和固定引用共用同一契约；跨租户伪造被拒绝 | 待确认 |
+| V3-A01 | 完成签名/不透明 `CloudResourceRef` | MateClaw、云盘、MCP | P1-A | 文件、文件夹、版本、当前预览和固定引用共用同一契约；跨租户伪造被拒绝 | 待验收：P1-A01/A02 服务端契约、嵌入签发、MCP 附件解析和跨租户测试已完成；待 P1-C07 浏览器固定场景通过后计入 V3 完成数 |
 | V3-A02 | 定义 `CloudResourceAction` Schema | MateClaw、MCP、云盘前端 | V3-A01 | preview/play/download/share/save/sync-kb 可被通用会话渲染和审计 | 待确认 |
 | V3-A03 | 补齐宿主动作消息 | 云盘前端、MateClaw UI | P1-C04、V3-A02 | `openFile/play/download/saveCompleted` 校验 channel、origin、资源权限 | 待确认 |
 | V3-A04 | 恢复对象存储可用性并补跑回归 | 云盘 | 无 | MinIO 健康检查正常；真实文件 read/preview/download 连续通过 | 已完成：文件 `17485` 三轮 read/preview/download 内容、长度与哈希一致 |
-| V3-A05 | 落地 V2 AI 友好基础 API | 云盘后端、MCP | V3-A01 | text-content、write-content、全局 search、space context、user profile 有版本化契约并替换 V1 fallback | 待确认 |
+| V3-A05 | 落地 V2 AI 友好基础 API | 云盘后端、MCP | V3-A01 | text-content、write-content、全局 search、space context、user profile 有版本化契约并替换 V1 fallback | 已完成：新增 `/cloud-drive/ai/v2/files/text-content`、`files/write-content`、`files/search`、`spaces/context`、`users/me`；MCP 已切换 V2 主链，旧链仅可通过默认关闭的开关对 404/405 灰度回退；真实用户创建→读取→搜索→版本更新→清理及跨服务回归通过。当前 search 为个人/可见部门空间的名称与路径元数据搜索，全文索引、分页和片段继续由 V3-B02/IG-P2-04 实施 |
 
 #### V3-B：常规云盘文件操作
 
@@ -715,8 +731,8 @@ V3 将 MateClaw 会话作为主要使用页面，但不把云盘大文件、媒�
 
 ### 13.4 推荐实施顺序与闸门
 
-1. V3-A04 与 P0-C07 已完成；下一步先完成 P1-A01/A02、P1-B04 的签名资源引用与固定语义，收口 P1-C07 唯一剩余场景。
-2. 再将 V2 基础 API 纳入 V3-A05，并完成 V3-A/B，形成可稳定复用的资源、动作、审批和文件操作主链。
+1. P1-A01/A02 与 P1-B04 实现已完成；下一步先按 P1-B01/B04/C07 验收签名引用、固定、取消固定、宿主切换、关闭重开和展开完整页，验收通过后同步完成 V3-A01。
+2. P1-A04/A05 的资源状态、文件夹渐进读取和 V3-A05 V2 基础 API 已完成；下一步优先实施 V3-A02/A03 的通用资源动作协议与宿主消息，再进入 V3-B01/B03/B04，形成可稳定复用的资源、动作、审批和文件操作主链；V3-B02/IG-P2-04 单独补齐全文检索、分页和片段能力。
 3. V3-D07 的模板级工具硬限制已先行移除，云盘助手回归通用可配置工具链，但这不替代播放主链。后续仍按 `D01 → D02 → D03/D04/D05 → D06` 完成资源动作和分发器，`D08` 做桌面增强，`D09` 作为发布闸门。
 4. V3-C 可与 V3-D 的 UI/桌面增强并行，但共同依赖 `artifactRef`、短时资源动作和云盘原生预览。
 5. V3-E/F 在文件链稳定后实施，分别走独立权限域；不得把审计问数混入普通文件工具，也不得把知识库同步等同一次性附件上传。
@@ -795,7 +811,7 @@ AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少�
 | IG-P0-A03 | 定义平台连接配置与租户策略 Schema | 云盘后端 | IG-P0-A02 | 系统租户维护地址、Origin 和认证配置；租户管理员只维护 enabled、角色和文件能力策略；密钥加密且不回显 | 已完成：系统租户维护 MateClaw URL/Origin/ticket 协议字段，业务租户仅暴露角色、文件能力、openMode/nav 等策略；平台字段对业务租户列表隐藏且写入按“不存在”拒绝，enabled/configVersion 只能走生命周期接口。3 项定向边界测试通过；长期密钥不进入该 Schema/前端响应 |
 | IG-P0-A04 | 建立通用应用 capability 契约 | 云盘后端、云盘前端 | IG-P0-A02–A03 | capability 同时反映 installed/enabled/healthy/allowed，返回服务端解析后的安全 launch 元数据，不泄露密钥 | 已完成：运行接口显式返回 `appKey/installed/enabled/healthy/allowed/configVersion`、安全 URL/Origin 和文件策略；租户 1 当前均为 true（delete 策略为 false），未返回密钥 |
 | IG-P0-A05 | 云盘前端改为 capability 驱动菜单和动态地址 | 云盘前端 | IG-P0-A04 | AI 助手与问数分别按 capability 展示；移除 AI 助手“所有用户固定可见”和 `VITE_AI_BASE_URL` 运行依赖；地址修改无需重新构建前端 | 已完成：侧栏、文件菜单和打开动作均由独立 AI capability 驱动，MateClaw URL/Origin 取服务端配置；租户 1 同时显示 AI 助手/AI 问数，未安装二者的租户 135 均不显示，直接派发打开事件也不创建窗口；AI 直接出票按未安装拒绝，WenShu 原 capability 与入口保持独立 |
-| IG-P0-A06 | 实现 AI 助手 enable/disable/health 生命周期 | 云盘、MateClaw | IG-P0-A03–A04 | 启用前健康检查并 provision 租户 Workspace/Agent；停用先本地 fail closed，再通知远端；状态和失败原因可刷新、可审计 | 进行中：连接测试、安装、启用、停用、配置版本递增、首登懒 provision、本地 fail-closed、MateClaw 应用会话与 MCP 专用 delegation 主动撤销已在租户 1/135 运行验证；默认租户管理员权限模板升级到 v2，已有租户自动补齐应用查询/更新/卸载权限，首位租户管理员真实映射为 Workspace owner。撤销失败已持久化到实例 `runtimeJson`，支持指数退避、分步骤幂等重试、管理状态查询、第三次失败告警和恢复通知，健康刷新不再清除失败状态。尚缺停用/卸载时的远端 Workspace/Agent deprovision |
+| IG-P0-A06 | 实现 AI 助手 enable/disable/health 生命周期 | 云盘、MateClaw | IG-P0-A03–A04 | 启用前健康检查并 provision 租户 Workspace/Agent；停用先本地 fail closed，再通知远端；状态和失败原因可刷新、可审计 | 已完成：连接测试、安装、启用、停用、配置版本递增、首登懒 provision、本地 fail-closed、Cookie/MCP delegation 撤销和失败补偿均已验证。停用/卸载采用非破坏语义：保留租户 Workspace、成员、模型供应商和会话历史，只停用应用自有 `builtin.yliyun_assistant` Agent；重新 SSO 会复用并激活同一 Agent。云盘使用 operation-bound HMAC 调用 `/api/v1/auth/yliyun/deactivate`，补偿状态记录远端操作与旧地址，卸载在待办未清除时受保护。MateClaw 定向 18/18、云盘定向 12/12 通过，签名实时接口与最新五服务环境验证通过 |
 
 #### IG-P0-B：统一 SSO 与三层强制开关
 
@@ -902,7 +918,7 @@ AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少�
 
 - 租户 1 已安装并启用；其他业务租户仍必须各自安装、启用并配置角色/文件策略。平台地址/Origin 继续由系统租户维护，未配置租户按设计 fail closed。
 - 普通业务租户的平台字段不可见/拒写、租户 135 独立生命周期、双密钥两阶段轮换、动态改址和完整发布矩阵均已通过；新增业务租户仍必须逐租户安装并验收其真实角色/文件策略。
-- IG-P0-B05/B06 已完成 MateClaw 应用 Cookie、MCP 专用 delegation 主动失效、AI/WenShu 撤销失败补偿/告警和 ticket/撤销签名双密钥轮换；当前 IG-P0 剩余项为 A06 的 MateClaw Workspace/Agent 远端停用语义与回收策略。
+- IG-P0-A01–A06、B01–B06、C01–C04 已全部完成。A06 最终采用“保留 Workspace/成员/模型/历史，仅停用应用自有 Agent；重新 SSO 原位激活”的非破坏语义，避免租户停用应用时误删业务配置和审计证据。
 
 发布闸门：
 
@@ -922,17 +938,17 @@ AI 助手应注册为 `mateclaw_ai_assistant` 应用扩展，平台字段至少�
 3. **身份协议**：每次 Tool Call 使用短时签名 OBO token，包含 Yliyun 用户和租户声明。
 4. **登录协议**：一次性 code 换 HttpOnly、SameSite Cookie，不再把 MateClaw JWT 放在 URL/localStorage。
 5. **嵌入形态**：优先实现可复用 `CloudAgentPanel`；若跨仓库独立部署必须使用 iframe，则仅嵌入精简路由并启用严格 origin 协议。
-6. **当前执行批次**：P0 核心已实施；P1 已落地精简面板、真实身份显示、当前文件跟随、附件一次性注入、会话历史恢复、Agent 切换去重、租户角色同步、工作空间级模型供应商隔离，以及最终确认的通用可拖动非模态窗口/单 Header 和多窗口 E2E。IG-P0-A03/A05、B02–B06 与 C01–C04 已完成，包含第二租户独立启停、Cookie/delegation 撤销、AI/WenShu 失败补偿、双密钥轮换、动态改址和发布矩阵；当前剩 IG-P0-A06 的远端 Workspace/Agent 停用语义与回收策略。普通会话主逻辑保持最小改动。
+6. **当前执行批次**：P0 核心已实施；P1 已落地精简面板、真实身份显示、当前文件跟随、附件一次性注入、会话历史恢复、Agent 切换去重、租户角色同步、工作空间级模型供应商隔离，以及最终确认的通用可拖动非模态窗口/单 Header 和多窗口 E2E。IG-P0 已全部完成，包含第二租户独立启停、Cookie/delegation 撤销、AI/WenShu 失败补偿、双密钥轮换、动态改址、发布矩阵和 A06 非破坏停用语义。普通会话主逻辑保持最小改动。
 7. **应用治理口径**：云盘应用中心是租户启停和业务配置事实源；OAuth2 Client 只负责平台认证；MateClaw 全局 MCP 连接与 MCP 服务密钥不得下放给普通租户管理员。
 
 本轮需求确认结论：
 
-> AI 助手采用“统一平台应用 + 租户实例/策略 + MateClaw Workspace 配置”三层模型；保留当前登录态 `/embed/cloud-agent`，不改用 WebChat 访客渠道；云盘窗口已按 P1-C08–C11 完成“原内容不变 + 通用可拖动非模态窗口 + 单 Header + 多窗口/小屏回归”。AI/WenShu 撤销补偿、双密钥轮换、动态改址和发布矩阵已完成，当前优先级为 IG-P0-A06 远端停用语义收口 → P1 资源引用与 V3-A。
+> AI 助手采用“统一平台应用 + 租户实例/策略 + MateClaw Workspace 配置”三层模型；保留当前登录态 `/embed/cloud-agent`，不改用 WebChat 访客渠道；云盘窗口已按 P1-C08–C11 完成“原内容不变 + 通用可拖动非模态窗口 + 单 Header + 多窗口/小屏回归”。IG-P0、P1-A01–A05 和 V3-A05 已完成；当前优先级为 P1-B01/B04/C07 最终浏览器验收 → V3-A01 收口 → V3-A02/A03 通用资源动作协议与宿主消息。
 
 已收到“按计划实施”指令；以下仍不在本轮授权范围或需额外发布闸门：
 
-- 不在未确认前继续 P1-A 的签名 `CloudResourceRef`、固定引用和输入框入口合并。
-- 不在未确认前实施 V3 的云盘新 API、artifact 传输、审计问数或知识库同步。
+- P1-A01–A05 已完成，不再回退为裸资源 ID；P1-B01/B04/C07 未完成真实浏览器验收前，不把 V3-A01 从“待验收”提前计为完成。
+- 除已授权并完成的 V3-A05 基础 API 外，不在未确认前继续实施 artifact 传输、审计问数、知识库同步或其它 V3 云盘新 API。
 - 不直接写库为真实租户创建 `mateclaw_ai_assistant` 实例；安装、平台配置和租户启用通过应用中心完成并保留审计。全局 MCP 管理权限已按 IG-P0-C01 收回平台管理员。
 - 不创建额外真实租户/用户或写入非临时业务数据。
 - 不改动生产密钥、API Key 或生产部署配置。

@@ -18,6 +18,8 @@ export type SSEEventType =
   | 'tool_call_started'
   | 'tool_call_progress'
   | 'tool_call_completed'
+  | 'cloud_attachment_started'
+  | 'cloud_attachment_completed'
   | 'phase'
   | 'plan_created'
   | 'plan_step_started'

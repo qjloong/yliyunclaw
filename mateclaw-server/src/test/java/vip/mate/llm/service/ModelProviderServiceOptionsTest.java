@@ -15,6 +15,9 @@ import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.model.ProviderOptionDTO;
 import vip.mate.llm.repository.ModelProviderMapper;
+import vip.mate.llm.workspace.WorkspaceModelScope;
+import vip.mate.llm.workspace.repository.WorkspaceModelProviderMapper;
+import vip.mate.system.service.SettingCrypto;
 
 import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
@@ -45,6 +48,11 @@ class ModelProviderServiceOptionsTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         providerMapper = mock(ModelProviderMapper.class);
+        WorkspaceModelProviderMapper workspaceProviderMapper = mock(WorkspaceModelProviderMapper.class);
+        WorkspaceModelScope workspaceModelScope = mock(WorkspaceModelScope.class);
+        when(workspaceModelScope.currentWorkspaceId())
+                .thenReturn(WorkspaceModelScope.DEFAULT_WORKSPACE_ID);
+        SettingCrypto settingCrypto = mock(SettingCrypto.class);
         modelConfigService = mock(ModelConfigService.class);
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         ObjectProvider<ClaudeCodeOAuthService> claudeCodeOAuthProvider = mock(ObjectProvider.class);
@@ -58,7 +66,8 @@ class ModelProviderServiceOptionsTest {
         when(initProbeProvider.getIfAvailable()).thenReturn(initProbe);
         when(initProbe.hasBeenProbed(any())).thenReturn(true);
 
-        service = new ModelProviderService(providerMapper, modelConfigService, eventPublisher,
+        service = new ModelProviderService(providerMapper, workspaceProviderMapper,
+                workspaceModelScope, settingCrypto, modelConfigService, eventPublisher,
                 claudeCodeOAuthProvider, pool, healthTracker, initProbeProvider);
     }
 

@@ -1,6 +1,10 @@
 # 一粒云 × WenShu × MateClaw 完整方案
 
-> 2026-07-23 | 分支: dev-v2 | 2026-08-03 实施与需求口径补充
+> **文档范围说明**：本文保留现有一粒云 AI 助手、WenShu、MCP 与 MateClaw 集成方案及历史决策，不是 Goal Agent、AI Website 或 Site Delivery 的正式业务方案。
+>
+> 新业务文档归属及本地仓库路径以云盘后端 `docs/ai-program/repository-ownership.md` 为准；MateClaw 侧适配文档位于 `docs/integrations/yliyun/`。
+
+> 2026-07-23 | 分支: dev-v2 | 2026-08-03 实施与需求口径补充 | 2026-08-04 文档范围冻结
 
 > **实现口径优先级**：本文主体保留总体设计和历史方案示例；若示例与以下口径冲突，以本节及 `handover-yliyun-integration.md` 的最新任务状态为准。
 >
@@ -9,9 +13,9 @@
 > - MateClaw 每次 Tool Call 生成短时 OBO 身份断言；MCP 验签后通过云盘内部接口换取当前用户 token。文中“把浏览器 ticket 直接传给 MCP”或固定 `X-Forward-User-Id` 的示例均视为历史草案。
 > - 用户映射键为 `(tenantId, yliyunUserId)`，每个云盘租户映射到独立 Workspace，并幂等种子化 `builtin.yliyun_assistant`。
 > - P0 的服务、协议、身份、登录、固定测试夹具、分层诊断、工具读写闭环、真实模型行为 E2E 和跨用户/跨租户 TC-6 已全部实施并复验。
-> - P1 已实现确定性云盘文件上下文、附件连续性、云盘文件详情右侧精简 Agent 面板，以及 Agent 通过 `file.create/file.save` 直接回存云盘；云盘上下文附件仅在会话首次提问或切换文件/文件夹后再次注入，普通追问不重复展示；完整 `CloudResourceRef`、固定引用、保存确认 UI 和 Codex 风格输入框合并仍待后续实施。
-> - 最新任务计数为 P0 28/28 完成、P1 20/36 完成（另有 2 项进行中、1 项待验收）、P2 0/7、V3 2/34、统一应用接入治理 IG 15/28 完成（另有 1 项进行中）；租户 1 已完成 AI 助手应用安装、capability、签名 launchContext、真实身份 SSO、ticket 防重放、MCP entitlement/configVersion、平台管理员 MCP 边界、独立部署 Profile、分层诊断、双密钥无中断轮换、动态地址拒绝/切换/恢复、完整发布矩阵和通用可拖动非模态窗口/单 Header/多窗口浏览器验收；租户 135 已完成未安装状态隔离，以及经授权临时安装后的独立启停、真实租户管理员 SSO、Workspace owner/模型配置权限、旧会话失效、MCP 专用 delegation 精确撤销、MateClaw 不可达时的持久化补偿/自动恢复、新 ticket 恢复和最终卸载回收；WenShu 撤销失败现具备同等的持久化分步骤重试、旧端点补偿、告警、恢复和卸载保护，平台/租户配置边界测试已通过，逐项状态与证据以 `handover-yliyun-integration.md` 第十二至十五章为准。
-> - 版本状态审计结论：V1 是“核心业务链已完成、生产收口未完成”，不能标记为全部完成；V2 设计中的专用文本读写、全局搜索、空间/用户上下文、`wenshu.analyze` 和全客户端验收尚未落地，当前仍以 V1 fallback 为主。
+> - P1 已实现确定性云盘文件上下文、附件连续性、云盘文件详情右侧精简 Agent 面板，以及 Agent 通过 `file.create/file.save` 直接回存云盘；云盘上下文附件仅在会话首次提问或切换文件/文件夹后再次注入，普通追问不重复展示。新的 `CloudResourceRef` 在嵌入上下文进入会话前由 MateClaw 签发，绑定真实 tenant/user/workspace/app/configVersion；签发和实际读取均通过 MCP/OBO 核验版本与权限。输入框上下文条支持“跟随当前文件/固定到本会话”，并显示最新、版本变化、删除、权限失效和临时不可用状态。文件夹上下文按 `list → summarize → 相关性排序 → 读取最多 5 个文件` 渐进注入，受候选数和总字符数约束；固定引用无需把裸资源 ID 重新传回浏览器。固定交互浏览器验收、保存确认 UI 和 Codex 风格输入框入口合并仍待收口。
+> - 最新任务计数为 P0 28/28 完成、P1 24/36 完成（另有 1 项进行中、3 项待验收）、P2 0/7、V3 3/34（另有 1 项待验收）、统一应用接入治理 IG 16/28 完成（IG-P0 全部完成）；租户 1 已完成 AI 助手应用安装、capability、签名 launchContext、真实身份 SSO、ticket 防重放、MCP entitlement/configVersion、平台管理员 MCP 边界、独立部署 Profile、分层诊断、双密钥无中断轮换、动态地址拒绝/切换/恢复、完整发布矩阵和通用可拖动非模态窗口/单 Header/多窗口浏览器验收；租户 135 已完成未安装状态隔离，以及经授权临时安装后的独立启停、真实租户管理员 SSO、Workspace owner/模型配置权限、旧会话失效、MCP 专用 delegation 精确撤销、MateClaw 不可达时的持久化补偿/自动恢复、新 ticket 恢复和最终卸载回收；WenShu 撤销失败现具备同等的持久化分步骤重试、旧端点补偿、告警、恢复和卸载保护。停用 AI 助手仅停用应用自有 Agent，保留租户 Workspace、成员、模型和会话历史，重新 SSO 原位激活。逐项状态与证据以 `handover-yliyun-integration.md` 第十二至十五章为准。
+> - 版本状态审计结论：V1 是“核心业务链已完成、生产收口未完成”，不能标记为全部完成；V2 的版本化文本读写、可见空间元数据搜索、空间上下文和真实用户资料 API 已落地，MCP 已以 V2 为主链，旧链仅保留默认关闭的 404/405 灰度回退。全文检索/分页/片段、`wenshu.analyze` 和全客户端验收仍未完成，因此 V2 仍不能标记为整体完成。
 > - V3 以 MateClaw 会话为主入口的资源动作协议、生成物回存、云盘原生预览/播放、租户审计问数和云盘知识库同步方案及任务编号，统一维护在 `handover-yliyun-integration.md` 第十三章。
 > - OAuth2 应用、云盘应用中心、MateClaw MCP 管理和 MCP 服务环境配置保持分层：OAuth2 Client 不作为租户开关；应用中心是租户 entitlement 和动态地址事实源；全局 MCP 连接由平台管理员管理；每次 Tool Call 继续使用 OBO 代表真实云盘用户。统一治理任务维护在 `handover-yliyun-integration.md` 第十四章。
 
@@ -36,7 +40,7 @@ AI 助手已从固定入口升级为应用中心治理实现，租户 1 已启�
 - 云盘菜单、文件操作入口及嵌入地址已改为 `/admin-api/yliyun/ai/capability` 驱动，不再把 `VITE_AI_BASE_URL` 作为运行时事实源；问数继续走独立的 WenShu capability。
 - AI ticket 出票前校验 installed/enabled/healthy/allowed，并签名 appKey、configVersion、state/nonce、parentOrigin 和 launchContext；MateClaw 对应验票。
 - MateClaw OBO 已透传 appKey/configVersion；MCP 每次 Tool Call 重查租户 capability，并按通用工具 manifest 风险落实 read/write/share/delete 上限。
-- MateClaw 应用 Cookie 已通过签名回调与 configVersion 主动失效，撤销回调同时固定 `mateclaw_ai_assistant` appKey；MCP OBO 使用独立的 10 分钟 OAuth Client Token，生命周期可按 tenant+client 精确撤销，不影响云盘用户登录。AI 助手与 WenShu 的撤销失败都会写入各自租户应用实例，按失败子步骤指数退避重试，达到阈值写结构化告警并通知租户联系人，恢复后自动清理和通知；待办保存原远端地址，健康刷新与卸载不会丢失补偿状态。AI 租户 135 已通过 MateClaw 停机/恢复实测，WenShu 失败、恢复、改址和告警自动化回归通过。ticket 与撤销签名现使用带 key id 的 current/previous 密钥环，按“先 MateClaw、后云盘”完成旧 key 和新 key 两阶段真实 SSO 验证，secret 不进入应用中心、前端、URL 或日志。平台动态地址写入会先校验候选 API 健康，失败事务回滚；成功后广播所有已安装租户并定向撤销旧端点，前端显式打开时强制刷新 capability，真实切换和恢复已通过。AI 助手完整发布矩阵及跨应用撤销治理已经归档；IG-P0 当前仅剩 AI 远端 Workspace/Agent 停用语义与回收策略，因此仍不能宣称 IG-P0 全部完成。
+- MateClaw 应用 Cookie 已通过签名回调与 configVersion 主动失效，撤销回调同时固定 `mateclaw_ai_assistant` appKey；MCP OBO 使用独立的 10 分钟 OAuth Client Token，生命周期可按 tenant+client 精确撤销，不影响云盘用户登录。AI 助手与 WenShu 的撤销失败都会写入各自租户应用实例，按失败子步骤指数退避重试，达到阈值写结构化告警并通知租户联系人，恢复后自动清理和通知；待办保存原远端地址，健康刷新与卸载不会丢失补偿状态。AI 租户 135 已通过 MateClaw 停机/恢复实测，WenShu 失败、恢复、改址和告警自动化回归通过。ticket 与撤销签名现使用带 key id 的 current/previous 密钥环，按“先 MateClaw、后云盘”完成旧 key 和新 key 两阶段真实 SSO 验证，secret 不进入应用中心、前端、URL 或日志。平台动态地址写入会先校验候选 API 健康，失败事务回滚；成功后广播所有已安装租户并定向撤销旧端点，前端显式打开时强制刷新 capability，真实切换和恢复已通过。AI 助手远端停用采用非破坏语义：保留 Workspace、成员、模型供应商和历史，仅停用应用自有 Agent，重新 SSO 原位激活；IG-P0 至此全部完成。
 
 ### 0.2 当前四段认证链
 
@@ -57,6 +61,8 @@ AI 助手已从固定入口升级为应用中心治理实现，租户 1 已启�
 3. OBO 私钥/公钥：MateClaw 到 MCP 的逐次调用身份断言。
 4. `YLIYUN_APP_KEY`：MCP 到云盘的内部用户换票授权。
 5. WenShu `client_secret`：问数服务生命周期、票据兑换和回调认证。
+
+`CloudResourceRef` 不是新增的长期登录凭据。它只是在 SSO 后由 MateClaw 为当前云盘身份签发的短期、防篡改资源能力引用，使用与 ticket 相同的轮换密钥环但带独立签名域；MCP 附件读取前仍必须完成当前身份、Workspace、configVersion、OBO 和云盘 ACL 校验。
 
 ### 0.3 统一目标
 
@@ -986,7 +992,7 @@ yliyun-mcp-server/
 
 ### 3.7 与 MateClaw 的集成方式
 
-MateClaw 侧**无需代码开发**，通过已有的 MCP Server 管理界面配置即可：
+MateClaw 的 MCP 连接继续通过通用管理界面配置；用户身份由已经落地的通用 `McpIdentityForwardService` 在每次 `tools/call` 中注入短时 OBO 断言，不通过可伪造的用户 Header 传递：
 
 ```yaml
 # 在 MateClaw Admin → MCP Server 管理中添加
@@ -995,8 +1001,7 @@ transport: streamable_http
 url: http://yliyun-mcp:18100/mcp
 headers:
   X-Internal-Service: "mateclaw"
-  X-Forward-User-Id: "${currentUserId}"   # MateClaw 自动注入当前用户
-  X-Forward-Tenant-Id: "${currentTenantId}"
+  X-Internal-Token: "${MCP_INTERNAL_SERVICE_TOKEN}"
 connectTimeoutSeconds: 10
 readTimeoutSeconds: 30
 disclosureTier: full   # 所有 Agent 可见
@@ -1329,19 +1334,19 @@ curl http://localhost:18088/health    # MateClaw
 
 | 项目 | 路径 | 技术栈 |
 |---|---|---|
-| **云盘后端** | `/Users/qinjinlong/Documents/projects/ai/saas/yly-saas-cdms-ai/` | Java 21 + Spring Boot 3.5 |
-| **云盘前端** | `/Users/qinjinlong/Documents/projects/ai/saas/yly-saas-web-cloud-driver/` | Vue 3 + TypeScript + Element Plus |
-| **MCP Server** | `/Users/qinjinlong/Documents/projects/ai/yliyun-mcp-server/` | TypeScript + FastMCP + Zod |
-| **MateClaw 后端** | `/Users/qinjinlong/Documents/projects/ai/yliyunclaw/mateclaw-server/` | Java 21 + Spring Boot 3.5 |
-| **MateClaw 前端** | `/Users/qinjinlong/Documents/projects/ai/yliyunclaw/mateclaw-ui/` | Vue 3 + TypeScript + Element Plus |
-| **方案文档** | `/Users/qinjinlong/Documents/projects/ai/yliyunclaw/docs/yliyun-claw-wenshu-solution.md` | — |
+| **云盘后端** | `D:\project\yly-rag\cloud-saas\yly-saas-cdms-ai` | Java 21 + Spring Boot 3.5 |
+| **云盘前端** | `D:\project\yly-rag\cloud-driver` | Vue 3 + TypeScript + Element Plus |
+| **MCP Server** | `D:\project\ai\yliyun-mcp-server` | TypeScript + FastMCP + Zod |
+| **MateClaw 后端** | `D:\project\ai\mateclaw-dev\mateclaw-server` | Java 21 + Spring Boot 3.5 |
+| **MateClaw 前端** | `D:\project\ai\mateclaw-dev\mateclaw-ui` | Vue 3 + TypeScript + Element Plus |
+| **方案文档** | `D:\project\ai\mateclaw-dev\docs\yliyun-claw-wenshu-solution.md` | — |
 
 ### 下一步行动（按优先级）
 
-1. **立即启动**：MCP Server Day 1（`pnpm install && pnpm dev`）
-2. **本周并行**：云盘后端 ticket API + MateClaw 数据库迁移
-3. **下周启动**：云盘前端改 UI + MateClaw 前端改 UI
-4. **第三周**：三端联调 + 逐场景验收
+1. **当前验收**：完成 P1-B01/B04/C07 的窄窗口、固定/取消固定、宿主切换、关闭重开和展开完整页浏览器矩阵，通过后把 V3-A01 计为完成。
+2. **下一实施项**：冻结 V3-A02 `CloudResourceAction` Schema，并完成 V3-A03 的 channel/origin/权限校验宿主消息。
+3. **文件主链**：按 V3-B01 → B03 → B04 → B05 完成元数据/下载/预览动作、写操作确认与结果卡；不把模型文本或 Browser Use 当作客户端动作协议。
+4. **独立能力**：V3-B02/IG-P2-04 补全文检索、分页和片段；V3-C/E/F 分别处理生成物、审计问数和知识库同步，保持权限域隔离。
 
 ---
 
@@ -1552,8 +1557,7 @@ transport: streamable_http
 url: http://yliyun-mcp:18100/mcp
 headers:
   X-Internal-Service: mateclaw
-  X-Forward-User-Id: ${currentUserId}
-  X-Forward-Tenant-Id: ${currentTenantId}
+  X-Internal-Token: ${MCP_INTERNAL_SERVICE_TOKEN}
 disclosureTier: full
 ```
 
@@ -2676,7 +2680,7 @@ public CommonResult<String> generateAITicket() {
 |---|---|---|---|
 | M1 | Ticket 登录端点 | `GET /api/v1/auth/yliyun/ticket?ticket=&redirect=` | 1天 |
 | M2 | 用户映射表扩展 | `mc_workspace_user` 加 `yliyun_user_id`, `yliyun_tenant_id` | 0.5天 |
-| M3 | MCP Client 用户身份透传 | MateClaw → MCP Server 时自动带 `X-Forward-User-Id` 等头部 | 已在 Phase 3C 中 |
+| M3 | MCP Client 用户身份透传 | MateClaw 按 Tool Call 注入 RS256 OBO，MCP 验签并兑换真实云盘用户 Token；连接 Header 只承载内部服务认证 | 已完成 |
 
 ```java
 // M1: YliyunAuthController.java (新增)
@@ -2726,9 +2730,9 @@ public void handleTicket(@RequestParam("ticket") String ticket,
 
 | # | 任务 | 说明 | 工时 |
 |---|---|---|---|
-| P1 | 14 个 MCP Tool 全实现 | 12 核心 + 2 辅助（`file.grep`、`file.summarize`），已在 Phase 3A 中规划 | 3-5天 |
-| P2 | MateClaw 内部服务认证 | 支持 `X-Forward-User-Id` / `X-Forward-Tenant-Id` 头部透传 | 已包含 |
-| P3 | 文本提取优化 | 集成 pdf-parse、mammoth（docx）等专用库提升提取质量 | 1天 |
+| P1 | 14 个 MCP Tool 全实现 | 12 核心 + 2 辅助（`file.grep`、`file.summarize`）已注册到通用 manifest/runtime | 已完成 |
+| P2 | MateClaw 内部服务认证 | 连接级 internal token + 每次 Tool Call 的 RS256 OBO；禁止以 `X-Forward-User-Id` / `X-Forward-Tenant-Id` 作为身份依据 | 已完成 |
+| P3 | 文本提取优化 | V2 `text-content` 已下沉云盘服务端，覆盖纯文本、PDF、Excel、Word、PowerPoint；大文件片段/全文索引另列 V3-B02 | 基础能力已完成 |
 
 ---
 
@@ -3178,14 +3182,14 @@ server.addTool({
 
 #### Phase C: MateClaw ↔ MCP 集成（1-2天）
 
-- [ ] **C1. MateClaw MCP Server 配置**
+- [x] **C1. MateClaw MCP Server 配置**
   - 在 MateClaw Admin 中添加 yliyun-mcp server
-  - 配置 `X-Forward-User-Id` / `X-Forward-Tenant-Id` 头部透传
+  - 配置 `X-Internal-Service` / `X-Internal-Token` 连接认证，并配对 OBO 公私钥、issuer/audience
   - 验证 MateClaw Agent 可见 `file.*` 工具
 
-- [ ] **C2. MateClaw 端到端验证**
+- [x] **C2. MateClaw 端到端验证**
   - 用户登录云盘 → 打开 AI 助手
-  - MateClaw 通过 Ticket 获取云盘 Token
+  - 一次性 Ticket 兑换 MateClaw HttpOnly Cookie；每次工具调用再通过 OBO 兑换云盘用户 Token
   - Agent 搜索文件："帮我找一下合同文件"
   - Agent 读取文件："总结这份文档"
   - Agent 保存文件："把润色后内容保存回云盘"
@@ -3283,8 +3287,7 @@ transport: streamable_http
 url: http://yliyun-mcp:18100/mcp
 headers:
   X-Internal-Service: mateclaw
-  X-Forward-User-Id: ${currentUserId}
-  X-Forward-Tenant-Id: ${currentTenantId}
+  X-Internal-Token: ${MCP_INTERNAL_SERVICE_TOKEN}
 connectTimeoutSeconds: 10
 readTimeoutSeconds: 30
 disclosureTier: full
