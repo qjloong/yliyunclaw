@@ -31,33 +31,20 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "MCP build failed." }
 }
 
-$previous = @{
-    MCP_HOST = $env:MCP_HOST
-    MCP_PORT = $env:MCP_PORT
-    YLIYUN_API_BASE_URL = $env:YLIYUN_API_BASE_URL
-    MCP_ALLOW_INSECURE_LOOPBACK = $env:MCP_ALLOW_INSECURE_LOOPBACK
-    MATECLAW_OBO_PUBLIC_KEY_PEM = $env:MATECLAW_OBO_PUBLIC_KEY_PEM
-    YLIYUN_APP_KEY = $env:YLIYUN_APP_KEY
+$McpEnv = @{
+    MCP_HOST                      = "127.0.0.1"
+    MCP_PORT                      = "18100"
+    YLIYUN_API_BASE_URL           = "http://127.0.0.1:30303"
+    MCP_ALLOW_INSECURE_LOOPBACK   = "true"
+    MATECLAW_OBO_PUBLIC_KEY_PEM   = $PublicKey
+    YLIYUN_APP_KEY                = (Get-Content (Join-Path $CredentialRoot "mcp-app-key.txt") -Raw).Trim()
 }
-try {
-    $env:MCP_HOST = "127.0.0.1"
-    $env:MCP_PORT = "18100"
-    $env:YLIYUN_API_BASE_URL = "http://127.0.0.1:30303"
-    $env:MCP_ALLOW_INSECURE_LOOPBACK = "true"
-    $env:MATECLAW_OBO_PUBLIC_KEY_PEM = $PublicKey
-    $env:YLIYUN_APP_KEY = (Get-Content (Join-Path $CredentialRoot "mcp-app-key.txt") -Raw).Trim()
-    $process = Start-Process -FilePath "node.exe" -ArgumentList "dist/index.js" `
-        -WorkingDirectory $McpRoot -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $LogRoot "mcp.out.log") `
-        -RedirectStandardError (Join-Path $LogRoot "mcp.err.log")
-} finally {
-    $env:MCP_HOST = $previous.MCP_HOST
-    $env:MCP_PORT = $previous.MCP_PORT
-    $env:YLIYUN_API_BASE_URL = $previous.YLIYUN_API_BASE_URL
-    $env:MCP_ALLOW_INSECURE_LOOPBACK = $previous.MCP_ALLOW_INSECURE_LOOPBACK
-    $env:MATECLAW_OBO_PUBLIC_KEY_PEM = $previous.MATECLAW_OBO_PUBLIC_KEY_PEM
-    $env:YLIYUN_APP_KEY = $previous.YLIYUN_APP_KEY
-}
+
+$process = Start-Process -FilePath "node.exe" -ArgumentList "dist/index.js" `
+    -WorkingDirectory $McpRoot -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $LogRoot "mcp.out.log") `
+    -RedirectStandardError (Join-Path $LogRoot "mcp.err.log") `
+    -Environment $McpEnv
 
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Milliseconds 300

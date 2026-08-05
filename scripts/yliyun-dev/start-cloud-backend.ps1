@@ -43,39 +43,29 @@ if (-not (Test-Path $Jar)) {
     throw "Cloud backend executable jar not found: $Jar"
 }
 
-$previousTicketSecret = $env:YLIYUN_TICKET_SECRET
-$previousTicketSecretCurrent = $env:YLIYUN_TICKET_SECRET_CURRENT
-$previousTicketSecretPrevious = $env:YLIYUN_TICKET_SECRET_PREVIOUS
-$previousTicketKeyIdCurrent = $env:YLIYUN_TICKET_KEY_ID_CURRENT
-$previousTicketKeyIdPrevious = $env:YLIYUN_TICKET_KEY_ID_PREVIOUS
-$previousAppKey = $env:YLIYUN_MCP_APP_KEY
-try {
-    $ticketSecretCurrent = (Get-Content (Join-Path $CredentialRoot "ticket-secret.txt") -Raw).Trim()
-    $env:YLIYUN_TICKET_SECRET = $ticketSecretCurrent
-    $env:YLIYUN_TICKET_SECRET_CURRENT = $ticketSecretCurrent
-    $env:YLIYUN_TICKET_KEY_ID_CURRENT = (Get-Content (Join-Path $CredentialRoot "ticket-key-id.txt") -Raw).Trim()
-    $ticketSecretPreviousPath = Join-Path $CredentialRoot "ticket-secret-previous.txt"
-    $ticketKeyIdPreviousPath = Join-Path $CredentialRoot "ticket-key-id-previous.txt"
-    $env:YLIYUN_TICKET_SECRET_PREVIOUS = if (Test-Path $ticketSecretPreviousPath) {
-        (Get-Content $ticketSecretPreviousPath -Raw).Trim()
-    } else { "" }
-    $env:YLIYUN_TICKET_KEY_ID_PREVIOUS = if (Test-Path $ticketKeyIdPreviousPath) {
-        (Get-Content $ticketKeyIdPreviousPath -Raw).Trim()
-    } else { "previous" }
-    $env:YLIYUN_MCP_APP_KEY = (Get-Content (Join-Path $CredentialRoot "mcp-app-key.txt") -Raw).Trim()
-    $process = Start-Process -FilePath (Join-Path $JdkHome "bin\java.exe") `
-        -ArgumentList "-jar", $Jar -WorkingDirectory $CloudBackendRoot `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $LogRoot "cloud-backend.out.log") `
-        -RedirectStandardError (Join-Path $LogRoot "cloud-backend.err.log")
-} finally {
-    $env:YLIYUN_TICKET_SECRET = $previousTicketSecret
-    $env:YLIYUN_TICKET_SECRET_CURRENT = $previousTicketSecretCurrent
-    $env:YLIYUN_TICKET_SECRET_PREVIOUS = $previousTicketSecretPrevious
-    $env:YLIYUN_TICKET_KEY_ID_CURRENT = $previousTicketKeyIdCurrent
-    $env:YLIYUN_TICKET_KEY_ID_PREVIOUS = $previousTicketKeyIdPrevious
-    $env:YLIYUN_MCP_APP_KEY = $previousAppKey
+$ticketSecretCurrent = (Get-Content (Join-Path $CredentialRoot "ticket-secret.txt") -Raw).Trim()
+$ticketKeyIdCurrent = (Get-Content (Join-Path $CredentialRoot "ticket-key-id.txt") -Raw).Trim()
+$ticketSecretPreviousPath = Join-Path $CredentialRoot "ticket-secret-previous.txt"
+$ticketKeyIdPreviousPath = Join-Path $CredentialRoot "ticket-key-id-previous.txt"
+$ticketSecretPrevious = if (Test-Path $ticketSecretPreviousPath) { (Get-Content $ticketSecretPreviousPath -Raw).Trim() } else { "" }
+$ticketKeyIdPrevious = if (Test-Path $ticketKeyIdPreviousPath) { (Get-Content $ticketKeyIdPreviousPath -Raw).Trim() } else { "previous" }
+$mcpAppKey = (Get-Content (Join-Path $CredentialRoot "mcp-app-key.txt") -Raw).Trim()
+
+$CloudEnv = @{
+    YLIYUN_TICKET_SECRET          = $ticketSecretCurrent
+    YLIYUN_TICKET_SECRET_CURRENT  = $ticketSecretCurrent
+    YLIYUN_TICKET_SECRET_PREVIOUS = $ticketSecretPrevious
+    YLIYUN_TICKET_KEY_ID_CURRENT  = $ticketKeyIdCurrent
+    YLIYUN_TICKET_KEY_ID_PREVIOUS = $ticketKeyIdPrevious
+    YLIYUN_MCP_APP_KEY            = $mcpAppKey
 }
+
+$process = Start-Process -FilePath (Join-Path $JdkHome "bin\java.exe") `
+    -ArgumentList "-jar", $Jar -WorkingDirectory $CloudBackendRoot `
+    -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $LogRoot "cloud-backend.out.log") `
+    -RedirectStandardError (Join-Path $LogRoot "cloud-backend.err.log") `
+    -Environment $CloudEnv
 
 for ($attempt = 0; $attempt -lt 180; $attempt++) {
     Start-Sleep -Milliseconds 500

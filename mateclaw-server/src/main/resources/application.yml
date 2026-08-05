@@ -204,6 +204,7 @@ mateclaw:
         ttl-seconds: ${MATECLAW_MCP_OBO_TTL_SECONDS:60}
         key-id: ${MATECLAW_MCP_OBO_KEY_ID:mateclaw-yliyun-1}
         private-key-pem: ${MATECLAW_MCP_OBO_PRIVATE_KEY_PEM:}
+        private-key-path: ${MATECLAW_MCP_OBO_PRIVATE_KEY_PATH:}
         audiences:
           yliyun-mcp: ${MATECLAW_MCP_OBO_AUDIENCE:yliyun-mcp}
   tools:

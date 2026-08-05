@@ -131,6 +131,12 @@ public class McpIdentityForwardProperties {
         private String keyId = "mateclaw-mcp-1";
         /** PKCS#8 PEM of the RS256 private key. Required when {@link #enabled}. */
         private String privateKeyPem = "";
+        /**
+         * File path to the PKCS#8 PEM private key. Used as fallback when
+         * {@link #privateKeyPem} is empty — useful in IDEs where multi-line
+         * env vars are hard to configure.
+         */
+        private String privateKeyPath = "";
         private Map<String, String> audiences = Collections.emptyMap();
 
         public boolean isEnabled() { return enabled; }
@@ -143,6 +149,8 @@ public class McpIdentityForwardProperties {
         public void setKeyId(String keyId) { this.keyId = keyId; }
         public String getPrivateKeyPem() { return privateKeyPem; }
         public void setPrivateKeyPem(String privateKeyPem) { this.privateKeyPem = privateKeyPem; }
+        public String getPrivateKeyPath() { return privateKeyPath; }
+        public void setPrivateKeyPath(String privateKeyPath) { this.privateKeyPath = privateKeyPath; }
         public Map<String, String> getAudiences() { return audiences; }
         public void setAudiences(Map<String, String> audiences) {
             this.audiences = audiences != null ? audiences : Collections.emptyMap();

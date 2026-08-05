@@ -267,6 +267,16 @@ public class McpIdentityForwardService {
             return k;
         }
         String pem = properties.getToken().getPrivateKeyPem();
+        // Fallback: read from file path if PEM is empty (IDE-friendly)
+        if ((pem == null || pem.isBlank()) && properties.getToken().getPrivateKeyPath() != null
+                && !properties.getToken().getPrivateKeyPath().isBlank()) {
+            try {
+                pem = java.nio.file.Files.readString(java.nio.file.Path.of(properties.getToken().getPrivateKeyPath()));
+            } catch (Exception e) {
+                log.error("[McpIdentity] failed to read private key from path {}: {}",
+                        properties.getToken().getPrivateKeyPath(), e.getMessage());
+            }
+        }
         // Skip only while the PEM is unchanged since the last attempt — that
         // avoids re-parsing (and re-logging) on every call. A changed PEM clears
         // the way for a fresh parse, which is the self-healing path.

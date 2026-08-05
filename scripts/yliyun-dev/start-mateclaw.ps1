@@ -52,39 +52,29 @@ if (-not $Jar -or -not (Test-Path -LiteralPath $Jar)) {
 }
 Write-Host "Using MateClaw executable jar: $Jar"
 
-$previousTicketSecret = $env:YLIYUN_TICKET_SECRET
-$previousTicketSecretCurrent = $env:YLIYUN_TICKET_SECRET_CURRENT
-$previousTicketSecretPrevious = $env:YLIYUN_TICKET_SECRET_PREVIOUS
-$previousTicketKeyIdCurrent = $env:YLIYUN_TICKET_KEY_ID_CURRENT
-$previousTicketKeyIdPrevious = $env:YLIYUN_TICKET_KEY_ID_PREVIOUS
-$previousPrivateKey = $env:MATECLAW_MCP_OBO_PRIVATE_KEY_PEM
-try {
-    $ticketSecretCurrent = (Get-Content (Join-Path $CredentialRoot "ticket-secret.txt") -Raw).Trim()
-    $env:YLIYUN_TICKET_SECRET = $ticketSecretCurrent
-    $env:YLIYUN_TICKET_SECRET_CURRENT = $ticketSecretCurrent
-    $env:YLIYUN_TICKET_KEY_ID_CURRENT = (Get-Content (Join-Path $CredentialRoot "ticket-key-id.txt") -Raw).Trim()
-    $ticketSecretPreviousPath = Join-Path $CredentialRoot "ticket-secret-previous.txt"
-    $ticketKeyIdPreviousPath = Join-Path $CredentialRoot "ticket-key-id-previous.txt"
-    $env:YLIYUN_TICKET_SECRET_PREVIOUS = if (Test-Path $ticketSecretPreviousPath) {
-        (Get-Content $ticketSecretPreviousPath -Raw).Trim()
-    } else { "" }
-    $env:YLIYUN_TICKET_KEY_ID_PREVIOUS = if (Test-Path $ticketKeyIdPreviousPath) {
-        (Get-Content $ticketKeyIdPreviousPath -Raw).Trim()
-    } else { "previous" }
-    $env:MATECLAW_MCP_OBO_PRIVATE_KEY_PEM = Get-Content (Join-Path $CredentialRoot "obo-private.pem") -Raw
-    $process = Start-Process -FilePath (Join-Path $JdkHome "bin\java.exe") `
-        -ArgumentList "-jar", $Jar -WorkingDirectory $MateClawRoot `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $LogRoot "mateclaw.out.log") `
-        -RedirectStandardError (Join-Path $LogRoot "mateclaw.err.log")
-} finally {
-    $env:YLIYUN_TICKET_SECRET = $previousTicketSecret
-    $env:YLIYUN_TICKET_SECRET_CURRENT = $previousTicketSecretCurrent
-    $env:YLIYUN_TICKET_SECRET_PREVIOUS = $previousTicketSecretPrevious
-    $env:YLIYUN_TICKET_KEY_ID_CURRENT = $previousTicketKeyIdCurrent
-    $env:YLIYUN_TICKET_KEY_ID_PREVIOUS = $previousTicketKeyIdPrevious
-    $env:MATECLAW_MCP_OBO_PRIVATE_KEY_PEM = $previousPrivateKey
+$ticketSecretCurrent = (Get-Content (Join-Path $CredentialRoot "ticket-secret.txt") -Raw).Trim()
+$ticketKeyIdCurrent = (Get-Content (Join-Path $CredentialRoot "ticket-key-id.txt") -Raw).Trim()
+$ticketSecretPreviousPath = Join-Path $CredentialRoot "ticket-secret-previous.txt"
+$ticketKeyIdPreviousPath = Join-Path $CredentialRoot "ticket-key-id-previous.txt"
+$ticketSecretPrevious = if (Test-Path $ticketSecretPreviousPath) { (Get-Content $ticketSecretPreviousPath -Raw).Trim() } else { "" }
+$ticketKeyIdPrevious = if (Test-Path $ticketKeyIdPreviousPath) { (Get-Content $ticketKeyIdPreviousPath -Raw).Trim() } else { "previous" }
+$oboPrivateKeyPath = Join-Path $CredentialRoot "obo-private.pem"
+
+$MateClawEnv = @{
+    YLIYUN_TICKET_SECRET                  = $ticketSecretCurrent
+    YLIYUN_TICKET_SECRET_CURRENT          = $ticketSecretCurrent
+    YLIYUN_TICKET_SECRET_PREVIOUS         = $ticketSecretPrevious
+    YLIYUN_TICKET_KEY_ID_CURRENT          = $ticketKeyIdCurrent
+    YLIYUN_TICKET_KEY_ID_PREVIOUS         = $ticketKeyIdPrevious
+    MATECLAW_MCP_OBO_PRIVATE_KEY_PATH     = $oboPrivateKeyPath
 }
+
+$process = Start-Process -FilePath (Join-Path $JdkHome "bin\java.exe") `
+    -ArgumentList "-jar", $Jar -WorkingDirectory $MateClawRoot `
+    -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $LogRoot "mateclaw.out.log") `
+    -RedirectStandardError (Join-Path $LogRoot "mateclaw.err.log") `
+    -Environment $MateClawEnv
 
 for ($attempt = 0; $attempt -lt 90; $attempt++) {
     Start-Sleep -Milliseconds 500
