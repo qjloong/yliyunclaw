@@ -1,0 +1,16 @@
+{
+  "version": "context-v1.1-review",
+  "method": "POST",
+  "path": "/api/internal/v1/runs",
+  "rawQuery": "b=2&a=1",
+  "canonicalQuery": "a=1&b=2",
+  "timestamp": "1785740000",
+  "nonce": "n1q2x3z4",
+  "serviceSecret": "test-service-secret-32-bytes-long!",
+  "trustedContextJson": "{\"tenantId\":1001,\"userId\":2001,\"workspaceId\":\"ws_10\",\"appCode\":\"GOAL\",\"bizType\":\"GOAL_PROJECT\",\"bizId\":\"3001\",\"conversationId\":null,\"runId\":\"run_x1\",\"traceId\":\"550e8400-e29b-41d4-a716-446655440000\",\"roles\":[\"OWNER\"],\"capabilities\":[\"PROJECT_READ\"],\"sourceVersion\":12,\"issuedAt\":1785740000,\"expiresAt\":1785740060}",
+  "contextSha256": "2b87d2ffcf95cbfed74061448b97804efa8a8abe1fb274b1ba75cadce418e4a6",
+  "body": "{\"bizType\":\"GOAL_PROJECT\",\"bizId\":\"3001\"}",
+  "bodySha256": "827eb48489826371e325f7e087d1c06b94430e6f5ad7ae743950382787ff0a4c",
+  "canonicalRequest": "POST\n/api/internal/v1/runs\na=1&b=2\n1785740000\nn1q2x3z4\n2b87d2ffcf95cbfed74061448b97804efa8a8abe1fb274b1ba75cadce418e4a6\n827eb48489826371e325f7e087d1c06b94430e6f5ad7ae743950382787ff0a4c",
+  "expectedSignatureBase64": "pHusRuW4ftiQCxSyZLuKLRL70l+Hby7V/Bf/xK48LdY="
+}
