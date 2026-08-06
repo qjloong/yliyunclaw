@@ -40,11 +40,14 @@ $McpEnv = @{
     YLIYUN_APP_KEY                = (Get-Content (Join-Path $CredentialRoot "mcp-app-key.txt") -Raw).Trim()
 }
 
+foreach ($key in $McpEnv.Keys) {
+    [Environment]::SetEnvironmentVariable($key, $McpEnv[$key])
+}
+
 $process = Start-Process -FilePath "node.exe" -ArgumentList "dist/index.js" `
     -WorkingDirectory $McpRoot -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $LogRoot "mcp.out.log") `
-    -RedirectStandardError (Join-Path $LogRoot "mcp.err.log") `
-    -Environment $McpEnv
+    -RedirectStandardError (Join-Path $LogRoot "mcp.err.log")
 
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Milliseconds 300

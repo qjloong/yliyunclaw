@@ -60,21 +60,18 @@ $ticketSecretPrevious = if (Test-Path $ticketSecretPreviousPath) { (Get-Content 
 $ticketKeyIdPrevious = if (Test-Path $ticketKeyIdPreviousPath) { (Get-Content $ticketKeyIdPreviousPath -Raw).Trim() } else { "previous" }
 $oboPrivateKeyPath = Join-Path $CredentialRoot "obo-private.pem"
 
-$MateClawEnv = @{
-    YLIYUN_TICKET_SECRET                  = $ticketSecretCurrent
-    YLIYUN_TICKET_SECRET_CURRENT          = $ticketSecretCurrent
-    YLIYUN_TICKET_SECRET_PREVIOUS         = $ticketSecretPrevious
-    YLIYUN_TICKET_KEY_ID_CURRENT          = $ticketKeyIdCurrent
-    YLIYUN_TICKET_KEY_ID_PREVIOUS         = $ticketKeyIdPrevious
-    MATECLAW_MCP_OBO_PRIVATE_KEY_PATH     = $oboPrivateKeyPath
-}
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_SECRET", $ticketSecretCurrent)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_SECRET_CURRENT", $ticketSecretCurrent)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_SECRET_PREVIOUS", $ticketSecretPrevious)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_KEY_ID_CURRENT", $ticketKeyIdCurrent)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_KEY_ID_PREVIOUS", $ticketKeyIdPrevious)
+[Environment]::SetEnvironmentVariable("MATECLAW_MCP_OBO_PRIVATE_KEY_PATH", $oboPrivateKeyPath)
 
 $process = Start-Process -FilePath (Join-Path $JdkHome "bin\java.exe") `
     -ArgumentList "-jar", $Jar -WorkingDirectory $MateClawRoot `
     -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $LogRoot "mateclaw.out.log") `
-    -RedirectStandardError (Join-Path $LogRoot "mateclaw.err.log") `
-    -Environment $MateClawEnv
+    -RedirectStandardError (Join-Path $LogRoot "mateclaw.err.log")
 
 for ($attempt = 0; $attempt -lt 90; $attempt++) {
     Start-Sleep -Milliseconds 500

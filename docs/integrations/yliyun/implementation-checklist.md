@@ -24,12 +24,27 @@
 
 | ID | 任务 | 当前状态 | 依赖 |
 |---|---|---|---|
-| MC-G-001 | Goal Assistant Seed | 待实施 | MC-RT-011 |
-| MC-G-002 | Goal Skill 与 Worker Skill | 待实施 | MC-G-001 |
-| MC-G-003 | Goal Tool/MCP Binding | 待实施 | 云盘 Goal Tool |
-| MC-G-004 | Goal Team Template | 待实施 | MC-G-002/003 |
-| MC-G-005 | Proposal/Human Approval 事件适配 | 待实施 | MC-RT-014 |
-| MC-G-006 | 租户隔离、重试、审计和 E2E 验收 | 待实施 | MC-G-001～005 |
+| MC-G-001 | Goal Assistant Seed | ✅ 已完成 | MC-RT-011 |
+| MC-G-002 | Goal Skill 与 Worker Skill | ✅ 已完成 | MC-G-001 |
+| MC-G-003 | Goal Tool/MCP Binding | ✅ 已完成 | 云盘 Goal Tool |
+| MC-G-004 | Goal Team Template | ⏳ 待实施（运行时配置） | MC-G-002/003 |
+| MC-G-005 | Proposal/Human Approval 事件适配 | ⏳ 待实施 | MC-RT-014 |
+| MC-G-006 | 租户隔离、重试、审计和 E2E 验收 | ⏳ 待实施 | MC-G-001～005 |
+
+## 云盘前端 Goal 页面
+
+| ID | 任务 | 当前状态 | 依赖 |
+|---|---|---|---|
+| UI-G-001 | Goal Agent 独立页面 | ✅ 已完成 | 云盘 G-010～G-019 |
+| UI-G-002 | 新建项目表单 | ✅ 已完成 | 云盘 G-010 |
+| UI-G-003 | API + Store 层 | ✅ 已完成 | 云盘 G-010～G-019 |
+| UI-G-004 | Sidebar 集成 + 路由 | ✅ 已完成 | UI-G-001 |
+
+> **MC-G-001~003 实施说明（2026-08-05）**：
+> - MC-G-001：创建 `templates/goal-assistant.json` Agent 模板（Goal Assistant Seed），包含 system prompt、工具绑定、质量门禁
+> - MC-G-002：创建 `skills/yliyun_goal_management/SKILL.md`（Goal 管理技能）和 `skills/yliyun_goal_worker/SKILL.md`（Worker 执行技能）
+> - MC-G-003：Goal MCP Tool 绑定在 Agent 模板的 `tools` 数组中声明：`goal.get_project_context`, `goal.get_project`, `goal.submit_proposal`, `goal.start_task_execution`, `goal.submit_task_result`, `goal.attach_evidence`
+> - MC-G-004：Goal Team Template 需要在 MateClaw Admin 中运行时创建（Lead = Goal Assistant Agent, Members = Worker Agents）
 
 ## AI Sites 配置
 

@@ -10,7 +10,7 @@ $CredentialRoot = Join-Path $MateClawRoot "data\yliyun-dev"
 $LogRoot = Join-Path $CredentialRoot "logs"
 $JdkHome = "C:\Users\loong\.jdks\ms-21.0.7"
 $Maven = "D:\program\IntelliJ IDEA 2025.1.3\plugins\maven\lib\maven3\bin\mvn.cmd"
-$Jar = Join-Path $CloudBackendRoot "yudao-server\target\yudao-server-cloud.jar"
+$Jar = Join-Path $CloudBackendRoot "yudao-server\target\yliyun-server-cloud.jar"
 
 if (-not (Test-Path (Join-Path $CloudBackendRoot "pom.xml"))) {
     throw "Cloud backend repo not found: $CloudBackendRoot"
@@ -31,7 +31,7 @@ if (-not $SkipBuild) {
     try {
         $env:JAVA_HOME = $JdkHome
         $env:Path = "$JdkHome\bin;$previousPath"
-        & $Maven "-pl" "yudao-server" "-am" "-Dmaven.test.skip=true" "package" "-f" (Join-Path $CloudBackendRoot "pom.xml")
+        & $Maven "-pl" "yudao-server" "-am" "-DskipTests" "package" "-f" (Join-Path $CloudBackendRoot "pom.xml")
         if ($LASTEXITCODE -ne 0) { throw "Cloud backend build failed." }
     } finally {
         $env:JAVA_HOME = $previousJavaHome
@@ -51,21 +51,18 @@ $ticketSecretPrevious = if (Test-Path $ticketSecretPreviousPath) { (Get-Content 
 $ticketKeyIdPrevious = if (Test-Path $ticketKeyIdPreviousPath) { (Get-Content $ticketKeyIdPreviousPath -Raw).Trim() } else { "previous" }
 $mcpAppKey = (Get-Content (Join-Path $CredentialRoot "mcp-app-key.txt") -Raw).Trim()
 
-$CloudEnv = @{
-    YLIYUN_TICKET_SECRET          = $ticketSecretCurrent
-    YLIYUN_TICKET_SECRET_CURRENT  = $ticketSecretCurrent
-    YLIYUN_TICKET_SECRET_PREVIOUS = $ticketSecretPrevious
-    YLIYUN_TICKET_KEY_ID_CURRENT  = $ticketKeyIdCurrent
-    YLIYUN_TICKET_KEY_ID_PREVIOUS = $ticketKeyIdPrevious
-    YLIYUN_MCP_APP_KEY            = $mcpAppKey
-}
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_SECRET", $ticketSecretCurrent)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_SECRET_CURRENT", $ticketSecretCurrent)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_SECRET_PREVIOUS", $ticketSecretPrevious)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_KEY_ID_CURRENT", $ticketKeyIdCurrent)
+[Environment]::SetEnvironmentVariable("YLIYUN_TICKET_KEY_ID_PREVIOUS", $ticketKeyIdPrevious)
+[Environment]::SetEnvironmentVariable("YLIYUN_MCP_APP_KEY", $mcpAppKey)
 
 $process = Start-Process -FilePath (Join-Path $JdkHome "bin\java.exe") `
     -ArgumentList "-jar", $Jar -WorkingDirectory $CloudBackendRoot `
     -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $LogRoot "cloud-backend.out.log") `
-    -RedirectStandardError (Join-Path $LogRoot "cloud-backend.err.log") `
-    -Environment $CloudEnv
+    -RedirectStandardError (Join-Path $LogRoot "cloud-backend.err.log")
 
 for ($attempt = 0; $attempt -lt 180; $attempt++) {
     Start-Sleep -Milliseconds 500
